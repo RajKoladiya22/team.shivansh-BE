@@ -1,0 +1,45 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/.8bd65a0b0055c704cc4be8746ca531d38201f653-audit.json",
+    "files": [
+        {
+            "date": 1768281065480,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-13.log",
+            "hash": "fd7944ad0475821ca6d28511ad62a7c44e297ca580275676881691dc66be66b9"
+        },
+        {
+            "date": 1768537663621,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-16.log",
+            "hash": "05473baeb2e5095a95bead78abf78b3882058b1e0ce446accd935a450f7f1d36"
+        },
+        {
+            "date": 1768628255232,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-17.log",
+            "hash": "a6d46678c0d21a64e99ebbb3fa247456ddde25c87967d6fb108321f38ef2720f"
+        },
+        {
+            "date": 1768804707628,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-19.log",
+            "hash": "f339c36f9fb9b5fb9687023e6bea29931eb32ed8c1c9f2e53515ce57fd71c59b"
+        },
+        {
+            "date": 1768904946550,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-20.log",
+            "hash": "43be84049cd626bc3ef94944afac9e5b656fc8c9b7e52f18e4bc5ee39352208a"
+        },
+        {
+            "date": 1768970261417,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-21.log",
+            "hash": "f15169f55a760be5a1850b922e0ae5177ac36890f8afebcf1eccc9237e6cb5c9"
+        },
+        {
+            "date": 1769143938478,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-23.log",
+            "hash": "cfd9a24e1e23e581b09e56faa0414e5f5bba8b3e1ad497876f5da23523cf28ac"
+        }
+    ],
+    "hashType": "sha256"
+}

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Invoice <%= bill.documentNumber %></title>
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  />
+</head>
+<body class="p-4">
+  <div class="container">
+    <h1 class="text-center mb-4">Invoice: <%= bill.documentNumber %></h1>
+    <div class="row mb-3">
+      <div class="col"><strong>Date:</strong> <%= bill.documentDate.toLocaleDateString() %></div>
+      <div class="col"><strong>Due:</strong> <%= bill.dueDate?.toLocaleDateString() || '-' %></div>
+    </div>
+    <div class="row mb-3">
+      <div class="col-6">
+        <h5>Bill To:</h5>
+        <p><%= customer?.name %></p>
+        <p><%= customer?.email || '' %> | <%= customer?.phone || '' %></p>
+      </div>
+      <div class="col-6 text-end">
+        <h5>From:</h5>
+        <p>Magic Billing Inc.</p>
+        <p>123 Business Ave<br />San Francisco, CA</p>
+      </div>
+    </div>
+
+    <table class="table table-bordered">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Description</th>
+          <th class="text-end">Qty</th>
+          <th class="text-end">Unit Price</th>
+          <th class="text-end">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% bill.items.forEach((item, idx) => { %>
+          <tr>
+            <td><%= idx+1 %></td>
+            <td><%= item.description %></td>
+            <td class="text-end"><%= item.quantity %></td>
+            <td class="text-end"><%= item.unitPrice.toFixed(2) %></td>
+            <td class="text-end"><%= item.itemPriceWithTax.toFixed(2) %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+
+    <div class="row justify-content-end">
+      <div class="col-4">
+        <table class="table">
+          <tr>
+            <th>Subtotal:</th>
+            <td class="text-end"><%= bill.billSummary?.totalAmount.toFixed(2) %></td>
+          </tr>
+          <tr>
+            <th>Discount:</th>
+            <td class="text-end"><%= bill.billSummary?.totalDiscount.toFixed(2) %></td>
+          </tr>
+          <tr>
+            <th>Total:</th>
+            <td class="text-end"><%= bill.billSummary?.netAmount.toFixed(2) %></td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+    <p class="text-center mt-5">Thank you for your business!</p>
+  </div>
+</body>
+</html>

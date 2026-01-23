@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "LeadAssignment" ADD COLUMN     "unassignedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
