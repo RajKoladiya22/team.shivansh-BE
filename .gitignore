@@ -2,3 +2,4 @@
 /dist
 /.env.development
 /.env.local
+.env
