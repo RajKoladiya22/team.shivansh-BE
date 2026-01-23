@@ -522,6 +522,8 @@ model TeamMember {
   account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
   accountId String
 
+  isActive Boolean @default(true)
+
   // Optional team-level role (future-ready)
   role     String? // e.g. LEAD, MEMBER
   joinedAt DateTime @default(now())
@@ -756,6 +758,9 @@ enum LeadSource {
   MANUAL
   WHATSAPP
   INQUIRY_FORM
+  WEBSITE
+  YOUTUBE
+  ADVERTISEMENT
 }
 
 enum LeadType {

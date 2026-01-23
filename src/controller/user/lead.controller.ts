@@ -1,4 +1,4 @@
-// src/controller/lead/lead.user.controller.ts
+// src/controller/user/lead.controller.ts
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import {
@@ -6,19 +6,87 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 
+/**
+ * Helpers (kept local so this file is self-contained)
+ */
+const getAccountIdFromReqUser = async (userId?: string | null) => {
+  if (!userId) return null;
+  const u = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { accountId: true },
+  });
+  return u?.accountId ?? null;
+};
+
+const normalizeMobile = (m: unknown) => String(m ?? "").replace(/\D/g, "");
+
+async function resolveAssigneeSnapshot(input: {
+  accountId?: string | null;
+  teamId?: string | null;
+}) {
+  if (input.accountId) {
+    const acc = await prisma.account.findUnique({
+      where: { id: input.accountId },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    return acc
+      ? {
+          type: "ACCOUNT",
+          id: acc.id,
+          name: `${acc.firstName} ${acc.lastName}`,
+        }
+      : null;
+  }
+
+  if (input.teamId) {
+    const team = await prisma.team.findUnique({
+      where: { id: input.teamId },
+      select: { id: true, name: true },
+    });
+    return team ? { type: "TEAM", id: team.id, name: team.name } : null;
+  }
+
+  return null;
+}
+
+async function resolvePerformerSnapshot(accountId: string | null) {
+  if (!accountId) return null;
+  const acc = await prisma.account.findUnique({
+    where: { id: accountId },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      designation: true,
+      contactPhone: true,
+    },
+  });
+
+  if (!acc) return null;
+
+  return {
+    id: acc.id,
+    name: `${acc.firstName} ${acc.lastName}`,
+    designation: acc.designation ?? null,
+    contactPhone: acc.contactPhone ?? null,
+  };
+}
+
+/* ==========================
+   USER (EMPLOYEE) CONTROLLER
+   ========================== */
+
+/**
+ * GET /leads/my
+ * List leads assigned to the current user's account or teams
+ */
 export async function listMyLeads(req: Request, res: Response) {
   try {
-    const accountId = req.user?.id;
-    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
 
-    const user = await prisma.user.findUnique({
-      where: { id: accountId },
-      select: { accountId: true },
-    });
-
-    if (!user) {
-      return sendErrorResponse(res, 401, "Invalid session user");
-    }
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
     const {
       status,
@@ -40,11 +108,11 @@ export async function listMyLeads(req: Request, res: Response) {
         some: {
           isActive: true,
           OR: [
-            { accountId: user.accountId },
+            { accountId: accountId },
             {
               team: {
                 members: {
-                  some: { accountId: user.accountId },
+                  some: { accountId: accountId },
                 },
               },
             },
@@ -66,17 +134,21 @@ export async function listMyLeads(req: Request, res: Response) {
       where.OR = [
         { customerName: { contains: search, mode: "insensitive" } },
         { mobileNumber: { contains: search } },
-        {
-          product: {
-            path: ["title"],
-            string_contains: search,
-          },
-        },
+        { productTitle: { contains: search, mode: "insensitive" } },
       ];
     }
 
+    // sanitize sortBy
+    const allowedSortFields = new Set([
+      "createdAt",
+      "updatedAt",
+      "closedAt",
+      "customerName",
+      "status",
+    ]);
+    const sortField = allowedSortFields.has(sortBy) ? sortBy : "createdAt";
     const orderBy: any = {};
-    orderBy[sortBy] = sortOrder === "asc" ? "asc" : "desc";
+    orderBy[sortField] = sortOrder === "asc" ? "asc" : "desc";
 
     const [total, leads] = await prisma.$transaction([
       prisma.lead.count({ where }),
@@ -91,14 +163,10 @@ export async function listMyLeads(req: Request, res: Response) {
                   id: true,
                   firstName: true,
                   lastName: true,
+                  contactPhone: true,
                 },
               },
-              team: {
-                select: {
-                  id: true,
-                  name: true,
-                },
-              },
+              team: { select: { id: true, name: true } },
             },
           },
         },
@@ -119,25 +187,24 @@ export async function listMyLeads(req: Request, res: Response) {
         hasPrev: pageNumber > 1,
       },
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error("List my leads error:", err);
-    return sendErrorResponse(res, 500, "Failed to fetch leads");
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch leads");
   }
 }
 
+/**
+ * GET /leads/my/:id
+ * Get lead detail visible to current assignee (includes assignments history & activity summary)
+ */
 export async function getMyLeadById(req: Request, res: Response) {
   try {
-    const accountId = req.user?.id;
+    const userId = req.user?.id;
     const { id } = req.params;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
 
-    const user = await prisma.user.findUnique({
-      where: { id: accountId },
-      select: { accountId: true },
-    });
-
-    if (!user) {
-      return sendErrorResponse(res, 401, "Invalid session user");
-    }
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
     const lead = await prisma.lead.findFirst({
       where: {
@@ -146,11 +213,11 @@ export async function getMyLeadById(req: Request, res: Response) {
           some: {
             isActive: true,
             OR: [
-              { accountId: user.accountId },
+              { accountId: accountId },
               {
                 team: {
                   members: {
-                    some: { accountId: user.accountId },
+                    some: { accountId: accountId },
                   },
                 },
               },
@@ -159,9 +226,39 @@ export async function getMyLeadById(req: Request, res: Response) {
         },
       },
       include: {
+        // include all assignments (active + history) so UI can show reassign history
         assignments: {
-          where: { isActive: true },
-          include: { account: true, team: true },
+          orderBy: { assignedAt: "desc" },
+          include: {
+            account: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                contactPhone: true,
+                designation: true,
+              },
+            },
+            team: { select: { id: true, name: true } },
+            assignedByAcc: {
+              select: { id: true, firstName: true, lastName: true },
+            },
+          },
+        },
+        activity: {
+          orderBy: { createdAt: "desc" },
+          take: 100, // limit to latest 100 for payload safety
+          include: {
+            performedByAccount: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                designation: true,
+                contactPhone: true,
+              },
+            },
+          },
         },
       },
     });
@@ -169,20 +266,41 @@ export async function getMyLeadById(req: Request, res: Response) {
     if (!lead) return sendErrorResponse(res, 404, "Lead not found");
 
     return sendSuccessResponse(res, 200, "Lead fetched", lead);
-  } catch {
-    return sendErrorResponse(res, 500, "Failed to fetch lead");
+  } catch (err: any) {
+    console.error("Get my lead error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch lead");
   }
 }
 
+/**
+ * PATCH /leads/my/:id/status
+ * Update status/remark as the assignee (account or team member)
+ */
 export async function updateMyLeadStatus(req: Request, res: Response) {
   try {
-    const accountId = req.user?.id;
+    const userId = req.user?.id;
     const { id } = req.params;
-    const { status, remark } = req.body;
+    const { status, remark, cost, customerName } = req.body as {
+      status?: "PENDING" | "IN_PROGRESS" | "CLOSED" | "CONVERTED";
+      remark?: string;
+      cost?: number;
+      customerName?: string;
+    };
 
-    if (!status && !remark)
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+    if (
+      typeof status === "undefined" &&
+      typeof remark === "undefined" &&
+      typeof cost === "undefined" &&
+      typeof customerName === "undefined"
+    ) {
       return sendErrorResponse(res, 400, "Nothing to update");
+    }
 
+    // verify access: ensure the lead is currently assigned to this user (directly or via team)
     const lead = await prisma.lead.findFirst({
       where: {
         id,
@@ -190,10 +308,12 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
           some: {
             isActive: true,
             OR: [
-              { accountId },
+              { accountId: accountId },
               {
                 team: {
-                  members: { some: { accountId } },
+                  members: {
+                    some: { accountId: accountId },
+                  },
                 },
               },
             ],
@@ -204,42 +324,139 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
 
     if (!lead) return sendErrorResponse(res, 403, "Access denied");
 
+    const performerSnapshot = await resolvePerformerSnapshot(accountId);
+
     const updated = await prisma.$transaction(async (tx) => {
+      // prepare update payload
+      const data: any = {};
+      if (typeof status !== "undefined") data.status = status;
+      if (typeof remark !== "undefined") data.remark = remark;
+      if (typeof cost !== "undefined") data.cost = cost;
+      if (typeof customerName !== "undefined") data.customerName = customerName;
+      if (data.status === "CLOSED" || data.status === "CONVERTED") {
+        data.closedAt = new Date();
+      }
+
+      // perform update
       const updatedLead = await tx.lead.update({
         where: { id },
-        data: {
-          status,
-          remark,
-          closedAt:
-            status === "CLOSED" || status === "CONVERTED"
-              ? new Date()
-              : undefined,
-        },
+        data,
       });
 
-      await tx.leadActivityLog.create({
-        data: {
-          leadId: id,
-          action: "STATUS_CHANGED",
-          performedBy: accountId,
-          meta: { status, remark },
-        },
-      });
+      // build snapshots and diffs
+      const fromState = {
+        id: lead.id,
+        status: lead.status,
+        remark: lead.remark ?? null,
+        cost: lead.cost ?? null,
+        customerName: lead.customerName ?? null,
+      };
+
+      const toState = {
+        id: updatedLead.id,
+        status: updatedLead.status,
+        remark: updatedLead.remark ?? null,
+        cost: updatedLead.cost ?? null,
+        customerName: updatedLead.customerName ?? null,
+      };
+
+      // Detect what changed
+      const changedFields: Record<string, { from: any; to: any }> = {};
+      if (fromState.status !== toState.status)
+        changedFields.status = { from: fromState.status, to: toState.status };
+      if ((fromState.remark ?? null) !== (toState.remark ?? null))
+        changedFields.remark = { from: fromState.remark, to: toState.remark };
+      // careful with Decimal types — convert to string/number for comparison
+      const prevCost = fromState.cost == null ? null : Number(fromState.cost);
+      const newCost = toState.cost == null ? null : Number(toState.cost);
+      if (prevCost !== newCost)
+        changedFields.cost = { from: prevCost, to: newCost };
+      if ((fromState.customerName ?? null) !== (toState.customerName ?? null))
+        changedFields.customerName = {
+          from: fromState.customerName,
+          to: toState.customerName,
+        };
+
+      // Create activity logs depending on changes
+      // 1) STATUS_CHANGED (if status changed)
+      if (changedFields.status) {
+        await tx.leadActivityLog.create({
+          data: {
+            leadId: id,
+            action: "STATUS_CHANGED",
+            performedBy: accountId,
+            meta: {
+              fromState: lead,
+              toState: updatedLead,
+            },
+          },
+        });
+      }
+
+      // 2) UPDATED (if non-status fields changed: cost, customerName, remark)
+      const nonStatusKeys = ["cost", "customerName", "remark"];
+      const hasNonStatusChange = nonStatusKeys.some((k) =>
+        Object.prototype.hasOwnProperty.call(changedFields, k),
+      );
+      if (hasNonStatusChange) {
+        // include only the changed fields in meta to keep payload compact
+        const changes: Record<string, any> = {};
+        for (const k of nonStatusKeys) {
+          if (changedFields[k]) changes[k] = changedFields[k];
+        }
+
+        await tx.leadActivityLog.create({
+          data: {
+            leadId: id,
+            action: "UPDATED",
+            performedBy: accountId,
+            meta: {
+              fromState: lead,
+              toState: updatedLead,
+            },
+          },
+        });
+      }
+
+      // 3) CLOSED (if lead became CLOSED) — separate explicit log
+      const becameClosed =
+        changedFields.status && changedFields.status.to === "CLOSED";
+      if (becameClosed) {
+        await tx.leadActivityLog.create({
+          data: {
+            leadId: id,
+            action: "CLOSED",
+            performedBy: accountId,
+            meta: {
+              closedBy: performerSnapshot,
+              closedAt: new Date().toISOString(),
+            },
+          },
+        });
+      }
 
       return updatedLead;
     });
 
     return sendSuccessResponse(res, 200, "Lead updated", updated);
-  } catch (err) {
+  } catch (err: any) {
     console.error("Update lead status error:", err);
-    return sendErrorResponse(res, 500, "Failed to update lead");
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to update lead");
   }
 }
 
+/**
+ * GET /leads/my/:id/activity
+ * Get activity timeline for a lead (only if user has access)
+ */
 export async function getMyLeadActivity(req: Request, res: Response) {
   try {
-    const accountId = req.user?.id;
+    const userId = req.user?.id;
     const { id } = req.params;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
     const hasAccess = await prisma.lead.findFirst({
       where: {
@@ -248,10 +465,12 @@ export async function getMyLeadActivity(req: Request, res: Response) {
           some: {
             isActive: true,
             OR: [
-              { accountId },
+              { accountId: accountId },
               {
                 team: {
-                  members: { some: { accountId } },
+                  members: {
+                    some: { accountId: accountId },
+                  },
                 },
               },
             ],
@@ -266,10 +485,26 @@ export async function getMyLeadActivity(req: Request, res: Response) {
     const activity = await prisma.leadActivityLog.findMany({
       where: { leadId: id },
       orderBy: { createdAt: "desc" },
+      include: {
+        performedByAccount: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            designation: true,
+            contactPhone: true,
+          },
+        },
+      },
     });
 
     return sendSuccessResponse(res, 200, "Activity fetched", activity);
-  } catch {
-    return sendErrorResponse(res, 500, "Failed to fetch activity");
+  } catch (err: any) {
+    console.error("Get my lead activity error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch activity",
+    );
   }
 }
