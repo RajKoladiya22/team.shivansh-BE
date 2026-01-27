@@ -6,11 +6,6 @@
     "auditLog": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/.8bd65a0b0055c704cc4be8746ca531d38201f653-audit.json",
     "files": [
         {
-            "date": 1768281065480,
-            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-13.log",
-            "hash": "fd7944ad0475821ca6d28511ad62a7c44e297ca580275676881691dc66be66b9"
-        },
-        {
             "date": 1768537663621,
             "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-16.log",
             "hash": "05473baeb2e5095a95bead78abf78b3882058b1e0ce446accd935a450f7f1d36"
@@ -39,6 +34,26 @@
             "date": 1769143938478,
             "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-23.log",
             "hash": "cfd9a24e1e23e581b09e56faa0414e5f5bba8b3e1ad497876f5da23523cf28ac"
+        },
+        {
+            "date": 1769230272284,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-24.log",
+            "hash": "d89ff252569a0296b1cba15da961ceb83601755e9230b44d7049d8b4804fb9cc"
+        },
+        {
+            "date": 1769279402536,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-25.log",
+            "hash": "e974ee8b82527b684bab33dcd4ad9521d5d61a12ec0259c08fd1d3bd430a6acc"
+        },
+        {
+            "date": 1769403122869,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-26.log",
+            "hash": "03f7655511aee0e1279f7e7ecd64b6541caa04bd9c93bbfa7cc1d804c880738c"
+        },
+        {
+            "date": 1769511926399,
+            "name": "/Users/rajkoladiya/Magically_Project/team.shivansh-BE/logs/application-2026-01-27.log",
+            "hash": "244eaaa56f30770f001eb08fee928028610072790256aa4301ae67fd6e0704d9"
         }
     ],
     "hashType": "sha256"

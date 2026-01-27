@@ -8,6 +8,9 @@ import rbacRouter from "./rbac"
 import adminRouter from "./admin"
 import projectsRouter from "./project"
 import tasksRouter from "./task"
+import customersRouter from "./customer"
+import notificationsRouter from "./notifications";
+import templatesRouter from "./template";
 
 
 const router = Router();
@@ -21,6 +24,9 @@ router.use("/rbac", rbacRouter);
 router.use("/admin", adminRouter);
 router.use("/projects", projectsRouter);
 router.use("/tasks", tasksRouter);
+router.use("/customers", customersRouter);
+router.use("/notifications", notificationsRouter);
+router.use("/templates", templatesRouter);
 
 
 // export main

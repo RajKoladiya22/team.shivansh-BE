@@ -21,32 +21,21 @@ app.use(
     origin: true,
     credentials: true,
     optionsSuccessStatus: 204,
-  })
+  }),
 );
 app.use(helmet());
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
     crossOriginEmbedderPolicy: false,
-  })
+  }),
 );
 
 app.use(compression());
 
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "..", "views"));
-app.use(
-  "/storage",
-  express.static(path.join(__dirname, "storage"))
-);
-
-// app.use("/storage", express.static(path.join(__dirname, "..", "storage")));
-// app.use(
-//   "/storage",
-//   express.static(path.join(process.cwd(), "storage"))
-// );
-
-
+app.use("/storage", express.static(path.join(__dirname, "storage")));
 
 const whitelist = ["/api/v1/auth/reset-password"];
 

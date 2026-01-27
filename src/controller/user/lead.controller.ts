@@ -508,3 +508,66 @@ export async function getMyLeadActivity(req: Request, res: Response) {
     );
   }
 }
+
+
+/**
+ * GET /leads/my/stats/status
+ * Lead counts by status for current user
+ */
+export async function getMyLeadStatusStats(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+    const baseWhere = {
+      assignments: {
+        some: {
+          isActive: true,
+          OR: [
+            { accountId },
+            {
+              team: {
+                members: {
+                  some: { accountId },
+                },
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    const statuses = ["PENDING", "IN_PROGRESS", "CLOSED", "CONVERTED"] as const;
+
+    const counts = await prisma.$transaction(
+      statuses.map((status) =>
+        prisma.lead.count({
+          where: {
+            ...baseWhere,
+            status,
+          },
+        }),
+      ),
+    );
+
+    const data = {
+      PENDING: counts[0],
+      IN_PROGRESS: counts[1],
+      CLOSED: counts[2],
+      CONVERTED: counts[3],
+      TOTAL: counts.reduce((a, b) => a + b, 0),
+    };
+
+    return sendSuccessResponse(res, 200, "My lead counts fetched", data);
+  } catch (err: any) {
+    console.error("My lead stats error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch lead stats",
+    );
+  }
+}

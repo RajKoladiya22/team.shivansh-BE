@@ -31,6 +31,10 @@ export interface EnvConfig {
         mailFrom: string;
         resetOtpExpiresMin: number;
     };
+    webPush: {
+        publicKey: string;
+        privateKey: string;
+    };
 }
 
 const {
@@ -54,6 +58,8 @@ const {
     SMTP_PASS,
     MAIL_FROM,
     RESET_OTP_EXPIRES_MIN,
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY,
 } = validatedEnv;
 
 export const envConfiguration = (): EnvConfig => ({
@@ -84,5 +90,9 @@ export const envConfiguration = (): EnvConfig => ({
         pass: SMTP_PASS,
         mailFrom: MAIL_FROM,
         resetOtpExpiresMin: Number(RESET_OTP_EXPIRES_MIN),
+    },
+    webPush: {
+        publicKey: VAPID_PUBLIC_KEY,
+        privateKey: VAPID_PRIVATE_KEY,
     },
 });

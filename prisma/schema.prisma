@@ -138,16 +138,22 @@ model Account {
   monthlySalaries MonthlySalary[]
   salaryNotices   SalaryNotice[]
 
-  bankDetails      BankDetail?
-  attendanceLogs   AttendanceLog[]
-  leaveRequests    LeaveRequest[]
-  busyLogs         BusyActivityLog[]
+  bankDetails    BankDetail?
+  attendanceLogs AttendanceLog[]
+  leaveRequests  LeaveRequest[]
+  busyLogs       BusyActivityLog[]
 
-  leadActivityLogs LeadActivityLog[]
-  leads            Lead[]            @relation("LeadCreatedBy")
-  leadAssignments  LeadAssignment[]  @relation("LeadAssignedBy")
-  assignedLeadAssignments LeadAssignment[] @relation("LeadAssignedTo")
+  leadActivityLogs          LeadActivityLog[]
+  leads                     Lead[]                     @relation("LeadCreatedBy")
+  leadAssignments           LeadAssignment[]           @relation("LeadAssignedBy")
+  assignedLeadAssignments   LeadAssignment[]           @relation("LeadAssignedTo")
   // linkedLeads      Lead[]            @relation("LeadAccount")
+  customers                 Customer[]
+  notifications             Notification[]
+  notificationSubscriptions NotificationSubscription[]
+  messageTemplates          MessageTemplate[]
+  templatePreferences       TemplatePreference[]
+  dailyStatusReports        DailyStatusReport[]
 
   @@index([isActive])
   @@index([jobType])
@@ -810,6 +816,8 @@ model Lead {
   // accountId   String?
   assignments LeadAssignment[]
   activity    LeadActivityLog[]
+  customer    Customer?         @relation(fields: [customerId], references: [id])
+  customerId  String?
 
   @@index([source])
   @@index([status])
@@ -823,9 +831,9 @@ model LeadAssignment {
   lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
   leadId String
 
-  type AssignmentType
+  type      AssignmentType
   accountId String?
-  account   Account? @relation("LeadAssignedTo", fields: [accountId], references: [id])
+  account   Account?       @relation("LeadAssignedTo", fields: [accountId], references: [id])
 
   teamId String?
   team   Team?   @relation(fields: [teamId], references: [id])
@@ -860,6 +868,273 @@ model LeadActivityLog {
 
   @@index([leadId])
   @@index([createdAt])
+}
+
+// ------------------------------------------------------------------
+// Customer Store
+// ------------------------------------------------------------------
+
+model Customer {
+  id               String  @id @default(uuid())
+  name             String
+  mobile           String // raw input or formatted
+  normalizedMobile String  @unique // used for dedupe/lookups
+  emails           Json? // e.g. [{ type, value }]
+  phones           Json? // extra numbers
+  addresses        Json? // structured addresses
+  notes            String?
+  isActive         Boolean @default(true)
+
+  createdBy    String?
+  createdByAcc Account? @relation(fields: [createdBy], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  leads Lead[]
+
+  @@index([normalizedMobile])
+  @@index([createdAt])
+}
+
+// ------------------------------------------------------------------
+// Notification Store
+// ------------------------------------------------------------------
+
+enum NotificationCategory {
+  SYSTEM
+  REMINDER
+  ALERT
+  WARNING
+  MESSAGE
+  TASK
+  LEAD
+  CUSTOM
+}
+
+enum NotificationLevel {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  accountId String? // null = broadcast/all
+  account   Account? @relation(fields: [accountId], references: [id])
+
+  category NotificationCategory
+  level    NotificationLevel    @default(INFO)
+
+  title            String
+  body             String // short body
+  payload          Json? // full structured payload (for UI / actions)
+  actionUrl        String? // browser action target
+  dedupeKey        String? // idempotency / merge key e.g. "task:123:reminder"
+  deliveryChannels Json? // ["push","socket","email"]
+
+  // client states
+  isRead      Boolean   @default(false)
+  isHidden    Boolean   @default(false) // user-specific hide
+  dismissedAt DateTime?
+  remindAt    DateTime? // snooze/reschedule timestamp
+
+  // audit
+  createdBy String? // admin/account id who created
+  createdAt DateTime  @default(now())
+  sentAt    DateTime? // when delivery attempted
+  expiresAt DateTime? // optional TTL
+
+  @@index([accountId])
+  @@index([category])
+  @@index([createdAt])
+  @@index([isRead])
+  @@index([dedupeKey])
+}
+
+model NotificationSubscription {
+  id        String  @id @default(uuid())
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  // WebPush fields
+  endpoint String @unique
+  p256dh   String
+  auth     String
+
+  // meta
+  platform  String? // "web", "chrome", "android", "ios"
+  userAgent String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId])
+}
+
+// ------------------------------------------------------------------
+// Message Template Store (Simple & Dynamic)
+// ------------------------------------------------------------------
+
+enum MessageChannel {
+  WHATSAPP
+  EMAIL
+  SMS
+  IN_APP
+  PUSH
+}
+
+enum TemplateVisibility {
+  PRIVATE // account-specific
+  PUBLIC // global/shared
+}
+
+model MessageTemplate {
+  id String @id @default(uuid())
+
+  // Identity
+  name        String
+  slug        String
+  description String?
+
+  // Ownership & visibility
+  visibility TemplateVisibility @default(PRIVATE)
+  accountId  String?
+  account    Account?           @relation(fields: [accountId], references: [id])
+
+  // Channel support
+  channels Json
+  subject  String?
+  body     String
+
+  // Placeholder metadata
+  variables Json?
+  meta      Json?
+
+  // ─────────────────────────────
+  // Visibility
+  // ─────────────────────────────
+  isDefault  Boolean   @default(false) // ⭐ recommended template
+  lastUsedAt DateTime? // 🧠 for smart sorting
+
+  // Behavior
+  isActive Boolean @default(true)
+
+  // Audit
+  createdBy           String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  templatePreferences TemplatePreference[]
+
+  @@unique([accountId, slug])
+  @@index([visibility])
+  @@index([accountId])
+  @@index([isActive])
+  @@index([lastUsedAt])
+}
+
+model TemplatePreference {
+  id        String  @id @default(uuid())
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  templateId String
+  template   MessageTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  // per-account overrides
+  isPinned Boolean @default(false)
+  priority Int     @default(0)
+  isHidden Boolean @default(false) // user chose to hide this template
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([accountId, templateId])
+  @@index([accountId])
+  @@index([templateId])
+}
+
+// ------------------------------------------------------------------
+// DSU Store (Daily Status Updates)
+// ------------------------------------------------------------------
+
+enum DailyStatusSection {
+  WORKED_ON // Completed work
+  IN_PROGRESS // Started but not completed
+  QUERY // Blocker / question
+  LEARNING // Today's learning
+}
+
+enum DailyStatusEntityType {
+  LEAD
+  SUPPORT
+  TASK
+  CALL
+  PROJECT
+  OTHER
+}
+
+enum DailyStatusState {
+  DRAFT
+  SUBMITTED
+  REVIEWED
+}
+
+model DailyStatusReport {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id])
+
+  reportDate DateTime // normalized to start of day (00:00)
+  state      DailyStatusState @default(SUBMITTED)
+
+  summary     String? // optional overall summary
+  submittedAt DateTime?
+  reviewedAt  DateTime?
+  reviewedBy  String?
+  reviewNote  String?
+
+  items DailyStatusItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([accountId, reportDate])
+  @@index([accountId])
+  @@index([reportDate])
+  @@index([state])
+}
+
+model DailyStatusItem {
+  id String @id @default(uuid())
+
+  reportId String
+  report   DailyStatusReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  section DailyStatusSection
+
+  // Optional entity linkage
+  entityType DailyStatusEntityType?
+  entityId   String? // leadId / taskId / supportId
+
+  title String? // fallback title (e.g., "Client follow-up")
+  note  String // actual work description / query / learning
+
+  // Query-specific fields
+  raisedToAccountId String?
+  resolved          Boolean @default(false)
+
+  // Effort tracking (optional but powerful)
+  timeSpentMinutes Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([reportId])
+  @@index([section])
+  @@index([entityType, entityId])
 }
 
 // output = "../src/generated/client"

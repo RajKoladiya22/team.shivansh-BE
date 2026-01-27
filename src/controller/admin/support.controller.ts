@@ -1,4 +1,4 @@
-// src/controller/admin/lead.controller.ts
+// src/controller/admin/support.controller.ts
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import {
@@ -115,7 +115,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
     // Destructure with different name to avoid shadowing creator accountId
     const {
       source,
-      type,
+      type = "SUPPORT",
       customerName,
       mobileNumber,
       product,
@@ -128,7 +128,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
     const userId = await getUserIdFromAccountId(assigneeAccountId);
 
     if (!source || !type)
-      return sendErrorResponse(res, 400, "Lead source and type are required");
+      return sendErrorResponse(res, 400, "Support source and type are required");
     if (!customerName || !mobileNumber)
       return sendErrorResponse(
         res,
@@ -224,13 +224,6 @@ export async function createLeadAdmin(req: Request, res: Response) {
 
       return created;
     });
-
-    // fire-and-forget notification (non-blocking)
-    // void triggerAssignmentNotification({
-    //   leadId: newLead.id,
-    //   assigneeAccountId: userId ?? null,
-    //   assigneeTeamId: assigneeTeamId ?? null,
-    // });
 
     void triggerAssignmentNotification({
       leadId: newLead.id,
@@ -637,11 +630,13 @@ export async function getLeadCountByStatusAdmin(
       return sendErrorResponse(res, 403, "Admin access required");
     }
 
-    const { fromDate, toDate, source } = req.query as Record<string, string>;
+    const { fromDate, toDate, source, type } = req.query as Record<string, string>;
 
     const where: any = {};
 
     if (source) where.source = source;
+
+    if (type) where.type = type;
 
     if (fromDate || toDate) {
       where.createdAt = {};
@@ -649,6 +644,8 @@ export async function getLeadCountByStatusAdmin(
       if (toDate) where.createdAt.lte = new Date(toDate);
     }
 
+    console.log("type of where:", typeof where, where);
+    
     /**
      * Use groupBy (single DB roundtrip, very fast)
      */

@@ -36,6 +36,9 @@ export const envSchema = z.object({
   RESET_OTP_EXPIRES_MIN: z.string(),
 
   BANK_SECRET: z.string(),
+
+  VAPID_PUBLIC_KEY: z.string(),
+  VAPID_PRIVATE_KEY: z.string(),
 });
 
 export type EnvVars = z.infer<typeof envSchema>;

@@ -2121,3 +2121,252 @@ Error: write EPIPE
     at console.value (node:internal/console/constructor:308:16)
     at console.error (node:internal/console/constructor:423:26)
     at writeOut (node:internal/process/warning:56:3)
+[2026-01-23T16:08:01.152Z] INFO: 🚀 Server listening on http://localhost:9090 - [development]
+[2026-01-23T16:08:01.154Z] INFO: 🌐 Socket.io server is also running
+[2026-01-23T16:08:02.452Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:08:02.524Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:08:22.302Z] INFO: GET /api/v1/admin/employees?page=1&limit=50&isActive=true
+[2026-01-23T16:08:22.317Z] INFO: GET /api/v1/admin/teams?
+[2026-01-23T16:08:22.339Z] INFO: GET /api/v1/admin/employees?page=1&limit=50&isActive=true
+[2026-01-23T16:08:22.343Z] INFO: GET /api/v1/admin/teams?
+[2026-01-23T16:09:01.018Z] INFO: POST /api/v1/admin/leads
+[2026-01-23T16:09:01.161Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:09:01.179Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:09:24.693Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:09:24.716Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:21:09.558Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:21:09.621Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:21:09.693Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:21:09.718Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:22:43.595Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:22:43.601Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:22:43.643Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:22:43.646Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:22:48.672Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:22:48.690Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:22:48.756Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:22:48.767Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:23:36.786Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:23:36.804Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:23:36.872Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:23:36.882Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:28:30.443Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:28:30.471Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:28:30.534Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:28:30.543Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:30:53.499Z] INFO: GET /api/v1/admin/leads/2e716b6e-b5be-4902-8874-dabdef4886a4/activity
+[2026-01-23T16:31:31.077Z] INFO: POST /api/v1/auth/login
+[2026-01-23T16:32:23.289Z] INFO: POST /api/v1/auth/login
+[2026-01-23T16:42:43.032Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:42:43.106Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:42:49.308Z] INFO: GET /api/v1/admin/employees?page=1&limit=50&isActive=true
+[2026-01-23T16:42:49.312Z] INFO: GET /api/v1/admin/teams?
+[2026-01-23T16:42:49.320Z] INFO: GET /api/v1/admin/employees?page=1&limit=50&isActive=true
+[2026-01-23T16:42:49.331Z] INFO: GET /api/v1/admin/teams?
+[2026-01-23T16:43:29.572Z] INFO: POST /api/v1/admin/leads
+[2026-01-23T16:43:29.724Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:43:29.739Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:43:36.760Z] INFO: GET /api/v1/admin/leads/670d2508-d3fc-4a03-b6f2-19b61529a990/activity
+[2026-01-23T16:43:36.763Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:43:36.777Z] INFO: GET /api/v1/admin/leads/670d2508-d3fc-4a03-b6f2-19b61529a990/activity
+[2026-01-23T16:43:36.792Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:44:08.636Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:44:08.723Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:45:14.564Z] INFO: POST /api/v1/auth/login
+[2026-01-23T16:45:28.782Z] INFO: POST /api/v1/auth/login
+[2026-01-23T16:45:34.048Z] INFO: GET /api/v1/admin/employees?page=1&limit=50&isActive=true
+[2026-01-23T16:45:34.058Z] INFO: GET /api/v1/admin/teams?
+[2026-01-23T16:45:34.068Z] INFO: GET /api/v1/admin/teams?
+[2026-01-23T16:45:34.072Z] INFO: GET /api/v1/admin/employees?page=1&limit=50&isActive=true
+[2026-01-23T16:46:16.759Z] INFO: POST /api/v1/admin/leads
+[2026-01-23T16:46:16.850Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:46:16.869Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:46:27.144Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:46:27.148Z] INFO: GET /api/v1/admin/leads/435e313e-d8e6-4ffa-bb50-47a885885e89/activity
+[2026-01-23T16:46:27.155Z] INFO: GET /api/v1/admin/leads?page=1&limit=20&search=
+[2026-01-23T16:46:27.157Z] INFO: GET /api/v1/admin/leads/435e313e-d8e6-4ffa-bb50-47a885885e89/activity
+[2026-01-23T16:46:34.686Z] INFO: GET /api/v1/user/leads/my?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:46:34.739Z] INFO: GET /api/v1/user/leads/my?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:46:37.738Z] INFO: GET /api/v1/user/leads/435e313e-d8e6-4ffa-bb50-47a885885e89/activity
+[2026-01-23T16:46:37.753Z] INFO: GET /api/v1/user/leads/435e313e-d8e6-4ffa-bb50-47a885885e89/activity
+[2026-01-23T16:47:29.133Z] INFO: POST /api/v1/admin/leads
+[2026-01-23T16:47:29.241Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:47:29.267Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:47:37.191Z] INFO: POST /api/v1/auth/login
+[2026-01-23T16:48:32.555Z] INFO: POST /api/v1/admin/leads
+[2026-01-23T16:48:32.690Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:48:32.699Z] INFO: GET /api/v1/admin/leads?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:48:39.931Z] INFO: GET /api/v1/tasks/my?status=PENDING&page=1&limit=20
+[2026-01-23T16:48:39.985Z] INFO: GET /api/v1/tasks/my?status=PENDING&page=1&limit=20
+[2026-01-23T16:48:42.608Z] INFO: GET /api/v1/user/leads/my?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:48:42.626Z] INFO: GET /api/v1/user/leads/my?page=1&limit=12&sortBy=createdAt&sortOrder=desc
+[2026-01-23T16:51:19.623Z] INFO: 🚀 Server listening on http://localhost:9090 - [development]
+[2026-01-23T16:51:19.626Z] INFO: 🌐 Socket.io server is also running
+[2026-01-23T16:51:19.627Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at Console.log (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/node_modules/winston/lib/winston/transports/console.js:87:23)
+    at Console._write (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/node_modules/winston-transport/modern.js:103:17)
+    at doWrite (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/node_modules/readable-stream/lib/_stream_writable.js:390:139)
+[2026-01-23T16:51:19.627Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at Console.log (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/node_modules/winston/lib/winston/transports/console.js:87:23)
+    at Console._write (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/node_modules/winston-transport/modern.js:103:17)
+    at doWrite (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/node_modules/readable-stream/lib/_stream_writable.js:390:139)
+[2026-01-23T16:51:19.655Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.log (node:internal/console/constructor:395:26)
+    at /Users/rajkoladiya/Magically_Project/team.shivansh-BE/src/config/database.config.ts:43:23
+[2026-01-23T16:51:19.655Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.log (node:internal/console/constructor:395:26)
+    at /Users/rajkoladiya/Magically_Project/team.shivansh-BE/src/config/database.config.ts:43:23
+[2026-01-23T16:51:21.566Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.log (node:internal/console/constructor:395:26)
+    at Namespace.<anonymous> (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/src/core/utils/socket/index.ts:15:13)
+[2026-01-23T16:51:21.566Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.log (node:internal/console/constructor:395:26)
+    at Namespace.<anonymous> (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/src/core/utils/socket/index.ts:15:13)
+[2026-01-23T16:51:21.575Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.log (node:internal/console/constructor:395:26)
+    at Socket.<anonymous> (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/src/core/utils/socket/index.ts:23:15)
+[2026-01-23T16:51:21.575Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.log (node:internal/console/constructor:395:26)
+    at Socket.<anonymous> (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/src/core/utils/socket/index.ts:23:15)
+[2026-01-23T16:51:21.576Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.error (node:internal/console/constructor:423:26)
+    at writeOut (node:internal/process/warning:56:3)
+[2026-01-23T16:51:21.576Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.error (node:internal/console/constructor:423:26)
+    at writeOut (node:internal/process/warning:56:3)
+[2026-01-23T16:51:21.952Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.log (node:internal/console/constructor:395:26)
+    at Namespace.<anonymous> (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/src/core/utils/socket/index.ts:15:13)
+[2026-01-23T16:51:21.952Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.log (node:internal/console/constructor:395:26)
+    at Namespace.<anonymous> (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/src/core/utils/socket/index.ts:15:13)
+[2026-01-23T16:51:21.958Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.log (node:internal/console/constructor:395:26)
+    at Socket.<anonymous> (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/src/core/utils/socket/index.ts:23:15)
+[2026-01-23T16:51:21.958Z] ERROR: uncaughtException: write EPIPE
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Socket.Writable.write (node:internal/streams/writable:508:10)
+    at console.value (node:internal/console/constructor:308:16)
+    at console.log (node:internal/console/constructor:395:26)
+    at Socket.<anonymous> (/Users/rajkoladiya/Magically_Project/team.shivansh-BE/src/core/utils/socket/index.ts:23:15)

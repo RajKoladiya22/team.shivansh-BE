@@ -14,6 +14,7 @@ import {
   closeLeadAdmin,
   listLeadsAdmin,
   getLeadActivityTimelineAdmin,
+  getLeadCountByStatusAdmin,
 } from "../../controller/admin/lead.controller";
 
 const router = Router();
@@ -29,7 +30,7 @@ router.post(
   requireAuth,
   requireRole("ADMIN"),
   requirePermission("ALL"),
-  createLeadAdmin
+  createLeadAdmin,
 );
 
 /**
@@ -41,7 +42,7 @@ router.get(
   requireAuth,
   requireRole("ADMIN"),
   requirePermission("ALL"),
-  listLeadsAdmin
+  listLeadsAdmin,
 );
 
 /**
@@ -53,7 +54,7 @@ router.patch(
   requireAuth,
   requireRole("ADMIN"),
   requirePermission("ALL"),
-  updateLeadAdmin
+  updateLeadAdmin,
 );
 
 /**
@@ -65,7 +66,7 @@ router.post(
   requireAuth,
   requireRole("ADMIN"),
   requirePermission("ALL"),
-  assignLeadAdmin
+  assignLeadAdmin,
 );
 
 /**
@@ -77,7 +78,7 @@ router.delete(
   requireAuth,
   requireRole("ADMIN"),
   requirePermission("ALL"),
-  closeLeadAdmin
+  closeLeadAdmin,
 );
 
 router.get(
@@ -85,7 +86,15 @@ router.get(
   requireAuth,
   requireRole("ADMIN"),
   requirePermission("ALL"),
-  getLeadActivityTimelineAdmin
+  getLeadActivityTimelineAdmin,
+);
+
+router.get(
+  "/leads/stats/status",
+  requireAuth,
+  requireRole("ADMIN"),
+  requirePermission("ALL"),
+  getLeadCountByStatusAdmin,
 );
 
 export default router;

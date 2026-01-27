@@ -9,7 +9,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "lint": "eslint \"src/**/*.ts\" --fix",
     "prisma:generate": "prisma generate",
-    "migration:generate": "npx prisma migrate dev --name lead",
+    "migration:generate": "npx prisma migrate dev --name message",
     "migration:deploy": "npx prisma migrate deploy",
     "migration:reset": "prisma migrate reset --force",
     "migration:resolve": "npx prisma migrate resolve --applied <migration_name>",
@@ -65,6 +65,7 @@
     "twilio": "^5.10.7",
     "uuid": "^9.0.1",
     "vercel": "^41.0.2",
+    "web-push": "^3.6.7",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0",
     "zod": "^3.25.30"
