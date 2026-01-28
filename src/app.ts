@@ -18,7 +18,7 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use(
   cors({
-    origin: true,
+    origin: ["https://team.shivanshinfosys.in", "http://localhost:5173"],
     credentials: true,
     optionsSuccessStatus: 204,
   }),

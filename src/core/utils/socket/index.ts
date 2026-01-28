@@ -51,7 +51,7 @@ export function initIo(server: http.Server) {
 
   io = new Server(server, {
     cors: {
-      origin: "http://localhost:5173", // env.CLIENT_URL ?? "http://localhost:5173"
+      origin: ["https://team.shivanshinfosys.in","http://localhost:5173"], // env.CLIENT_URL ?? "http://localhost:5173"
       credentials: true,
     },
   });
