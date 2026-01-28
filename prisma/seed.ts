@@ -1,7 +1,15 @@
 import bcrypt from "bcrypt";
 import { prisma } from "../src/config/database.config";
+import { config } from "dotenv";
+config();
+
+export const env = process.env;
 
 async function main() {
+
+  console.log("🌱 \n\n ENV ->>DATABASE_URL", env.DATABASE_URL);
+  
+
   const allPermission = await prisma.permission.upsert({
     where: { key: "ALL" },
     update: {},
@@ -33,7 +41,7 @@ async function main() {
     },
   });
 
-  const adminEmail = "admin@admin.com";
+  const adminEmail = "koladiyaraj22@gmail.com";
   const adminAccount = await prisma.account.upsert({
     where: { contactEmail: adminEmail },
     update: {},
