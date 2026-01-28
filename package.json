@@ -17,7 +17,7 @@
     "seed": "cross-env NODE_ENV=development dotenv -e .env.development -- ts-node prisma/seed.ts",
     "start": "node dist/server.js",
     "start:dev": "cross-env NODE_ENV=development concurrently \"tsc -w\" \"nodemon src/server.ts\"",
-    "start:prod": "cross-env NODE_ENV=production pm2 start dist/src/server.js --name Shivansh-API",
+    "start:prod": "cross-env NODE_ENV=production pm2 start dist/src/server.js --name Team-API",
     "postinstall": "prisma generate",
     "test": "jest",
     "prisma:gen": "dotenv -e .env.$NODE_ENV -- npx prisma generate",
