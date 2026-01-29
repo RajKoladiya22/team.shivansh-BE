@@ -650,583 +650,583 @@
 
 
 
-// src/controllers/dailyStatus.controller.ts
-import { Request, Response } from "express";
-import { prisma } from "../../config/database.config";
-import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpResponse";
-import { isValid, parseISO, startOfDay, endOfDay } from "date-fns";
-import { getIo } from "../../core/utils/socket";
+// // src/controllers/dailyStatus.controller.ts
+// import { Request, Response } from "express";
+// import { prisma } from "../../config/database.config";
+// import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpResponse";
+// import { isValid, parseISO, startOfDay, endOfDay } from "date-fns";
+// import { getIo } from "../../core/utils/socket";
 
-/**
- * Helpers
- */
-const getAccountIdFromReqUser = async (userId?: string | null) => {
-  if (!userId) return null;
-  const u = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { accountId: true },
-  });
-  return u?.accountId ?? null;
-};
+// /**
+//  * Helpers
+//  */
+// const getAccountIdFromReqUser = async (userId?: string | null) => {
+//   if (!userId) return null;
+//   const u = await prisma.user.findUnique({
+//     where: { id: userId },
+//     select: { accountId: true },
+//   });
+//   return u?.accountId ?? null;
+// };
 
-function normalizeDateToStart(date?: string) {
-  if (!date) return startOfDay(new Date());
-  try {
-    const d = parseISO(date);
-    if (!isValid(d)) return startOfDay(new Date());
-    return startOfDay(d);
-  } catch {
-    return startOfDay(new Date());
-  }
-}
+// function normalizeDateToStart(date?: string) {
+//   if (!date) return startOfDay(new Date());
+//   try {
+//     const d = parseISO(date);
+//     if (!isValid(d)) return startOfDay(new Date());
+//     return startOfDay(d);
+//   } catch {
+//     return startOfDay(new Date());
+//   }
+// }
 
-/* ============================
-   CRUD: Create / Upsert Report
-   POST /api/v1/user/ds/reports
-   Body: {
-     reportDate?: "YYYY-MM-DD",
-     summary?: string,
-     items?: [...],
-     state?: "DRAFT" | "SUBMITTED"
-   }
-============================ */
-export async function createOrUpdateReport(req: Request, res: Response) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-    const accountId = await getAccountIdFromReqUser(userId);
-    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
-
-    const { reportDate, summary, items, state } = req.body as any;
-    const day = normalizeDateToStart(reportDate);
-
-    const existing = await prisma.dailyStatusReport.findUnique({
-      where: { accountId_reportDate: { accountId, reportDate: day } as any },
-    });
-
-    if (existing && existing.state !== "DRAFT" && state === "SUBMITTED") {
-      return sendErrorResponse(res, 400, "Cannot modify submitted report");
-    }
-
-    const result = await prisma.$transaction(async (tx) => {
-      const report = existing
-        ? await tx.dailyStatusReport.update({
-            where: { id: existing.id },
-            data: { 
-              summary: summary ?? existing.summary,
-              state: state ?? existing.state,
-              updatedAt: new Date()
-            },
-          })
-        : await tx.dailyStatusReport.create({
-            data: {
-              accountId,
-              reportDate: day,
-              summary: summary ?? null,
-              state: state ?? "DRAFT",
-            },
-          });
-
-      if (Array.isArray(items) && items.length > 0) {
-        // Remove existing items if updating
-        if (existing) {
-          await tx.dailyStatusItem.deleteMany({ where: { reportId: report.id } });
-        }
-        
-        const toCreate = items.map((it: any) => ({
-          reportId: report.id,
-          section: it.section,
-          entityType: it.entityType ?? null,
-          entityId: it.entityId ?? null,
-          title: it.title ?? null,
-          note: it.note ?? "",
-          raisedToAccountId: it.raisedToAccountId ?? null,
-          resolved: Boolean(it.resolved ?? false),
-          timeSpentMinutes: typeof it.timeSpentMinutes === "number" ? it.timeSpentMinutes : null,
-        }));
-        
-        if (toCreate.length > 0) {
-          await tx.dailyStatusItem.createMany({ data: toCreate });
-        }
-      }
-
-      return tx.dailyStatusReport.findUnique({
-        where: { id: report.id },
-        include: { 
-          items: { orderBy: { createdAt: "asc" } },
-          account: { select: { id: true, firstName: true, lastName: true } }
-        },
-      });
-    });
-
-    return sendSuccessResponse(res, existing ? 200 : 201, existing ? "Report updated" : "Report created", result);
-  } catch (err: any) {
-    console.error("createOrUpdateReport error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to save report");
-  }
-}
-
-/* ============================
-   GET my report for a date
-   GET /api/v1/user/ds/reports/my?date=YYYY-MM-DD
-============================ */
-export async function getMyReport(req: Request, res: Response) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-    const accountId = await getAccountIdFromReqUser(userId);
-    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
-
-    const { date } = req.query as Record<string, string>;
-    const day = normalizeDateToStart(date);
-
-    const report = await prisma.dailyStatusReport.findUnique({
-      where: { accountId_reportDate: { accountId, reportDate: day } as any },
-      include: { 
-        items: { orderBy: { createdAt: "asc" } },
-        account: { select: { id: true, firstName: true, lastName: true } }
-      },
-    });
-
-    if (!report) {
-      // Return empty structure for easy form initialization
-      return sendSuccessResponse(res, 200, "No report found", {
-        reportDate: day,
-        state: "DRAFT",
-        summary: null,
-        items: []
-      });
-    }
-
-    return sendSuccessResponse(res, 200, "Report fetched", report);
-  } catch (err: any) {
-    console.error("getMyReport error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch report");
-  }
-}
-
-/* ============================
-   ADD single item to report
-   POST /api/v1/user/ds/reports/:id/items
-   Body: { section, entityType?, entityId?, title?, note, timeSpentMinutes?, raisedToAccountId? }
-============================ */
-export async function addItemToReport(req: Request, res: Response) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-    const accountId = await getAccountIdFromReqUser(userId);
-    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
-
-    const { id } = req.params;
-    const itemData = req.body;
-
-    const report = await prisma.dailyStatusReport.findUnique({ where: { id } });
-    if (!report) return sendErrorResponse(res, 404, "Report not found");
-    if (report.accountId !== accountId) return sendErrorResponse(res, 403, "Not authorized");
-    if (report.state !== "DRAFT") return sendErrorResponse(res, 400, "Cannot modify submitted report");
-
-    const newItem = await prisma.dailyStatusItem.create({
-      data: {
-        reportId: id,
-        section: itemData.section,
-        entityType: itemData.entityType ?? null,
-        entityId: itemData.entityId ?? null,
-        title: itemData.title ?? null,
-        note: itemData.note ?? "",
-        raisedToAccountId: itemData.raisedToAccountId ?? null,
-        resolved: Boolean(itemData.resolved ?? false),
-        timeSpentMinutes: typeof itemData.timeSpentMinutes === "number" ? itemData.timeSpentMinutes : null,
-      }
-    });
-
-    return sendSuccessResponse(res, 201, "Item added", newItem);
-  } catch (err: any) {
-    console.error("addItemToReport error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to add item");
-  }
-}
-
-/* ============================
-   UPDATE single item
-   PATCH /api/v1/user/ds/items/:itemId
-============================ */
-export async function updateItem(req: Request, res: Response) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-    const accountId = await getAccountIdFromReqUser(userId);
-    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
-
-    const { itemId } = req.params;
-    const updates = req.body;
-
-    const item = await prisma.dailyStatusItem.findUnique({
-      where: { id: itemId },
-      include: { report: true }
-    });
-
-    if (!item) return sendErrorResponse(res, 404, "Item not found");
-    if (item.report.accountId !== accountId) return sendErrorResponse(res, 403, "Not authorized");
-    if (item.report.state !== "DRAFT") return sendErrorResponse(res, 400, "Cannot modify submitted report");
-
-    const updated = await prisma.dailyStatusItem.update({
-      where: { id: itemId },
-      data: {
-        section: updates.section ?? item.section,
-        title: updates.title ?? item.title,
-        note: updates.note ?? item.note,
-        timeSpentMinutes: updates.timeSpentMinutes ?? item.timeSpentMinutes,
-        resolved: updates.resolved ?? item.resolved,
-        raisedToAccountId: updates.raisedToAccountId ?? item.raisedToAccountId,
-      }
-    });
-
-    return sendSuccessResponse(res, 200, "Item updated", updated);
-  } catch (err: any) {
-    console.error("updateItem error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to update item");
-  }
-}
-
-/* ============================
-   DELETE single item
-   DELETE /api/v1/user/ds/items/:itemId
-============================ */
-export async function deleteItem(req: Request, res: Response) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-    const accountId = await getAccountIdFromReqUser(userId);
-    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
-
-    const { itemId } = req.params;
-
-    const item = await prisma.dailyStatusItem.findUnique({
-      where: { id: itemId },
-      include: { report: true }
-    });
-
-    if (!item) return sendErrorResponse(res, 404, "Item not found");
-    if (item.report.accountId !== accountId) return sendErrorResponse(res, 403, "Not authorized");
-    if (item.report.state !== "DRAFT") return sendErrorResponse(res, 400, "Cannot modify submitted report");
-
-    await prisma.dailyStatusItem.delete({ where: { id: itemId } });
-
-    return sendSuccessResponse(res, 200, "Item deleted", { id: itemId });
-  } catch (err: any) {
-    console.error("deleteItem error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to delete item");
-  }
-}
-
-/* ============================
-   POST /api/v1/user/ds/reports/:id/submit
-============================ */
-export async function submitReport(req: Request, res: Response) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-    const accountId = await getAccountIdFromReqUser(userId);
-    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
-
-    const { id } = req.params;
-    const existing = await prisma.dailyStatusReport.findUnique({ 
-      where: { id }, 
-      include: { items: true } 
-    });
-    
-    if (!existing) return sendErrorResponse(res, 404, "Report not found");
-    if (existing.accountId !== accountId) return sendErrorResponse(res, 403, "Not authorized");
-    if (existing.state !== "DRAFT") return sendErrorResponse(res, 400, "Report already submitted");
-    if (!existing.items || existing.items.length === 0) {
-      return sendErrorResponse(res, 400, "Report must contain at least one item");
-    }
-
-    const updated = await prisma.dailyStatusReport.update({
-      where: { id },
-      data: { state: "SUBMITTED", submittedAt: new Date() },
-      include: { items: true, account: { select: { firstName: true, lastName: true } } }
-    });
-
-    // Notify managers
-    try {
-      const io = getIo();
-      await prisma.notification.create({
-        data: {
-          accountId: null,
-          category: "REMINDER",
-          level: "INFO",
-          title: "Daily Status Submitted",
-          body: `${updated.account.firstName} ${updated.account.lastName} submitted daily status`,
-          payload: { reportId: id, accountId: existing.accountId },
-          createdBy: existing.accountId,
-          sentAt: new Date(),
-        },
-      });
-      io.emit("notification:daily_status_submitted", { reportId: id });
-    } catch (e) {
-      console.warn("submitReport: notification failed", e);
-    }
-
-    return sendSuccessResponse(res, 200, "Report submitted successfully", updated);
-  } catch (err: any) {
-    console.error("submitReport error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to submit report");
-  }
-}
-
-/* ============================
-   Prefill from assigned tasks/leads
-   POST /api/v1/user/ds/prefill
-============================ */
-// export async function applyPrefill(req: Request, res: Response) {
+// /* ============================
+//    CRUD: Create / Upsert Report
+//    POST /api/v1/user/ds/reports
+//    Body: {
+//      reportDate?: "YYYY-MM-DD",
+//      summary?: string,
+//      items?: [...],
+//      state?: "DRAFT" | "SUBMITTED"
+//    }
+// ============================ */
+// export async function createOrUpdateReport(req: Request, res: Response) {
 //   try {
 //     const userId = req.user?.id;
 //     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
 //     const accountId = await getAccountIdFromReqUser(userId);
 //     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
-//     const { date } = req.body;
-//     const day = normalizeDateToStart(date);
-//     const dayEnd = endOfDay(day);
+//     const { reportDate, summary, items, state } = req.body as any;
+//     const day = normalizeDateToStart(reportDate);
 
-//     // Fetch assigned tasks and leads updated today
-//     const [tasks, leads] = await Promise.all([
-//       prisma.task.findMany({
-//         where: {
-//           assignments: { some: { accountId, status: "PENDING" } },
-//           status: { in: ["PENDING", "IN_PROGRESS"] },
-//           updatedAt: { gte: day, lte: dayEnd },
-//         },
-//         select: { id: true, title: true, status: true },
-//         take: 20,
-//       }),
-//       prisma.lead.findMany({
-//         where: {
-//           assignments: { some: { accountId, isActive: true } },
-//           status: { in: ["PENDING", "IN_PROGRESS"] },
-//           updatedAt: { gte: day, lte: dayEnd },
-//         },
-//         select: { id: true, customerName: true, productTitle: true },
-//         take: 20,
-//       }),
-//     ]);
+//     const existing = await prisma.dailyStatusReport.findUnique({
+//       where: { accountId_reportDate: { accountId, reportDate: day } as any },
+//     });
 
-//     const items = [
-//       ...tasks.map((t) => ({
-//         section: t.status === "IN_PROGRESS" ? "IN_PROGRESS" : "WORKED_ON",
-//         entityType: "TASK",
-//         entityId: t.id,
-//         title: t.title,
-//         note: `Working on: ${t.title}`,
-//       })),
-//       ...leads.map((l) => ({
-//         section: "IN_PROGRESS",
-//         entityType: "LEAD",
-//         entityId: l.id,
-//         title: l.customerName,
-//         note: `Lead: ${l.customerName}${l.productTitle ? ` - ${l.productTitle}` : ''}`,
-//       })),
-//     ];
+//     if (existing && existing.state !== "DRAFT" && state === "SUBMITTED") {
+//       return sendErrorResponse(res, 400, "Cannot modify submitted report");
+//     }
 
-//     const report = await prisma.$transaction(async (tx) => {
-//       const report = await tx.dailyStatusReport.upsert({
-//         where: { accountId_reportDate: { accountId, reportDate: day } },
-//         update: { updatedAt: new Date() },
-//         create: {
-//           accountId,
-//           reportDate: day,
-//           state: "DRAFT",
-//           summary: "Auto-prefilled from today's assignments",
-//         },
-//       });
-
-//       // Add items that don't already exist
-//       for (const item of items) {
-//         const exists = await tx.dailyStatusItem.findFirst({
-//           where: {
-//             reportId: report.id,
-//             entityId: item.entityId,
-//           },
-//         });
-        
-//         if (!exists) {
-//           await tx.dailyStatusItem.create({
-//             data: { ...item, reportId: report.id }
+//     const result = await prisma.$transaction(async (tx) => {
+//       const report = existing
+//         ? await tx.dailyStatusReport.update({
+//             where: { id: existing.id },
+//             data: { 
+//               summary: summary ?? existing.summary,
+//               state: state ?? existing.state,
+//               updatedAt: new Date()
+//             },
+//           })
+//         : await tx.dailyStatusReport.create({
+//             data: {
+//               accountId,
+//               reportDate: day,
+//               summary: summary ?? null,
+//               state: state ?? "DRAFT",
+//             },
 //           });
+
+//       if (Array.isArray(items) && items.length > 0) {
+//         // Remove existing items if updating
+//         if (existing) {
+//           await tx.dailyStatusItem.deleteMany({ where: { reportId: report.id } });
+//         }
+        
+//         const toCreate = items.map((it: any) => ({
+//           reportId: report.id,
+//           section: it.section,
+//           entityType: it.entityType ?? null,
+//           entityId: it.entityId ?? null,
+//           title: it.title ?? null,
+//           note: it.note ?? "",
+//           raisedToAccountId: it.raisedToAccountId ?? null,
+//           resolved: Boolean(it.resolved ?? false),
+//           timeSpentMinutes: typeof it.timeSpentMinutes === "number" ? it.timeSpentMinutes : null,
+//         }));
+        
+//         if (toCreate.length > 0) {
+//           await tx.dailyStatusItem.createMany({ data: toCreate });
 //         }
 //       }
 
 //       return tx.dailyStatusReport.findUnique({
 //         where: { id: report.id },
-//         include: { items: { orderBy: { createdAt: "asc" } } },
+//         include: { 
+//           items: { orderBy: { createdAt: "asc" } },
+//           account: { select: { id: true, firstName: true, lastName: true } }
+//         },
 //       });
 //     });
 
-//     return sendSuccessResponse(res, 200, `Prefilled with ${items.length} items`, report);
+//     return sendSuccessResponse(res, existing ? 200 : 201, existing ? "Report updated" : "Report created", result);
 //   } catch (err: any) {
-//     console.error("applyPrefill error:", err);
-//     return sendErrorResponse(res, 500, err?.message ?? "Failed to prefill");
+//     console.error("createOrUpdateReport error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to save report");
 //   }
 // }
 
-/* ============================
-   Review Report (Admin)
-   POST /api/v1/user/ds/reports/:id/review
-============================ */
-export async function reviewReport(req: Request, res: Response) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-    if (!req.user?.roles?.includes?.("ADMIN")) {
-      return sendErrorResponse(res, 403, "Admin access required");
-    }
-    const accountId = await getAccountIdFromReqUser(userId);
+// /* ============================
+//    GET my report for a date
+//    GET /api/v1/user/ds/reports/my?date=YYYY-MM-DD
+// ============================ */
+// export async function getMyReport(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+//     const accountId = await getAccountIdFromReqUser(userId);
+//     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
-    const { id } = req.params;
-    const { reviewNote, approve } = req.body as { reviewNote?: string; approve?: boolean };
+//     const { date } = req.query as Record<string, string>;
+//     const day = normalizeDateToStart(date);
 
-    const existing = await prisma.dailyStatusReport.findUnique({ where: { id } });
-    if (!existing) return sendErrorResponse(res, 404, "Report not found");
-    if (existing.state !== "SUBMITTED") {
-      return sendErrorResponse(res, 400, "Only submitted reports can be reviewed");
-    }
+//     const report = await prisma.dailyStatusReport.findUnique({
+//       where: { accountId_reportDate: { accountId, reportDate: day } as any },
+//       include: { 
+//         items: { orderBy: { createdAt: "asc" } },
+//         account: { select: { id: true, firstName: true, lastName: true } }
+//       },
+//     });
 
-    const updated = await prisma.dailyStatusReport.update({
-      where: { id },
-      data: {
-        state: "REVIEWED",
-        reviewedAt: new Date(),
-        reviewedBy: accountId,
-        reviewNote: reviewNote ?? null,
-      },
-    });
+//     if (!report) {
+//       // Return empty structure for easy form initialization
+//       return sendSuccessResponse(res, 200, "No report found", {
+//         reportDate: day,
+//         state: "DRAFT",
+//         summary: null,
+//         items: []
+//       });
+//     }
 
-    // Notify report owner
-    try {
-      const io = getIo();
-      await prisma.notification.create({
-        data: {
-          accountId: existing.accountId,
-          category: "SYSTEM",
-          level: approve ? "SUCCESS" : "INFO",
-          title: "Daily Status Reviewed",
-          body: reviewNote ?? (approve ? "Your report has been approved" : "Your report has been reviewed"),
-          payload: { reportId: id, approve: Boolean(approve) },
-          createdBy: accountId,
-          sentAt: new Date(),
-        },
-      });
-      io.to(`notif:${existing.accountId}`).emit("notification", {
-        type: "daily_status_reviewed",
-        reportId: id,
-        approve: Boolean(approve)
-      });
-    } catch (e) {
-      console.warn("reviewReport: notification failed", e);
-    }
+//     return sendSuccessResponse(res, 200, "Report fetched", report);
+//   } catch (err: any) {
+//     console.error("getMyReport error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch report");
+//   }
+// }
 
-    return sendSuccessResponse(res, 200, "Report reviewed", updated);
-  } catch (err: any) {
-    console.error("reviewReport error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to review");
-  }
-}
+// /* ============================
+//    ADD single item to report
+//    POST /api/v1/user/ds/reports/:id/items
+//    Body: { section, entityType?, entityId?, title?, note, timeSpentMinutes?, raisedToAccountId? }
+// ============================ */
+// export async function addItemToReport(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+//     const accountId = await getAccountIdFromReqUser(userId);
+//     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
-/* ============================
-   List Reports (Admin)
-   GET /api/v1/user/ds/reports
-============================ */
-export async function listReportsAdmin(req: Request, res: Response) {
-  try {
-    if (!req.user?.roles?.includes?.("ADMIN")) {
-      return sendErrorResponse(res, 403, "Admin access required");
-    }
+//     const { id } = req.params;
+//     const itemData = req.body;
 
-    const { accountId, fromDate, toDate, state, page = "1", limit = "50" } = req.query as Record<string, string>;
-    const pageNumber = Math.max(Number(page) || 1, 1);
-    const pageSize = Math.min(Number(limit) || 50, 200);
+//     const report = await prisma.dailyStatusReport.findUnique({ where: { id } });
+//     if (!report) return sendErrorResponse(res, 404, "Report not found");
+//     if (report.accountId !== accountId) return sendErrorResponse(res, 403, "Not authorized");
+//     if (report.state !== "DRAFT") return sendErrorResponse(res, 400, "Cannot modify submitted report");
 
-    const where: any = {};
-    if (accountId) where.accountId = accountId;
-    if (state) where.state = state;
-    if (fromDate || toDate) {
-      where.reportDate = {};
-      if (fromDate) where.reportDate.gte = normalizeDateToStart(fromDate);
-      if (toDate) where.reportDate.lte = normalizeDateToStart(toDate);
-    }
+//     const newItem = await prisma.dailyStatusItem.create({
+//       data: {
+//         reportId: id,
+//         section: itemData.section,
+//         entityType: itemData.entityType ?? null,
+//         entityId: itemData.entityId ?? null,
+//         title: itemData.title ?? null,
+//         note: itemData.note ?? "",
+//         raisedToAccountId: itemData.raisedToAccountId ?? null,
+//         resolved: Boolean(itemData.resolved ?? false),
+//         timeSpentMinutes: typeof itemData.timeSpentMinutes === "number" ? itemData.timeSpentMinutes : null,
+//       }
+//     });
 
-    const [total, reports] = await prisma.$transaction([
-      prisma.dailyStatusReport.count({ where }),
-      prisma.dailyStatusReport.findMany({
-        where,
-        include: {
-          items: true,
-          account: { select: { id: true, firstName: true, lastName: true } }
-        },
-        orderBy: { reportDate: "desc" },
-        skip: (pageNumber - 1) * pageSize,
-        take: pageSize,
-      }),
-    ]);
+//     return sendSuccessResponse(res, 201, "Item added", newItem);
+//   } catch (err: any) {
+//     console.error("addItemToReport error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to add item");
+//   }
+// }
 
-    return sendSuccessResponse(res, 200, "Reports fetched", {
-      data: reports,
-      meta: { page: pageNumber, limit: pageSize, total, totalPages: Math.ceil(total / pageSize) },
-    });
-  } catch (err: any) {
-    console.error("listReportsAdmin error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to list reports");
-  }
-}
+// /* ============================
+//    UPDATE single item
+//    PATCH /api/v1/user/ds/items/:itemId
+// ============================ */
+// export async function updateItem(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+//     const accountId = await getAccountIdFromReqUser(userId);
+//     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
-/* ============================
-   Analytics
-============================ */
-export async function analyticsWeekly(req: Request, res: Response) {
-  try {
-    const { accountId, weeks = "4" } = req.query as Record<string, string>;
-    const weeksNum = Math.max(Number(weeks) || 4, 1);
+//     const { itemId } = req.params;
+//     const updates = req.body;
 
-    const to = new Date();
-    const from = new Date();
-    from.setDate(from.getDate() - weeksNum * 7);
+//     const item = await prisma.dailyStatusItem.findUnique({
+//       where: { id: itemId },
+//       include: { report: true }
+//     });
 
-    const where: any = { reportDate: { gte: from, lte: to } };
-    if (accountId) where.accountId = accountId;
+//     if (!item) return sendErrorResponse(res, 404, "Item not found");
+//     if (item.report.accountId !== accountId) return sendErrorResponse(res, 403, "Not authorized");
+//     if (item.report.state !== "DRAFT") return sendErrorResponse(res, 400, "Cannot modify submitted report");
 
-    const [reports, items] = await Promise.all([
-      prisma.dailyStatusReport.findMany({ where, select: { state: true, reportDate: true } }),
-      prisma.dailyStatusItem.findMany({
-        where: { report: where },
-        select: { section: true, timeSpentMinutes: true, createdAt: true }
-      })
-    ]);
+//     const updated = await prisma.dailyStatusItem.update({
+//       where: { id: itemId },
+//       data: {
+//         section: updates.section ?? item.section,
+//         title: updates.title ?? item.title,
+//         note: updates.note ?? item.note,
+//         timeSpentMinutes: updates.timeSpentMinutes ?? item.timeSpentMinutes,
+//         resolved: updates.resolved ?? item.resolved,
+//         raisedToAccountId: updates.raisedToAccountId ?? item.raisedToAccountId,
+//       }
+//     });
 
-    const bySection: Record<string, number> = {};
-    let totalTimeMinutes = 0;
+//     return sendSuccessResponse(res, 200, "Item updated", updated);
+//   } catch (err: any) {
+//     console.error("updateItem error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to update item");
+//   }
+// }
 
-    items.forEach(item => {
-      bySection[item.section] = (bySection[item.section] || 0) + 1;
-      if (item.timeSpentMinutes) totalTimeMinutes += item.timeSpentMinutes;
-    });
+// /* ============================
+//    DELETE single item
+//    DELETE /api/v1/user/ds/items/:itemId
+// ============================ */
+// export async function deleteItem(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+//     const accountId = await getAccountIdFromReqUser(userId);
+//     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
-    const submittedCount = reports.filter(r => r.state === "SUBMITTED" || r.state === "REVIEWED").length;
+//     const { itemId } = req.params;
 
-    return sendSuccessResponse(res, 200, "Weekly analytics", {
-      from,
-      to,
-      weeks: weeksNum,
-      stats: {
-        bySection,
-        totalTimeMinutes,
-        totalTimeHours: Math.round(totalTimeMinutes / 60 * 10) / 10,
-        reportsSubmitted: submittedCount,
-        totalReports: reports.length
-      }
-    });
-  } catch (err: any) {
-    console.error("analyticsWeekly error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to compute analytics");
-  }
-}
+//     const item = await prisma.dailyStatusItem.findUnique({
+//       where: { id: itemId },
+//       include: { report: true }
+//     });
+
+//     if (!item) return sendErrorResponse(res, 404, "Item not found");
+//     if (item.report.accountId !== accountId) return sendErrorResponse(res, 403, "Not authorized");
+//     if (item.report.state !== "DRAFT") return sendErrorResponse(res, 400, "Cannot modify submitted report");
+
+//     await prisma.dailyStatusItem.delete({ where: { id: itemId } });
+
+//     return sendSuccessResponse(res, 200, "Item deleted", { id: itemId });
+//   } catch (err: any) {
+//     console.error("deleteItem error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to delete item");
+//   }
+// }
+
+// /* ============================
+//    POST /api/v1/user/ds/reports/:id/submit
+// ============================ */
+// export async function submitReport(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+//     const accountId = await getAccountIdFromReqUser(userId);
+//     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+//     const { id } = req.params;
+//     const existing = await prisma.dailyStatusReport.findUnique({ 
+//       where: { id }, 
+//       include: { items: true } 
+//     });
+    
+//     if (!existing) return sendErrorResponse(res, 404, "Report not found");
+//     if (existing.accountId !== accountId) return sendErrorResponse(res, 403, "Not authorized");
+//     if (existing.state !== "DRAFT") return sendErrorResponse(res, 400, "Report already submitted");
+//     if (!existing.items || existing.items.length === 0) {
+//       return sendErrorResponse(res, 400, "Report must contain at least one item");
+//     }
+
+//     const updated = await prisma.dailyStatusReport.update({
+//       where: { id },
+//       data: { state: "SUBMITTED", submittedAt: new Date() },
+//       include: { items: true, account: { select: { firstName: true, lastName: true } } }
+//     });
+
+//     // Notify managers
+//     try {
+//       const io = getIo();
+//       await prisma.notification.create({
+//         data: {
+//           accountId: null,
+//           category: "REMINDER",
+//           level: "INFO",
+//           title: "Daily Status Submitted",
+//           body: `${updated.account.firstName} ${updated.account.lastName} submitted daily status`,
+//           payload: { reportId: id, accountId: existing.accountId },
+//           createdBy: existing.accountId,
+//           sentAt: new Date(),
+//         },
+//       });
+//       io.emit("notification:daily_status_submitted", { reportId: id });
+//     } catch (e) {
+//       console.warn("submitReport: notification failed", e);
+//     }
+
+//     return sendSuccessResponse(res, 200, "Report submitted successfully", updated);
+//   } catch (err: any) {
+//     console.error("submitReport error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to submit report");
+//   }
+// }
+
+// /* ============================
+//    Prefill from assigned tasks/leads
+//    POST /api/v1/user/ds/prefill
+// ============================ */
+// // export async function applyPrefill(req: Request, res: Response) {
+// //   try {
+// //     const userId = req.user?.id;
+// //     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+// //     const accountId = await getAccountIdFromReqUser(userId);
+// //     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+// //     const { date } = req.body;
+// //     const day = normalizeDateToStart(date);
+// //     const dayEnd = endOfDay(day);
+
+// //     // Fetch assigned tasks and leads updated today
+// //     const [tasks, leads] = await Promise.all([
+// //       prisma.task.findMany({
+// //         where: {
+// //           assignments: { some: { accountId, status: "PENDING" } },
+// //           status: { in: ["PENDING", "IN_PROGRESS"] },
+// //           updatedAt: { gte: day, lte: dayEnd },
+// //         },
+// //         select: { id: true, title: true, status: true },
+// //         take: 20,
+// //       }),
+// //       prisma.lead.findMany({
+// //         where: {
+// //           assignments: { some: { accountId, isActive: true } },
+// //           status: { in: ["PENDING", "IN_PROGRESS"] },
+// //           updatedAt: { gte: day, lte: dayEnd },
+// //         },
+// //         select: { id: true, customerName: true, productTitle: true },
+// //         take: 20,
+// //       }),
+// //     ]);
+
+// //     const items = [
+// //       ...tasks.map((t) => ({
+// //         section: t.status === "IN_PROGRESS" ? "IN_PROGRESS" : "WORKED_ON",
+// //         entityType: "TASK",
+// //         entityId: t.id,
+// //         title: t.title,
+// //         note: `Working on: ${t.title}`,
+// //       })),
+// //       ...leads.map((l) => ({
+// //         section: "IN_PROGRESS",
+// //         entityType: "LEAD",
+// //         entityId: l.id,
+// //         title: l.customerName,
+// //         note: `Lead: ${l.customerName}${l.productTitle ? ` - ${l.productTitle}` : ''}`,
+// //       })),
+// //     ];
+
+// //     const report = await prisma.$transaction(async (tx) => {
+// //       const report = await tx.dailyStatusReport.upsert({
+// //         where: { accountId_reportDate: { accountId, reportDate: day } },
+// //         update: { updatedAt: new Date() },
+// //         create: {
+// //           accountId,
+// //           reportDate: day,
+// //           state: "DRAFT",
+// //           summary: "Auto-prefilled from today's assignments",
+// //         },
+// //       });
+
+// //       // Add items that don't already exist
+// //       for (const item of items) {
+// //         const exists = await tx.dailyStatusItem.findFirst({
+// //           where: {
+// //             reportId: report.id,
+// //             entityId: item.entityId,
+// //           },
+// //         });
+        
+// //         if (!exists) {
+// //           await tx.dailyStatusItem.create({
+// //             data: { ...item, reportId: report.id }
+// //           });
+// //         }
+// //       }
+
+// //       return tx.dailyStatusReport.findUnique({
+// //         where: { id: report.id },
+// //         include: { items: { orderBy: { createdAt: "asc" } } },
+// //       });
+// //     });
+
+// //     return sendSuccessResponse(res, 200, `Prefilled with ${items.length} items`, report);
+// //   } catch (err: any) {
+// //     console.error("applyPrefill error:", err);
+// //     return sendErrorResponse(res, 500, err?.message ?? "Failed to prefill");
+// //   }
+// // }
+
+// /* ============================
+//    Review Report (Admin)
+//    POST /api/v1/user/ds/reports/:id/review
+// ============================ */
+// export async function reviewReport(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+//     if (!req.user?.roles?.includes?.("ADMIN")) {
+//       return sendErrorResponse(res, 403, "Admin access required");
+//     }
+//     const accountId = await getAccountIdFromReqUser(userId);
+
+//     const { id } = req.params;
+//     const { reviewNote, approve } = req.body as { reviewNote?: string; approve?: boolean };
+
+//     const existing = await prisma.dailyStatusReport.findUnique({ where: { id } });
+//     if (!existing) return sendErrorResponse(res, 404, "Report not found");
+//     if (existing.state !== "SUBMITTED") {
+//       return sendErrorResponse(res, 400, "Only submitted reports can be reviewed");
+//     }
+
+//     const updated = await prisma.dailyStatusReport.update({
+//       where: { id },
+//       data: {
+//         state: "REVIEWED",
+//         reviewedAt: new Date(),
+//         reviewedBy: accountId,
+//         reviewNote: reviewNote ?? null,
+//       },
+//     });
+
+//     // Notify report owner
+//     try {
+//       const io = getIo();
+//       await prisma.notification.create({
+//         data: {
+//           accountId: existing.accountId,
+//           category: "SYSTEM",
+//           level: approve ? "SUCCESS" : "INFO",
+//           title: "Daily Status Reviewed",
+//           body: reviewNote ?? (approve ? "Your report has been approved" : "Your report has been reviewed"),
+//           payload: { reportId: id, approve: Boolean(approve) },
+//           createdBy: accountId,
+//           sentAt: new Date(),
+//         },
+//       });
+//       io.to(`notif:${existing.accountId}`).emit("notification", {
+//         type: "daily_status_reviewed",
+//         reportId: id,
+//         approve: Boolean(approve)
+//       });
+//     } catch (e) {
+//       console.warn("reviewReport: notification failed", e);
+//     }
+
+//     return sendSuccessResponse(res, 200, "Report reviewed", updated);
+//   } catch (err: any) {
+//     console.error("reviewReport error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to review");
+//   }
+// }
+
+// /* ============================
+//    List Reports (Admin)
+//    GET /api/v1/user/ds/reports
+// ============================ */
+// export async function listReportsAdmin(req: Request, res: Response) {
+//   try {
+//     if (!req.user?.roles?.includes?.("ADMIN")) {
+//       return sendErrorResponse(res, 403, "Admin access required");
+//     }
+
+//     const { accountId, fromDate, toDate, state, page = "1", limit = "50" } = req.query as Record<string, string>;
+//     const pageNumber = Math.max(Number(page) || 1, 1);
+//     const pageSize = Math.min(Number(limit) || 50, 200);
+
+//     const where: any = {};
+//     if (accountId) where.accountId = accountId;
+//     if (state) where.state = state;
+//     if (fromDate || toDate) {
+//       where.reportDate = {};
+//       if (fromDate) where.reportDate.gte = normalizeDateToStart(fromDate);
+//       if (toDate) where.reportDate.lte = normalizeDateToStart(toDate);
+//     }
+
+//     const [total, reports] = await prisma.$transaction([
+//       prisma.dailyStatusReport.count({ where }),
+//       prisma.dailyStatusReport.findMany({
+//         where,
+//         include: {
+//           items: true,
+//           account: { select: { id: true, firstName: true, lastName: true } }
+//         },
+//         orderBy: { reportDate: "desc" },
+//         skip: (pageNumber - 1) * pageSize,
+//         take: pageSize,
+//       }),
+//     ]);
+
+//     return sendSuccessResponse(res, 200, "Reports fetched", {
+//       data: reports,
+//       meta: { page: pageNumber, limit: pageSize, total, totalPages: Math.ceil(total / pageSize) },
+//     });
+//   } catch (err: any) {
+//     console.error("listReportsAdmin error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to list reports");
+//   }
+// }
+
+// /* ============================
+//    Analytics
+// ============================ */
+// export async function analyticsWeekly(req: Request, res: Response) {
+//   try {
+//     const { accountId, weeks = "4" } = req.query as Record<string, string>;
+//     const weeksNum = Math.max(Number(weeks) || 4, 1);
+
+//     const to = new Date();
+//     const from = new Date();
+//     from.setDate(from.getDate() - weeksNum * 7);
+
+//     const where: any = { reportDate: { gte: from, lte: to } };
+//     if (accountId) where.accountId = accountId;
+
+//     const [reports, items] = await Promise.all([
+//       prisma.dailyStatusReport.findMany({ where, select: { state: true, reportDate: true } }),
+//       prisma.dailyStatusItem.findMany({
+//         where: { report: where },
+//         select: { section: true, timeSpentMinutes: true, createdAt: true }
+//       })
+//     ]);
+
+//     const bySection: Record<string, number> = {};
+//     let totalTimeMinutes = 0;
+
+//     items.forEach(item => {
+//       bySection[item.section] = (bySection[item.section] || 0) + 1;
+//       if (item.timeSpentMinutes) totalTimeMinutes += item.timeSpentMinutes;
+//     });
+
+//     const submittedCount = reports.filter(r => r.state === "SUBMITTED" || r.state === "REVIEWED").length;
+
+//     return sendSuccessResponse(res, 200, "Weekly analytics", {
+//       from,
+//       to,
+//       weeks: weeksNum,
+//       stats: {
+//         bySection,
+//         totalTimeMinutes,
+//         totalTimeHours: Math.round(totalTimeMinutes / 60 * 10) / 10,
+//         reportsSubmitted: submittedCount,
+//         totalReports: reports.length
+//       }
+//     });
+//   } catch (err: any) {
+//     console.error("analyticsWeekly error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to compute analytics");
+//   }
+// }

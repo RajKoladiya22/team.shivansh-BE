@@ -15,7 +15,7 @@ app.use(express.json());
 
 // Middleware to parse URL-encoded bodies
 app.use(express.urlencoded({ extended: true }));
-//
+
 app.use(
   cors({
     origin: ["https://team.shivanshinfosys.in", "http://localhost:5173"],

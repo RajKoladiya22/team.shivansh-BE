@@ -19,6 +19,7 @@ export async function subscribeNotifications(req: Request, res: Response) {
     ) {
       return res.status(400).json({ message: "Invalid push subscription" });
     }
+    let a =10;
 
     // USER → ACCOUNT
     const user = await prisma.user.findUnique({
