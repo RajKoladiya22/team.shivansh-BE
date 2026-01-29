@@ -1,7 +1,0 @@
-[2026-01-19T06:38:27.721Z] INFO: 🚀 Server listening on http://localhost:9090 - [development]
-[2026-01-19T06:38:27.723Z] INFO: 🌐 Socket.io server is also running
-[2026-01-19T06:38:30.914Z] INFO: 🚀 Server listening on http://localhost:9090 - [development]
-[2026-01-19T06:38:30.915Z] INFO: 🌐 Socket.io server is also running
-[2026-01-19T06:38:53.389Z] INFO: POST /api/v1/auth/login
-[2026-01-19T06:40:09.636Z] INFO: 🚀 Server listening on http://localhost:9090 - [development]
-[2026-01-19T06:40:09.638Z] INFO: 🌐 Socket.io server is also running
