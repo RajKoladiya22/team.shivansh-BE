@@ -161,7 +161,7 @@ export async function getMyTasks(req: Request, res: Response) {
 
     const isAdmin = userId.includes("ADMIN");
 
-    console.log("\n\nisAdmin--------->\n", isAdmin);
+    // console.log("\n\nisAdmin--------->\n", isAdmin);
 
     let whereClause: any = {};
 

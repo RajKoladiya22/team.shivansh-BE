@@ -17,4 +17,3 @@ logs/
 
 # prisma generated
 prisma/migrations/
-prisma/generated/

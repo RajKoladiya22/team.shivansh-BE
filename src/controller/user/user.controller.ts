@@ -166,6 +166,9 @@ export async function getProfile(req: Request, res: Response) {
       return sendErrorResponse(res, 401, "Unauthorized");
     }
 
+    // console.log("\n\n\nuserId:=====>", userId);
+    
+
     const user = await prisma.user.findUnique({
       where: { id: userId },
     });

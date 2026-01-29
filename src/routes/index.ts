@@ -11,6 +11,7 @@ import tasksRouter from "./task"
 import customersRouter from "./customer"
 import notificationsRouter from "./notifications";
 import templatesRouter from "./template";
+import dsuRouter from "./dsu";
 
 
 const router = Router();
@@ -27,6 +28,8 @@ router.use("/tasks", tasksRouter);
 router.use("/customers", customersRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/templates", templatesRouter);
+
+router.use("/dsu", dsuRouter);
 
 
 // export main

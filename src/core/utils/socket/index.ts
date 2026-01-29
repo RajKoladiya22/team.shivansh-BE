@@ -77,6 +77,8 @@ export function initIo(server: http.Server) {
         const room = `notif:${user.accountId}`;
         socket.join(room);
 
+        // console.log("\n\n\nuser found for unsubscribe:", user);
+
         console.log(`📡 socket ${socket.id} joined ${room}`);
 
         socket.emit("subscription:ack", {
@@ -96,6 +98,9 @@ export function initIo(server: http.Server) {
           where: { id: userId },
           select: { accountId: true },
         });
+
+        
+        
 
         if (!user?.accountId) return;
 

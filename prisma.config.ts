@@ -36,6 +36,8 @@ import path from "node:path";
 import { defineConfig } from "prisma/config";
 envConfiguration();
 const env = validatedEnv;
+console.log("\n\nDATABASE_URL in prisma.config.ts------->", env.DATABASE_URL);
+
 
 export default defineConfig({
   schema: path.join("prisma", "schema.prisma"),

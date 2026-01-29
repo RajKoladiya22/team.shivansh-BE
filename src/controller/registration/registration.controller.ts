@@ -12,6 +12,33 @@ import { sendMail } from "../../core/mailer";
 import { welcomeEmployeeHtml } from "../../core/mailer/templates";
 import { generateUniqueUsername } from "../../core/utils/username.util";
 
+async function generateNextRegisterNumber(tx: Prisma.TransactionClient) {
+  const lastAccount = await tx.account.findFirst({
+    where: {
+      registerNumber: { startsWith: "SI" },
+    },
+    orderBy: {
+      registerNumber: "desc", // lexicographically works for fixed-length numbers
+    },
+    select: {
+      registerNumber: true,
+    },
+  });
+
+  let nextNumber = 1;
+
+  if (lastAccount?.registerNumber) {
+    const numericPart = parseInt(
+      lastAccount.registerNumber.replace("SI", ""),
+      10
+    );
+    nextNumber = numericPart + 1;
+  }
+
+  return `SI${String(nextNumber).padStart(5, "0")}`;
+}
+
+
 /* =====================================================
    REGISTER EMPLOYEE (CREATE REGISTRATION REQUEST ONLY)
 ===================================================== */
@@ -131,8 +158,12 @@ export async function approveRegistration(req: Request, res: Response) {
     const username = await generateUniqueUsername(request.firstName || "user");
 
     const { account, user } = await prisma.$transaction(async (tx) => {
+
+      const registerNumber = await generateNextRegisterNumber(tx);
+
       const account = await tx.account.create({
         data: {
+          registerNumber,
           firstName: request.firstName!,
           lastName: request.lastName!,
           contactEmail: request.contactEmail!,

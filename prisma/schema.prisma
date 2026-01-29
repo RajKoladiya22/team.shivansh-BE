@@ -109,23 +109,24 @@ enum TemplateAssignmentStrategy {
 // ------------------------------------------------------------------
 
 model Account {
-  id           String    @id @default(uuid())
-  firstName    String
-  lastName     String
-  contactEmail String    @unique
-  contactPhone String    @unique
-  address      Json?
-  avatar       String?
-  documents    Json? // optional file metadata (Aadhar, etc.)
-  bio          Json?
-  isActive     Boolean   @default(false) // only true after admin approval
-  jobType      JobType?
-  isJdAccept   Boolean   @default(false)
-  designation  String?
-  joinedAt     DateTime? // set when approved
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  isBusy       Boolean   @default(false)
+  id             String    @id @default(uuid())
+  registerNumber String    @unique
+  firstName      String
+  lastName       String
+  contactEmail   String    @unique
+  contactPhone   String    @unique
+  address        Json?
+  avatar         String?
+  documents      Json? // optional file metadata (Aadhar, etc.)
+  bio            Json?
+  isActive       Boolean   @default(false) // only true after admin approval
+  jobType        JobType?
+  isJdAccept     Boolean   @default(false)
+  designation    String?
+  joinedAt       DateTime? // set when approved
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  isBusy         Boolean   @default(false)
 
   // Relation to
   user            User?
@@ -154,6 +155,7 @@ model Account {
   messageTemplates          MessageTemplate[]
   templatePreferences       TemplatePreference[]
   // dailyStatusReports        DailyStatusReport[]
+  dsuEntries                DsuEntry[]
 
   @@index([isActive])
   @@index([jobType])
@@ -514,6 +516,7 @@ model Team {
   members         TeamMember[]
   taskAssignments TaskAssignment[]
   leadAssignments LeadAssignment[]
+  dsuTemplates    DsuTemplate[]
 
   @@unique([name])
   @@index([isActive])
@@ -1058,6 +1061,81 @@ model TemplatePreference {
 // ------------------------------------------------------------------
 // DSU Store (Daily Status Updates)
 // ------------------------------------------------------------------
+
+enum DsuFieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  SELECT
+  MULTISELECT
+  DATE
+  CHECKBOX
+  RICH_TEXT
+  ATTACHMENT
+}
+
+model DsuTemplate {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  teamId      String? // optional: template scoped to a team
+  createdBy   String? // accountId of creator
+  isActive    Boolean  @default(true)
+  config      Json // canonical JSON description of sections & fields (also denormalized below)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // relations
+  team       Team?                @relation(fields: [teamId], references: [id])
+  versions   DsuTemplateVersion[]
+  dsuEntries DsuEntry[]
+
+  @@index([teamId])
+  @@index([isActive])
+}
+
+model DsuTemplateVersion {
+  id         String      @id @default(uuid())
+  templateId String
+  template   DsuTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  version    Int
+  config     Json // snapshot of config for this version
+  createdBy  String?
+  createdAt  DateTime    @default(now())
+
+  @@unique([templateId, version])
+  @@index([templateId])
+}
+
+model DsuEntry {
+  id          String    @id @default(uuid())
+  templateId  String? // optional — if null, free-form
+  accountId   String
+  teamId      String? // convenience denormalization
+  date        DateTime // normalized to midnight (the day this DSU is for)
+  content     Json // the actual filled content following template structure
+  summary     String? // optional short summary for display / notifications
+  attachments Json? // array of { name, url, meta }
+  isDraft     Boolean   @default(false)
+  submittedAt DateTime?
+  approvedBy  String?
+  approvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  createdBy   String // accountId who submitted (usually same as accountId)
+  meta        Json? // free metadata (ip, device, client-version, etc)
+  textSearch  String? // denormalized searchable text (updated by app)
+
+  // relations
+  template DsuTemplate? @relation(fields: [templateId], references: [id])
+  account  Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, date, templateId])
+  @@index([accountId])
+  @@index([teamId])
+  @@index([date])
+  @@index([submittedAt])
+}
 
 // enum DailyStatusSection {
 //   WORKED_ON // Completed work
