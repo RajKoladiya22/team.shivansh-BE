@@ -69,17 +69,18 @@ export function initIo(server: http.Server) {
 
         const user = await prisma.user.findUnique({
           where: { id: userId },
-          select: { accountId: true },
+          select: { accountId: true, username : true },
         });
 
         if (!user?.accountId) return;
-
+        // console.log("\n\n\nuser--->", user);
+        
         const room = `notif:${user.accountId}`;
         socket.join(room);
 
         // console.log("\n\n\nuser found for unsubscribe:", user);
 
-        console.log(`📡 socket ${socket.id} joined ${room}`);
+        console.log(`📡 socket ${socket.id} - User: ${user.username} - joined ${room}`);
 
         socket.emit("subscription:ack", {
           accountId: user.accountId,
@@ -96,7 +97,7 @@ export function initIo(server: http.Server) {
 
         const user = await prisma.user.findUnique({
           where: { id: userId },
-          select: { accountId: true },
+          select: { accountId: true, username : true },
         });
 
         
@@ -107,7 +108,7 @@ export function initIo(server: http.Server) {
         const room = `notif:${user.accountId}`;
         socket.leave(room);
 
-        console.log(`📡 socket ${socket.id} left ${room}`);
+        console.log(`📡 socket ${socket.id}  - User: ${user.username} - left ${room}`);
       } catch (err) {
         console.error("unsubscribe:notifications error:", err);
       }
