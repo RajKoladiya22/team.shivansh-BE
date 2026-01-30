@@ -513,6 +513,133 @@ export async function listDsuEntries(req: Request, res: Response) {
   }
 }
 
+/**
+ * GET /dsu/templates/my-team
+ * Fetch templates available to the current user based on their team(s)
+ * Returns team-specific templates + organization-wide templates
+ */
+export async function getMyTeamTemplates(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    // Get user's account and teams
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        accountId: true,
+        account: {
+          select: {
+            teams: {
+              where: { isActive: true },
+              select: { teamId: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!user?.accountId) {
+      return sendErrorResponse(res, 401, "Invalid user session");
+    }
+
+    // Get team IDs
+    const teamIds = user.account?.teams?.map((t) => t.teamId) || [];
+
+    // Fetch templates:
+    // 1. Organization-wide templates (teamId = null)
+    // 2. Templates specific to user's teams
+    const templates = await prisma.dsuTemplate.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { teamId: null }, // Organization-wide
+          { teamId: { in: teamIds } }, // User's teams
+        ],
+      },
+      orderBy: [
+        { teamId: "asc" }, // null first (org-wide), then team-specific
+        { createdAt: "desc" },
+      ],
+    });
+
+    return sendSuccessResponse(res, 200, "Templates fetched", templates);
+  } catch (err: any) {
+    console.error("getMyTeamTemplates error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch templates"
+    );
+  }
+}
+
+/**
+ * GET /dsu/templates/:id
+ * Get a specific template (accessible by user)
+ */
+export async function getDsuTemplateForUser(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { id } = req.params;
+
+    // Get user's teams
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        accountId: true,
+        account: {
+          select: {
+            teams: {
+              where: { isActive: true },
+              select: { teamId: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!user?.accountId) {
+      return sendErrorResponse(res, 401, "Invalid user session");
+    }
+
+    const teamIds = user.account?.teams?.map((t) => t.teamId) || [];
+
+    // Fetch template and verify access
+    const template = await prisma.dsuTemplate.findFirst({
+      where: {
+        id,
+        isActive: true,
+        OR: [
+          { teamId: null }, // Organization-wide
+          { teamId: { in: teamIds } }, // User's teams
+        ],
+      },
+    });
+
+    if (!template) {
+      return sendErrorResponse(
+        res,
+        404,
+        "Template not found or not accessible"
+      );
+    }
+
+    return sendSuccessResponse(res, 200, "Template fetched", template);
+  } catch (err: any) {
+    console.error("getDsuTemplateForUser error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch template"
+    );
+  }
+}
+
+
+
 /* --------------------
    REPORTS & ANALYTICS (ADMIN)
    -------------------- */

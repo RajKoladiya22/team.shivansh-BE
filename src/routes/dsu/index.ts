@@ -30,6 +30,8 @@ import {
   getTemplateUsageStats,
   getSubmissionTimeStats,
   exportDsuEntries,
+  getMyTeamTemplates,
+  getDsuTemplateForUser,
 } from "../../controller/dsu/dsu.controller";
 
 const router = Router();
@@ -42,21 +44,13 @@ const router = Router();
  * Create / Submit DSU (draft or final)
  * POST /dsu
  */
-router.post(
-  "/",
-  requireAuth,
-  createOrSubmitDsu,
-);
+router.post("/", requireAuth, createOrSubmitDsu);
 
 /**
  * Get my today DSU
  * GET /dsu/me/today
  */
-router.get(
-  "/me/today",
-  requireAuth,
-  getMyTodayDsu,
-);
+router.get("/me/today", requireAuth, getMyTodayDsu);
 
 /**
  * List DSU entries
@@ -64,42 +58,30 @@ router.get(
  * - admin → all
  * GET /dsu
  */
-router.get(
-  "/",
-  requireAuth,
-  listDsuEntries,
-);
+router.get("/", requireAuth, listDsuEntries);
 
 /**
  * Get DSU entry by id
  * GET /dsu/:id
  */
-router.get(
-  "/:id",
-  requireAuth,
-  requirePermission("DSU_READ"),
-  getDsuEntry,
-);
+router.get("/:id", requireAuth, getDsuEntry);
 
 /**
  * Update DSU entry
  * PATCH /dsu/:id
  */
-router.patch(
-  "/:id",
-  requireAuth,
-  updateDsuEntry,
-);
+router.patch("/:id", requireAuth, updateDsuEntry);
 
 /**
  * Delete DSU entry (soft)
  * DELETE /dsu/:id
  */
-router.delete(
-  "/:id",
-  requireAuth,
-  deleteDsuEntry,
-);
+router.delete("/:id", requireAuth, deleteDsuEntry);
+
+// Add these routes to your Express router:
+
+router.get("/templates/my-team", requireAuth, getMyTeamTemplates);
+router.get("/templates/:id", requireAuth, getDsuTemplateForUser);
 
 /* ======================================================
    ADMIN – DSU TEMPLATES
@@ -107,7 +89,7 @@ router.delete(
 
 /**
  * Create DSU template
- * POST /admin/dsu/templates
+ * POST /dsu/admin/templates
  */
 router.post(
   "/admin/templates",
@@ -119,7 +101,7 @@ router.post(
 
 /**
  * List DSU templates
- * GET /admin/dsu/templates
+ * GET /dsu/admin/templates
  */
 router.get(
   "/admin/templates",
@@ -131,7 +113,7 @@ router.get(
 
 /**
  * Get DSU template (with versions)
- * GET /admin/dsu/templates/:id
+ * GET /dsu/admin/templates/:id
  */
 router.get(
   "/admin/templates/:id",
@@ -143,7 +125,7 @@ router.get(
 
 /**
  * Update DSU template (creates new version)
- * PATCH /admin/dsu/templates/:id
+ * PATCH /dsu/admin/templates/:id
  */
 router.patch(
   "/admin/templates/:id",
@@ -155,7 +137,7 @@ router.patch(
 
 /**
  * Delete (deactivate) DSU template
- * DELETE /admin/dsu/templates/:id
+ * DELETE /dsu/admin/templates/:id
  */
 router.delete(
   "/admin/templates/:id",

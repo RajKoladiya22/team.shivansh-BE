@@ -1,92 +1,612 @@
-curl --location 'http://localhost:9090/api/v1/user/ds/reports' \
+curl --location 'http://localhost:9090/api/v1/dsu' \
 --header 'Content-Type: application/json' \
 --header 'x-api-key: Qr@gZ@da7KjGQ/GRj@D9KSCX#L2Yr' \
---header 'Cookie: access_token=eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ijk0YzBhMGQ1LTU2NzYtNDQ1My1iMzlhLWY1MTdiODEyZTAzNiIsImVtYWlsIjoia29sYWRpeWFyYWoyMkBnbWFpbC5jb20iLCJyb2xlcyI6WyJBRE1JTiJdLCJwZXJtaXNzaW9ucyI6WyJKRF9DUkVBVEUiLCJBTEwiXSwiaWF0IjoxNzY5MzM4ODAwLCJleHAiOjE3Njk0MjUyMDB9.Nj-OulLE5lm8fjfixR7IhWKtLBashsIlLguJ_hSE0sSxBJsQTxx6W2ij-aP43JTg1fFSd3SdnqJbtksOUPVJFg' \
+--header 'Cookie: access_token=eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjU4YTY5N2M3LTIwYjctNDQyZC05OTU4LWE5ODcxYWZjMzgwNSIsImVtYWlsIjoia29sYWRpeWFyYWoyMkBnbWFpbC5jb20iLCJyb2xlcyI6WyJBRE1JTiJdLCJwZXJtaXNzaW9ucyI6WyJBTEwiXSwiaWF0IjoxNzY5NzU5NTg3LCJleHAiOjE3Njk4NDU5ODd9.5-VXwruTPsD4UdY6PuEzrof9-vmxkcAbcu5p8B0caVd6vIFuz-8px_O5X1VTwUn4IU8B25lMFGmueZieFbgwYw' \
 --data '{
-  "reportDate": "2026-01-25",
-  "summary": "Worked on API and templates",
-  "items": [
-    { "section":"WORKED_ON", "entityType":"LEAD", "entityId":"d69ecfb0-106c-4773-b9ed-e04e69bb0afd", "title":"Prosus", "note":"Completed payment endpoint", "timeSpentMinutes":120 },
-    { "section":"IN_PROGRESS", "entityType":"LEAD", "entityId":"d86aeae8-8ca2-4805-89a7-3ebbe87fda11", "title":"PARTY WISE - ITEM WISE", "note":"Contacted client, awaiting response" },
-    { "section":"QUERY", "note":"Need DB permissions for staging", "raisedToAccountId":"manager-account-id" },
-    { "section":"LEARNING", "note":"Learned about Prisma transactions" }
-  ]
-}'
-// response
-{
-    "status": 201,
-    "success": true,
-    "message": "Report saved",
-    "data": {
-        "id": "bcab4e27-da27-4745-8c39-c9092ac5e097",
-        "accountId": "f7f3236f-efdc-4b43-8003-e403d980df85",
-        "reportDate": "2026-01-24T18:30:00.000Z",
-        "state": "SUBMITTED",
-        "summary": "Worked on API and templates",
-        "submittedAt": null,
-        "reviewedAt": null,
-        "reviewedBy": null,
-        "reviewNote": null,
-        "createdAt": "2026-01-25T11:00:03.941Z",
-        "updatedAt": "2026-01-25T11:00:03.941Z",
-        "items": [
-            {
-                "id": "c4a59883-5709-497c-8bc1-041a92bb2a50",
-                "reportId": "bcab4e27-da27-4745-8c39-c9092ac5e097",
-                "section": "WORKED_ON",
-                "entityType": "LEAD",
-                "entityId": "d69ecfb0-106c-4773-b9ed-e04e69bb0afd",
-                "title": "Prosus",
-                "note": "Completed payment endpoint",
-                "raisedToAccountId": null,
-                "resolved": false,
-                "timeSpentMinutes": 120,
-                "createdAt": "2026-01-25T11:00:03.949Z",
-                "updatedAt": "2026-01-25T11:00:03.949Z"
-            },
-            {
-                "id": "12d9361c-1521-400f-b7c8-0a589263e7c5",
-                "reportId": "bcab4e27-da27-4745-8c39-c9092ac5e097",
-                "section": "IN_PROGRESS",
-                "entityType": "LEAD",
-                "entityId": "d86aeae8-8ca2-4805-89a7-3ebbe87fda11",
-                "title": "PARTY WISE - ITEM WISE",
-                "note": "Contacted client, awaiting response",
-                "raisedToAccountId": null,
-                "resolved": false,
-                "timeSpentMinutes": null,
-                "createdAt": "2026-01-25T11:00:03.949Z",
-                "updatedAt": "2026-01-25T11:00:03.949Z"
-            },
-            {
-                "id": "bdb15b7e-3265-459e-af71-f67308f8bdef",
-                "reportId": "bcab4e27-da27-4745-8c39-c9092ac5e097",
-                "section": "QUERY",
-                "entityType": null,
-                "entityId": null,
-                "title": null,
-                "note": "Need DB permissions for staging",
-                "raisedToAccountId": "manager-account-id",
-                "resolved": false,
-                "timeSpentMinutes": null,
-                "createdAt": "2026-01-25T11:00:03.949Z",
-                "updatedAt": "2026-01-25T11:00:03.949Z"
-            },
-            {
-                "id": "5b2e0248-2f56-4e19-900b-4127686dac98",
-                "reportId": "bcab4e27-da27-4745-8c39-c9092ac5e097",
-                "section": "LEARNING",
-                "entityType": null,
-                "entityId": null,
-                "title": null,
-                "note": "Learned about Prisma transactions",
-                "raisedToAccountId": null,
-                "resolved": false,
-                "timeSpentMinutes": null,
-                "createdAt": "2026-01-25T11:00:03.949Z",
-                "updatedAt": "2026-01-25T11:00:03.949Z"
-            }
+  "templateId": "bc707ac7-d739-4854-9043-34d0fdb4bffd",
+  "date": "2026-01-29",
+  "isDraft": false,
+  "summary": "Worked on Fixego and NixiJi modules, APIs and UI updates",
+  "content": {
+    "worked_on": [
+      {
+        "project": "Fixego",
+        "tasks": [
+          "create UI",
+          "Create API",
+          "Create LOKO",
+          "falling"
         ]
+      },
+      {
+        "project": "NixiJi",
+        "tasks": [
+          "Done Calling API",
+          "doing"
+        ]
+      }
+    ],
+    "in_progress": [
+      {
+        "project": "Hitachi",
+        "tasks": [
+          "Done is pending",
+          "pending"
+        ]
+      },
+      {
+        "project": "NixiJi",
+        "tasks": [
+          "Nina mi cha",
+          "API"
+        ]
+      }
+    ],
+    "query": [
+      {
+        "project": "Hitachi",
+        "issues": [
+          "Not Calling"
+        ]
+      }
+    ],
+    "todays_learning": [
+      {
+        "project": "Fixego",
+        "learnings": [
+          "Prisma transaction handling",
+          "Optimizing API response time"
+        ]
+      },
+      {
+        "project": "General",
+        "learnings": [
+          "Better Git rebase workflow"
+        ]
+      }
+    ]
+  }
+}'
+
+
+curl --location 'http://localhost:9090/api/v1/dsu/me/today' \
+--header 'Content-Type: application/json' \
+--header 'x-api-key: Qr@gZ@da7KjGQ/GRj@D9KSCX#L2Yr' \
+--header 'Cookie: access_token=eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjU4YTY5N2M3LTIwYjctNDQyZC05OTU4LWE5ODcxYWZjMzgwNSIsImVtYWlsIjoia29sYWRpeWFyYWoyMkBnbWFpbC5jb20iLCJyb2xlcyI6WyJBRE1JTiJdLCJwZXJtaXNzaW9ucyI6WyJBTEwiXSwiaWF0IjoxNzY5NzU5NTg3LCJleHAiOjE3Njk4NDU5ODd9.5-VXwruTPsD4UdY6PuEzrof9-vmxkcAbcu5p8B0caVd6vIFuz-8px_O5X1VTwUn4IU8B25lMFGmueZieFbgwYw'
+//response
+{
+    "status": 200,
+    "success": true,
+    "message": "Today DSU fetched",
+    "data": null
+}
+
+
+curl --location 'http://localhost:9090/api/v1/dsu?page=1&limit=10&fromDate=2026-01-01&toDate=2026-01-31&search=invoice&sortBy=createdAt&sortOrder=desc&templateId=bc707ac7-d739-4854-9043-34d0fdb4bffd&isDraft=false' \
+--header 'x-api-key: Qr@gZ@da7KjGQ/GRj@D9KSCX#L2Yr' \
+--header 'Cookie: access_token=eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjU4YTY5N2M3LTIwYjctNDQyZC05OTU4LWE5ODcxYWZjMzgwNSIsImVtYWlsIjoia29sYWRpeWFyYWoyMkBnbWFpbC5jb20iLCJyb2xlcyI6WyJBRE1JTiJdLCJwZXJtaXNzaW9ucyI6WyJBTEwiXSwiaWF0IjoxNzY5NzU5NTg3LCJleHAiOjE3Njk4NDU5ODd9.5-VXwruTPsD4UdY6PuEzrof9-vmxkcAbcu5p8B0caVd6vIFuz-8px_O5X1VTwUn4IU8B25lMFGmueZieFbgwYw'
+//response
+{
+    "status": 200,
+    "success": true,
+    "message": "DSU entries fetched",
+    "data": {
+        "data": [
+            {
+                "id": "3613237a-2331-40d8-b0d4-bb8ae250e8e5",
+                "templateId": "bc707ac7-d739-4854-9043-34d0fdb4bffd",
+                "accountId": "3953c9db-99bb-479c-b393-edb6de52eb48",
+                "teamId": null,
+                "date": "2026-01-28T18:30:00.000Z",
+                "content": {
+                    "query": [
+                        {
+                            "issues": [
+                                "Not Calling"
+                            ],
+                            "project": "Hitachi"
+                        }
+                    ],
+                    "worked_on": [
+                        {
+                            "tasks": [
+                                "create UI",
+                                "Create API",
+                                "Create LOKO",
+                                "falling"
+                            ],
+                            "project": "Fixego"
+                        },
+                        {
+                            "tasks": [
+                                "Done Calling API",
+                                "doing"
+                            ],
+                            "project": "NixiJi"
+                        }
+                    ],
+                    "in_progress": [
+                        {
+                            "tasks": [
+                                "Done is pending",
+                                "pending"
+                            ],
+                            "project": "Hitachi"
+                        },
+                        {
+                            "tasks": [
+                                "Nina mi cha",
+                                "API"
+                            ],
+                            "project": "NixiJi"
+                        }
+                    ],
+                    "todays_learning": [
+                        {
+                            "project": "Fixego",
+                            "learnings": [
+                                "Prisma transaction handling",
+                                "Optimizing API response time"
+                            ]
+                        },
+                        {
+                            "project": "General",
+                            "learnings": [
+                                "Better Git rebase workflow"
+                            ]
+                        }
+                    ]
+                },
+                "summary": "Worked on Fixego and NixiJi modules, APIs and UI updates",
+                "attachments": null,
+                "isDraft": false,
+                "submittedAt": "2026-01-29T11:46:49.018Z",
+                "approvedBy": null,
+                "approvedAt": null,
+                "createdAt": "2026-01-29T11:46:49.031Z",
+                "updatedAt": "2026-01-29T11:46:49.031Z",
+                "createdBy": "3953c9db-99bb-479c-b393-edb6de52eb48",
+                "meta": null,
+                "textSearch": null,
+                "account": {
+                    "id": "3953c9db-99bb-479c-b393-edb6de52eb48",
+                    "firstName": "Raj",
+                    "lastName": "Koladiya",
+                    "registerNumber": "SI00001",
+                    "designation": "Administrator"
+                },
+                "template": {
+                    "id": "bc707ac7-d739-4854-9043-34d0fdb4bffd",
+                    "name": "Developer Team DSU"
+                }
+            }
+        ],
+        "meta": {
+            "page": 1,
+            "limit": 20,
+            "total": 1,
+            "totalPages": 1
+        }
     }
 }
 
+
+curl --location 'http://localhost:9090/api/v1/dsu/3613237a-2331-40d8-b0d4-bb8ae250e8e5' \
+--header 'x-api-key: Qr@gZ@da7KjGQ/GRj@D9KSCX#L2Yr' \
+--header 'Cookie: access_token=eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjU4YTY5N2M3LTIwYjctNDQyZC05OTU4LWE5ODcxYWZjMzgwNSIsImVtYWlsIjoia29sYWRpeWFyYWoyMkBnbWFpbC5jb20iLCJyb2xlcyI6WyJBRE1JTiJdLCJwZXJtaXNzaW9ucyI6WyJBTEwiXSwiaWF0IjoxNzY5NzU5NTg3LCJleHAiOjE3Njk4NDU5ODd9.5-VXwruTPsD4UdY6PuEzrof9-vmxkcAbcu5p8B0caVd6vIFuz-8px_O5X1VTwUn4IU8B25lMFGmueZieFbgwYw'
+//response
+{
+    "status": 200,
+    "success": true,
+    "message": "DSU entry fetched",
+    "data": {
+        "id": "3613237a-2331-40d8-b0d4-bb8ae250e8e5",
+        "templateId": "bc707ac7-d739-4854-9043-34d0fdb4bffd",
+        "accountId": "3953c9db-99bb-479c-b393-edb6de52eb48",
+        "teamId": null,
+        "date": "2026-01-28T18:30:00.000Z",
+        "content": {
+            "query": [
+                {
+                    "issues": [
+                        "Not Calling"
+                    ],
+                    "project": "Hitachi"
+                }
+            ],
+            "worked_on": [
+                {
+                    "tasks": [
+                        "create UI",
+                        "Create API",
+                        "Create LOKO",
+                        "falling"
+                    ],
+                    "project": "Fixego"
+                },
+                {
+                    "tasks": [
+                        "Done Calling API",
+                        "doing"
+                    ],
+                    "project": "NixiJi"
+                }
+            ],
+            "in_progress": [
+                {
+                    "tasks": [
+                        "Done is pending",
+                        "pending"
+                    ],
+                    "project": "Hitachi"
+                },
+                {
+                    "tasks": [
+                        "Nina mi cha",
+                        "API"
+                    ],
+                    "project": "NixiJi"
+                }
+            ],
+            "todays_learning": [
+                {
+                    "project": "Fixego",
+                    "learnings": [
+                        "Prisma transaction handling",
+                        "Optimizing API response time"
+                    ]
+                },
+                {
+                    "project": "General",
+                    "learnings": [
+                        "Better Git rebase workflow"
+                    ]
+                }
+            ]
+        },
+        "summary": "Worked on Fixego and NixiJi modules, APIs and UI updates",
+        "attachments": null,
+        "isDraft": false,
+        "submittedAt": "2026-01-29T11:46:49.018Z",
+        "approvedBy": null,
+        "approvedAt": null,
+        "createdAt": "2026-01-29T11:46:49.031Z",
+        "updatedAt": "2026-01-29T11:46:49.031Z",
+        "createdBy": "3953c9db-99bb-479c-b393-edb6de52eb48",
+        "meta": null,
+        "textSearch": null,
+        "account": {
+            "id": "3953c9db-99bb-479c-b393-edb6de52eb48",
+            "firstName": "Raj",
+            "lastName": "Koladiya",
+            "registerNumber": "SI00001",
+            "designation": "Administrator"
+        },
+        "template": {
+            "id": "bc707ac7-d739-4854-9043-34d0fdb4bffd",
+            "name": "Developer Team DSU"
+        }
+    }
+}
+
+
+curl --location --request PATCH 'http://localhost:9090/api/v1/dsu/ENTRY_UUID_HERE' \
+--header 'Content-Type: application/json' \
+--header 'x-api-key: Qr@gZ@da7KjGQ/GRj@D9KSCX#L2Yr' \
+--header 'Cookie: access_token=eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjU4YTY5N2M3LTIwYjctNDQyZC05OTU4LWE5ODcxYWZjMzgwNSIsImVtYWlsIjoia29sYWRpeWFyYWoyMkBnbWFpbC5jb20iLCJyb2xlcyI6WyJBRE1JTiJdLCJwZXJtaXNzaW9ucyI6WyJBTEwiXSwiaWF0IjoxNzY5NzU5NTg3LCJleHAiOjE3Njk4NDU5ODd9.5-VXwruTPsD4UdY6PuEzrof9-vmxkcAbcu5p8B0caVd6vIFuz-8px_O5X1VTwUn4IU8B25lMFGmueZieFbgwYw' \
+--data '{
+  "summary": "Updated summary",
+  "isDraft": false,
+  "content": {
+    "learning": ["GST Reconciliation", "Invoice automation"]
+  }
+}'
+
+
+curl --location --request DELETE 'http://localhost:9090/api/v1/dsu/dsu-entry-uuid' \
+--header 'x-api-key: Qr@gZ@da7KjGQ/GRj@D9KSCX#L2Yr'
+
+
+
+
+
+/* --------------------
+   ENTRY APIs (USER)
+   -------------------- */
+
+/**
+ * POST /dsu
+ * Create or submit DSU for day (create as draft or submitted)
+ * body: { templateId?, date?, content (JSON), attachments?, isDraft?, summary? }
+ *
+ * Enforces uniqueness (one per accountId+date+templateId). Uses transaction + upsert-like logic.
+ */
+export async function createOrSubmitDsu(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    // helper to get accountId from user
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { accountId: true } });
+    const accountId = user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid user session");
+
+    const { templateId, date, content, attachments, isDraft = false, summary } = req.body as any;
+    const d = normalizeToDay(date);
+
+    // Optional: validate content shape at runtime (light)
+    if (!content || typeof content !== "object")
+      return sendErrorResponse(res, 400, "content is required and must be an object");
+
+    // Use transaction: check existing & create or update
+    const entry = await prisma.$transaction(async (tx) => {
+      const existing = await tx.dsuEntry.findFirst({
+        where: { accountId, date: d, templateId: templateId ?? null },
+      });
+
+      if (existing) {
+        // Update existing (allow overwrite)
+        const updated = await tx.dsuEntry.update({
+          where: { id: existing.id },
+          data: {
+            content,
+            attachments: attachments ?? null,
+            isDraft: !!isDraft,
+            submittedAt: isDraft ? null : new Date(),
+            summary: summary ?? null,
+            updatedAt: new Date(),
+          },
+        });
+        return updated;
+      }
+
+      // create new
+      const created = await tx.dsuEntry.create({
+        data: {
+          accountId,
+          templateId: templateId ?? null,
+          teamId: null, // optionally fill if you know user's team
+          date: d,
+          content,
+          attachments: attachments ?? null,
+          isDraft: !!isDraft,
+          submittedAt: isDraft ? null : new Date(),
+          summary: summary ?? null,
+          createdBy: accountId,
+        },
+      });
+
+      return created;
+    });
+
+    return sendSuccessResponse(res, 201, isDraft ? "Draft saved" : "DSU submitted", entry);
+  } catch (err: any) {
+    console.error("createOrSubmitDsu error:", err);
+    if (err?.code === "P2002") {
+      return sendErrorResponse(res, 409, "DSU already exists for today");
+    }
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to submit DSU");
+  }
+}
+
+/**
+ * GET /dsu/me/today
+ * returns current user's DSU for today (draft or submitted)
+ */
+export async function getMyTodayDsu(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { accountId: true } });
+    const accountId = user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+    const date = normalizeToDay(new Date());
+    const entry = await prisma.dsuEntry.findFirst({
+      where: { accountId, date },
+    });
+
+    return sendSuccessResponse(res, 200, "Today DSU fetched", entry ?? null);
+  } catch (err: any) {
+    console.error("getMyTodayDsu error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch DSU");
+  }
+}
+
+/**
+ * PATCH /dsu/:id
+ * Update DSU entry (owner or admin)
+ */
+export async function updateDsuEntry(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { id } = req.params;
+    const { content, attachments, isDraft, summary } = req.body as any;
+
+    const existing = await prisma.dsuEntry.findUnique({ where: { id } });
+    if (!existing) return sendErrorResponse(res, 404, "DSU entry not found");
+
+    // allow owner or admin
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { accountId: true } });
+    const accountId = user?.accountId;
+    const isOwner = accountId === existing.accountId;
+    const isAdmin = req.user?.roles?.includes?.("ADMIN");
+
+    if (!isOwner && !isAdmin) return sendErrorResponse(res, 403, "Forbidden");
+
+    const updated = await prisma.dsuEntry.update({
+      where: { id },
+      data: {
+        content: content ?? undefined,
+        attachments: attachments ?? undefined,
+        isDraft: typeof isDraft === "boolean" ? isDraft : undefined,
+        summary: summary ?? undefined,
+        submittedAt: typeof isDraft === "boolean" && !isDraft ? new Date() : undefined,
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "DSU updated", updated);
+  } catch (err: any) {
+    console.error("updateDsuEntry error:", err);
+    if (err?.code === "P2002") return sendErrorResponse(res, 409, "Duplicate DSU");
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to update DSU");
+  }
+}
+
+/**
+ * DELETE /dsu/:id
+ * Soft delete (owner or admin) - we will mark isDraft=true & submittedAt=null OR create a deletedAt flag if schema supports
+ */
+export async function deleteDsuEntry(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { id } = req.params;
+    const existing = await prisma.dsuEntry.findUnique({ where: { id } });
+    if (!existing) return sendErrorResponse(res, 404, "DSU entry not found");
+
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { accountId: true } });
+    const accountId = user?.accountId;
+    const isOwner = accountId === existing.accountId;
+    const isAdmin = req.user?.roles?.includes?.("ADMIN");
+
+    if (!isOwner && !isAdmin) return sendErrorResponse(res, 403, "Forbidden");
+
+    // Soft-delete approach: mark isDraft true and clear submittedAt, or add deleted flag if preferred
+    const updated = await prisma.dsuEntry.update({
+      where: { id },
+      data: { isDraft: true, submittedAt: null, summary: null },
+    });
+
+    return sendSuccessResponse(res, 200, "DSU entry deleted (soft)", updated);
+  } catch (err: any) {
+    console.error("deleteDsuEntry error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to delete DSU");
+  }
+}
+
+/**
+ * GET /dsu/:id
+ * Get DSU detail (owner or admin)
+ */
+export async function getDsuEntry(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { id } = req.params;
+    const entry = await prisma.dsuEntry.findUnique({
+      where: { id },
+      include: {
+        account: {
+          select: { id: true, firstName: true, lastName: true, registerNumber: true, designation: true },
+        },
+        template: { select: { id: true, name: true } },
+      },
+    });
+    if (!entry) return sendErrorResponse(res, 404, "DSU entry not found");
+
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { accountId: true } });
+    const isOwner = user?.accountId === entry.accountId;
+    const isAdmin = req.user?.roles?.includes?.("ADMIN");
+
+    if (!isOwner && !isAdmin) return sendErrorResponse(res, 403, "Forbidden");
+
+    return sendSuccessResponse(res, 200, "DSU entry fetched", entry);
+  } catch (err: any) {
+    console.error("getDsuEntry error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch DSU entry");
+  }
+}
+
+/**
+ * GET /dsu
+ * List DSU entries (admin: all; normal: only own)
+ * Filters: accountId, teamId, templateId, date/fromDate/toDate, isDraft
+ * Search: search (uses denormalized textSearch column)
+ * Pagination: page, limit
+ * Sort: sortBy, sortOrder
+ */
+export async function listDsuEntries(req: Request, res: Response) {
+  try {
+    const {
+      accountId: qAccountId,
+      teamId,
+      templateId,
+      date,
+      fromDate,
+      toDate,
+      isDraft,
+      search,
+      sortBy = "date",
+      sortOrder = "desc",
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string>;
+
+    const pageNumber = safeParseInt(page, 1);
+    const pageSize = Math.min(safeParseInt(limit, 20), 200);
+    const sortField = allowedEntrySort.has(sortBy) ? sortBy : "date";
+
+    const isAdmin = req.user?.roles?.includes?.("ADMIN");
+    const user = await prisma.user.findUnique({ where: { id: req.user?.id }, select: { accountId: true } });
+    const accountId = user?.accountId;
+
+    const where: any = {};
+    // permissions: normal users only see their own
+    if (!isAdmin) where.accountId = accountId;
+    if (qAccountId && isAdmin) where.accountId = qAccountId;
+    if (teamId) where.teamId = teamId;
+    if (templateId) where.templateId = templateId;
+    if (isDraft !== undefined) where.isDraft = isDraft === "true";
+
+    if (date) {
+      where.date = { equals: normalizeToDay(date) };
+    } else if (fromDate || toDate) {
+      where.date = {};
+      if (fromDate) where.date.gte = normalizeToDay(fromDate);
+      if (toDate) where.date.lte = normalizeToDay(toDate);
+    }
+
+    if (search) {
+      // use denormalized textSearch for performance
+      where.AND = [
+        ...(where.AND ?? []),
+        { textSearch: { contains: search, mode: "insensitive" } },
+      ];
+    }
+
+    const [total, data] = await prisma.$transaction([
+      prisma.dsuEntry.count({ where }),
+      prisma.dsuEntry.findMany({
+        where,
+        include: {
+          account: { select: { id: true, firstName: true, lastName: true, registerNumber: true, designation: true } },
+          template: { select: { id: true, name: true } },
+        },
+        orderBy: { [sortField]: sortOrder === "asc" ? "asc" : "desc" },
+        skip: (pageNumber - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    return sendSuccessResponse(res, 200, "DSU entries fetched", {
+      data,
+      meta: {
+        page: pageNumber,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    });
+  } catch (err: any) {
+    console.error("listDsuEntries error:", err);
+    if (err?.code === "P2021" || err?.code === "P2022") {
+      return sendErrorResponse(res, 500, "Database schema mismatch. Run Prisma migration.");
+    }
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to list DSU entries");
+  }
+}
