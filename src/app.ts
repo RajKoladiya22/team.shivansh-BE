@@ -7,6 +7,8 @@ import routes from "./routes";
 import { checkStaticToken } from "./core/middleware/key";
 import { requestLogger } from "./core/help/logs/requestLogger";
 import path from "path";
+import webpush from "web-push";
+import { env } from "./config/database.config";
 
 const app = express();
 
@@ -29,6 +31,12 @@ app.use(
     crossOriginResourcePolicy: { policy: "cross-origin" },
     crossOriginEmbedderPolicy: false,
   }),
+);
+
+webpush.setVapidDetails(
+  "mailto:magicallydev@gmail.com",
+  env.VAPID_PUBLIC_KEY!,
+  env.VAPID_PRIVATE_KEY!,
 );
 
 app.use(compression());

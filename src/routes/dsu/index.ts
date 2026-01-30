@@ -153,7 +153,7 @@ router.delete(
 
 /**
  * Daily submission count
- * GET /admin/dsu/reports/daily-submissions
+ * GET /dsu/admin/reports/daily-submissions
  */
 router.get(
   "/admin/reports/daily-submissions",
@@ -165,7 +165,7 @@ router.get(
 
 /**
  * Team-wise submission counts
- * GET /admin/dsu/reports/team-submissions
+ * GET /dsu/admin/reports/team-submissions
  */
 router.get(
   "/admin/reports/team-submissions",
@@ -177,7 +177,7 @@ router.get(
 
 /**
  * Template usage analytics
- * GET /admin/dsu/reports/template-usage
+ * GET /dsu/admin/reports/template-usage
  */
 router.get(
   "/admin/reports/template-usage",
@@ -189,7 +189,7 @@ router.get(
 
 /**
  * Submission time analytics (avg/min/max)
- * GET /admin/dsu/reports/submission-time-stats
+ * GET /dsu/admin/reports/submission-time-stats
  */
 router.get(
   "/admin/reports/submission-time-stats",
@@ -201,7 +201,7 @@ router.get(
 
 /**
  * Export DSU entries
- * POST /admin/dsu/reports/export
+ * POST /dsu/admin/reports/export
  */
 router.post(
   "/admin/reports/export",
