@@ -2,6 +2,10 @@ import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 import { prisma } from "../../config/database.config";
 import { signAccessToken } from "../../core/middleware/jwt";
+import {
+  sendErrorResponse,
+  sendSuccessResponse,
+} from "../../core/utils/httpResponse";
 
 // -------------------------------
 // LOGIN
@@ -10,10 +14,13 @@ export async function login(req: Request, res: Response) {
   try {
     const { identifier, password } = req.body;
     if (!identifier || !password) {
-      return res.status(400).json({ message: "Email/Username and password required" });
+      return sendErrorResponse(res, 400, "Email/Username and password requiredr");
+      // return res
+      //   .status(400)
+      //   .json({ message: "Email/Username and password required" });
     }
     // console.log("\n\n\nreq.body:", req.body);
-    
+
     // find user by username or email
     const user = await prisma.user.findFirst({
       where: {
@@ -39,26 +46,28 @@ export async function login(req: Request, res: Response) {
     });
 
     if (!user) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return sendErrorResponse(res, 401, "Invalid credentials");
+      // return res.status(401).json({ message: "Invalid credentials" });
     }
 
     // compare password
     const validPassword = await bcrypt.compare(password, user.passwordHash!);
     if (!validPassword) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return sendErrorResponse(res, 401, "Invalid Password");
+      // return res.status(401).json({ message: "Invalid credentials" });
     }
 
     // check admin approval
     if (!user.account?.isActive) {
-      return res.status(403).json({ message: "Account not approved yet" });
+      return sendErrorResponse(res, 403, "Account not approved yet");
+      // return res.status(403).json({ message: "Account not approved yet" });
     }
 
     // gather user roles & permission keys
     const roles = user.roles.map((ur) => ur.role.name);
     const permissions = user.roles.flatMap((ur) =>
-      ur.role.permissions.map((rp) => rp.permission.key)
+      ur.role.permissions.map((rp) => rp.permission.key),
     );
-    
 
     // create token payload without sensitive ID
     const tokenPayload = {
@@ -70,8 +79,6 @@ export async function login(req: Request, res: Response) {
 
     const accessToken = signAccessToken(tokenPayload);
 
-
-
     // set secure cookies
     res.cookie("access_token", accessToken, {
       httpOnly: true,
@@ -82,9 +89,9 @@ export async function login(req: Request, res: Response) {
 
     // const NewavatarUrl = buildFileUrl(req, user.id, user.account.avatar);
 
-
     // response data
-    return res.json({
+    return res.status(200).json({
+      success: true,
       message: "Login successful",
       user: {
         id: user.id,
@@ -100,7 +107,8 @@ export async function login(req: Request, res: Response) {
     });
   } catch (err) {
     console.error("Login error:", err);
-    return res.status(500).json({ message: "Internal server error" });
+    return sendErrorResponse(res, 500, "Internal server error");
+    // return res.status(500).json({ message: "Internal server error" });
   }
 }
 

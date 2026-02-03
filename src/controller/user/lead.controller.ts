@@ -571,3 +571,149 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
     );
   }
 }
+
+
+
+/**
+ * GET /leads/my/dsu
+ * Employee DSU view:
+ * - Pending & In-Progress → all
+ * - Closed & Converted → today only
+ */
+export async function listMyDsuLeads(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+    const {
+      search,
+      source,
+      sortBy = "updatedAt",
+      sortOrder = "desc",
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string>;
+
+    const pageNumber = Math.max(Number(page), 1);
+    const pageSize = Math.min(Number(limit), 100);
+
+    /** Today window */
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    /** Base assignment scope */
+    const where: any = {
+      isActive: true,
+      assignments: {
+        some: {
+          isActive: true,
+          OR: [
+            { accountId },
+            {
+              team: {
+                members: {
+                  some: { accountId },
+                },
+              },
+            },
+          ],
+        },
+      },
+      OR: [
+        // Pending & In Progress → always visible
+        { status: { in: ["PENDING", "IN_PROGRESS"] } },
+
+        // Closed → today only
+        {
+          status: "CLOSED",
+          closedAt: {
+            gte: todayStart,
+            lte: todayEnd,
+          },
+        },
+
+        // Converted → today only
+        {
+          status: "CONVERTED",
+          updatedAt: {
+            gte: todayStart,
+            lte: todayEnd,
+          },
+        },
+      ],
+    };
+
+    if (source) where.source = source;
+
+    if (search) {
+      where.AND = [
+        {
+          OR: [
+            { customerName: { contains: search, mode: "insensitive" } },
+            { mobileNumber: { contains: search } },
+            { productTitle: { contains: search, mode: "insensitive" } },
+          ],
+        },
+      ];
+    }
+
+    /** Sorting */
+    const allowedSortFields = new Set([
+      "createdAt",
+      "updatedAt",
+      "closedAt",
+      "customerName",
+      "status",
+    ]);
+
+    const sortField = allowedSortFields.has(sortBy) ? sortBy : "updatedAt";
+    const orderBy: any = { [sortField]: sortOrder === "asc" ? "asc" : "desc" };
+
+    const [total, leads] = await prisma.$transaction([
+      prisma.lead.count({ where }),
+      prisma.lead.findMany({
+        where,
+        orderBy,
+        skip: (pageNumber - 1) * pageSize,
+        take: pageSize,
+        include: {
+          assignments: {
+            where: { isActive: true },
+            include: {
+              account: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  contactPhone: true,
+                },
+              },
+              team: { select: { id: true, name: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    return sendSuccessResponse(res, 200, "My DSU leads fetched", {
+      data: leads,
+      meta: {
+        page: pageNumber,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+        hasNext: pageNumber * pageSize < total,
+        hasPrev: pageNumber > 1,
+      },
+    });
+  } catch (err: any) {
+    console.error("List my DSU leads error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch DSU leads");
+  }
+}

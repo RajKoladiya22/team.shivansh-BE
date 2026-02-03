@@ -32,6 +32,7 @@ import {
   exportDsuEntries,
   getMyTeamTemplates,
   getDsuTemplateForUser,
+  getAdminDsuReports,
 } from "../../controller/dsu/dsu.controller";
 
 const router = Router();
@@ -209,6 +210,15 @@ router.post(
   requireRole("ADMIN"),
   requirePermission("ALL"),
   exportDsuEntries,
+);
+
+
+router.get(
+  "/admin/reports",
+  requireAuth,
+  requireRole("ADMIN"),
+  requirePermission("ALL"),
+  getAdminDsuReports,
 );
 
 export default router;

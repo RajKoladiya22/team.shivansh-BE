@@ -48,7 +48,8 @@ export async function createDsuTemplate(req: Request, res: Response) {
     if (!creatorUserId) return sendErrorResponse(res, 401, "Unauthorized");
 
     const { name, description, teamId, config, isActive } = req.body as any;
-    if (!name || !config) return sendErrorResponse(res, 400, "name & config required");
+    if (!name || !config)
+      return sendErrorResponse(res, 400, "name & config required");
 
     const template = await prisma.dsuTemplate.create({
       data: {
@@ -63,13 +64,22 @@ export async function createDsuTemplate(req: Request, res: Response) {
 
     // create initial version
     await prisma.dsuTemplateVersion.create({
-      data: { templateId: template.id, version: 1, config, createdBy: creatorUserId },
+      data: {
+        templateId: template.id,
+        version: 1,
+        config,
+        createdBy: creatorUserId,
+      },
     });
 
     return sendSuccessResponse(res, 201, "Template created", template);
   } catch (err: any) {
     console.error("createDsuTemplate error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to create template");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to create template",
+    );
   }
 }
 
@@ -108,7 +118,12 @@ export async function updateDsuTemplate(req: Request, res: Response) {
         });
         const nextVersion = (lastVer?.version ?? 0) + 1;
         await tx.dsuTemplateVersion.create({
-          data: { templateId: id, version: nextVersion, config, createdBy: req.user?.id },
+          data: {
+            templateId: id,
+            version: nextVersion,
+            config,
+            createdBy: req.user?.id,
+          },
         });
       }
 
@@ -118,7 +133,11 @@ export async function updateDsuTemplate(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "Template updated", updated);
   } catch (err: any) {
     console.error("updateDsuTemplate error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to update template");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to update template",
+    );
   }
 }
 
@@ -126,24 +145,54 @@ export async function updateDsuTemplate(req: Request, res: Response) {
  * DELETE /admin/dsu/templates/:id
  * Soft-delete (deactivate) template
  */
+// export async function deleteDsuTemplate(req: Request, res: Response) {
+//   try {
+//     if (!req.user?.roles?.includes?.("ADMIN"))
+//       return sendErrorResponse(res, 403, "Admin access required");
+//     const { id } = req.params;
+
+//     const tpl = await prisma.dsuTemplate.findUnique({ where: { id } });
+//     if (!tpl) return sendErrorResponse(res, 404, "Template not found");
+
+//     const updated = await prisma.dsuTemplate.update({
+//       where: { id },
+//       data: { isActive: false },
+//     });
+
+//     return sendSuccessResponse(res, 200, "Template deactivated", updated);
+//   } catch (err: any) {
+//     console.error("deleteDsuTemplate error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to delete template");
+//   }
+// }
+
 export async function deleteDsuTemplate(req: Request, res: Response) {
   try {
     if (!req.user?.roles?.includes?.("ADMIN"))
       return sendErrorResponse(res, 403, "Admin access required");
+
     const { id } = req.params;
 
     const tpl = await prisma.dsuTemplate.findUnique({ where: { id } });
     if (!tpl) return sendErrorResponse(res, 404, "Template not found");
 
-    const updated = await prisma.dsuTemplate.update({
+    const deleted = await prisma.dsuTemplate.delete({
       where: { id },
-      data: { isActive: false },
     });
 
-    return sendSuccessResponse(res, 200, "Template deactivated", updated);
+    return sendSuccessResponse(
+      res,
+      200,
+      "Template deleted permanently",
+      deleted,
+    );
   } catch (err: any) {
     console.error("deleteDsuTemplate error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to delete template");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to delete template",
+    );
   }
 }
 
@@ -156,8 +205,14 @@ export async function listDsuTemplates(req: Request, res: Response) {
     if (!req.user?.roles?.includes?.("ADMIN"))
       return sendErrorResponse(res, 403, "Admin access required");
 
-    const { teamId, search, page = "1", limit = "20", sortBy = "createdAt", sortOrder = "desc" } =
-      req.query as Record<string, string>;
+    const {
+      teamId,
+      search,
+      page = "1",
+      limit = "20",
+      sortBy = "createdAt",
+      sortOrder = "desc",
+    } = req.query as Record<string, string>;
 
     const pageNumber = safeParseInt(page, 1);
     const pageSize = Math.min(safeParseInt(limit, 20), 200);
@@ -165,7 +220,11 @@ export async function listDsuTemplates(req: Request, res: Response) {
 
     const where: any = {};
     if (teamId) where.teamId = teamId;
-    if (search) where.OR = [{ name: { contains: search, mode: "insensitive" } }, { description: { contains: search, mode: "insensitive" } }];
+    if (search)
+      where.OR = [
+        { name: { contains: search, mode: "insensitive" } },
+        { description: { contains: search, mode: "insensitive" } },
+      ];
 
     const [total, templates] = await prisma.$transaction([
       prisma.dsuTemplate.count({ where }),
@@ -188,7 +247,11 @@ export async function listDsuTemplates(req: Request, res: Response) {
     });
   } catch (err: any) {
     console.error("listDsuTemplates error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to list templates");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to list templates",
+    );
   }
 }
 
@@ -208,7 +271,11 @@ export async function getDsuTemplate(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "Template fetched", tpl);
   } catch (err: any) {
     console.error("getDsuTemplate error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch template");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch template",
+    );
   }
 }
 
@@ -229,16 +296,30 @@ export async function createOrSubmitDsu(req: Request, res: Response) {
     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
 
     // helper to get accountId from user
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { accountId: true } });
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { accountId: true },
+    });
     const accountId = user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid user session");
 
-    const { templateId, date, content, attachments, isDraft = false, summary } = req.body as any;
+    const {
+      templateId,
+      date,
+      content,
+      attachments,
+      isDraft = false,
+      summary,
+    } = req.body as any;
     const d = normalizeToDay(date);
 
     // Optional: validate content shape at runtime (light)
     if (!content || typeof content !== "object")
-      return sendErrorResponse(res, 400, "content is required and must be an object");
+      return sendErrorResponse(
+        res,
+        400,
+        "content is required and must be an object",
+      );
 
     // Use transaction: check existing & create or update
     const entry = await prisma.$transaction(async (tx) => {
@@ -281,7 +362,12 @@ export async function createOrSubmitDsu(req: Request, res: Response) {
       return created;
     });
 
-    return sendSuccessResponse(res, 201, isDraft ? "Draft saved" : "DSU submitted", entry);
+    return sendSuccessResponse(
+      res,
+      201,
+      isDraft ? "Draft saved" : "DSU submitted",
+      entry,
+    );
   } catch (err: any) {
     console.error("createOrSubmitDsu error:", err);
     if (err?.code === "P2002") {
@@ -299,7 +385,10 @@ export async function getMyTodayDsu(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { accountId: true } });
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { accountId: true },
+    });
     const accountId = user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
@@ -331,7 +420,10 @@ export async function updateDsuEntry(req: Request, res: Response) {
     if (!existing) return sendErrorResponse(res, 404, "DSU entry not found");
 
     // allow owner or admin
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { accountId: true } });
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { accountId: true },
+    });
     const accountId = user?.accountId;
     const isOwner = accountId === existing.accountId;
     const isAdmin = req.user?.roles?.includes?.("ADMIN");
@@ -345,14 +437,16 @@ export async function updateDsuEntry(req: Request, res: Response) {
         attachments: attachments ?? undefined,
         isDraft: typeof isDraft === "boolean" ? isDraft : undefined,
         summary: summary ?? undefined,
-        submittedAt: typeof isDraft === "boolean" && !isDraft ? new Date() : undefined,
+        submittedAt:
+          typeof isDraft === "boolean" && !isDraft ? new Date() : undefined,
       },
     });
 
     return sendSuccessResponse(res, 200, "DSU updated", updated);
   } catch (err: any) {
     console.error("updateDsuEntry error:", err);
-    if (err?.code === "P2002") return sendErrorResponse(res, 409, "Duplicate DSU");
+    if (err?.code === "P2002")
+      return sendErrorResponse(res, 409, "Duplicate DSU");
     return sendErrorResponse(res, 500, err?.message ?? "Failed to update DSU");
   }
 }
@@ -361,31 +455,79 @@ export async function updateDsuEntry(req: Request, res: Response) {
  * DELETE /dsu/:id
  * Soft delete (owner or admin) - we will mark isDraft=true & submittedAt=null OR create a deletedAt flag if schema supports
  */
+// export async function deleteDsuEntry(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+//     const { id } = req.params;
+//     const existing = await prisma.dsuEntry.findUnique({ where: { id } });
+//     if (!existing) return sendErrorResponse(res, 404, "DSU entry not found");
+
+//     const user = await prisma.user.findUnique({
+//       where: { id: userId },
+//       select: { accountId: true },
+//     });
+//     const accountId = user?.accountId;
+//     const isOwner = accountId === existing.accountId;
+//     const isAdmin = req.user?.roles?.includes?.("ADMIN");
+
+//     if (!isOwner && !isAdmin) return sendErrorResponse(res, 403, "Forbidden");
+
+//     // Soft-delete approach: mark isDraft true and clear submittedAt, or add deleted flag if preferred
+//     const updated = await prisma.dsuEntry.update({
+//       where: { id },
+//       data: { isDraft: true, submittedAt: null, summary: null },
+//     });
+
+//     return sendSuccessResponse(res, 200, "DSU entry deleted (soft)", updated);
+//   } catch (err: any) {
+//     console.error("deleteDsuEntry error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to delete DSU");
+//   }
+// }
+
+/**
+ * DELETE /dsu/:id
+ * Hard delete DSU entry (Owner or Admin only)
+ */
 export async function deleteDsuEntry(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
 
     const { id } = req.params;
-    const existing = await prisma.dsuEntry.findUnique({ where: { id } });
-    if (!existing) return sendErrorResponse(res, 404, "DSU entry not found");
 
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { accountId: true } });
+    const existing = await prisma.dsuEntry.findUnique({
+      where: { id },
+      select: { id: true, accountId: true },
+    });
+
+    if (!existing) {
+      return sendErrorResponse(res, 404, "DSU entry not found");
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { accountId: true },
+    });
+
     const accountId = user?.accountId;
     const isOwner = accountId === existing.accountId;
     const isAdmin = req.user?.roles?.includes?.("ADMIN");
 
-    if (!isOwner && !isAdmin) return sendErrorResponse(res, 403, "Forbidden");
+    if (!isOwner && !isAdmin) {
+      return sendErrorResponse(res, 403, "Forbidden");
+    }
 
-    // Soft-delete approach: mark isDraft true and clear submittedAt, or add deleted flag if preferred
-    const updated = await prisma.dsuEntry.update({
+    // 🔥 HARD DELETE
+    await prisma.dsuEntry.delete({
       where: { id },
-      data: { isDraft: true, submittedAt: null, summary: null },
     });
 
-    return sendSuccessResponse(res, 200, "DSU entry deleted (soft)", updated);
+    return sendSuccessResponse(res, 200, "DSU entry deleted permanently");
   } catch (err: any) {
-    console.error("deleteDsuEntry error:", err);
+    console.error("deleteDsuEntry (hard) error:", err);
     return sendErrorResponse(res, 500, err?.message ?? "Failed to delete DSU");
   }
 }
@@ -404,14 +546,23 @@ export async function getDsuEntry(req: Request, res: Response) {
       where: { id },
       include: {
         account: {
-          select: { id: true, firstName: true, lastName: true, registerNumber: true, designation: true },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            registerNumber: true,
+            designation: true,
+          },
         },
         template: { select: { id: true, name: true } },
       },
     });
     if (!entry) return sendErrorResponse(res, 404, "DSU entry not found");
 
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { accountId: true } });
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { accountId: true },
+    });
     const isOwner = user?.accountId === entry.accountId;
     const isAdmin = req.user?.roles?.includes?.("ADMIN");
 
@@ -420,7 +571,11 @@ export async function getDsuEntry(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "DSU entry fetched", entry);
   } catch (err: any) {
     console.error("getDsuEntry error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch DSU entry");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch DSU entry",
+    );
   }
 }
 
@@ -454,7 +609,10 @@ export async function listDsuEntries(req: Request, res: Response) {
     const sortField = allowedEntrySort.has(sortBy) ? sortBy : "date";
 
     const isAdmin = req.user?.roles?.includes?.("ADMIN");
-    const user = await prisma.user.findUnique({ where: { id: req.user?.id }, select: { accountId: true } });
+    const user = await prisma.user.findUnique({
+      where: { id: req.user?.id },
+      select: { accountId: true },
+    });
     const accountId = user?.accountId;
 
     const where: any = {};
@@ -486,7 +644,15 @@ export async function listDsuEntries(req: Request, res: Response) {
       prisma.dsuEntry.findMany({
         where,
         include: {
-          account: { select: { id: true, firstName: true, lastName: true, registerNumber: true, designation: true } },
+          account: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              registerNumber: true,
+              designation: true,
+            },
+          },
           template: { select: { id: true, name: true } },
         },
         orderBy: { [sortField]: sortOrder === "asc" ? "asc" : "desc" },
@@ -507,9 +673,17 @@ export async function listDsuEntries(req: Request, res: Response) {
   } catch (err: any) {
     console.error("listDsuEntries error:", err);
     if (err?.code === "P2021" || err?.code === "P2022") {
-      return sendErrorResponse(res, 500, "Database schema mismatch. Run Prisma migration.");
+      return sendErrorResponse(
+        res,
+        500,
+        "Database schema mismatch. Run Prisma migration.",
+      );
     }
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to list DSU entries");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to list DSU entries",
+    );
   }
 }
 
@@ -569,7 +743,7 @@ export async function getMyTeamTemplates(req: Request, res: Response) {
     return sendErrorResponse(
       res,
       500,
-      err?.message ?? "Failed to fetch templates"
+      err?.message ?? "Failed to fetch templates",
     );
   }
 }
@@ -623,7 +797,7 @@ export async function getDsuTemplateForUser(req: Request, res: Response) {
       return sendErrorResponse(
         res,
         404,
-        "Template not found or not accessible"
+        "Template not found or not accessible",
       );
     }
 
@@ -633,12 +807,10 @@ export async function getDsuTemplateForUser(req: Request, res: Response) {
     return sendErrorResponse(
       res,
       500,
-      err?.message ?? "Failed to fetch template"
+      err?.message ?? "Failed to fetch template",
     );
   }
 }
-
-
 
 /* --------------------
    REPORTS & ANALYTICS (ADMIN)
@@ -651,7 +823,8 @@ export async function getDsuTemplateForUser(req: Request, res: Response) {
  */
 export async function getDailySubmissionCounts(req: Request, res: Response) {
   try {
-    if (!req.user?.roles?.includes?.("ADMIN")) return sendErrorResponse(res, 403, "Admin access required");
+    if (!req.user?.roles?.includes?.("ADMIN"))
+      return sendErrorResponse(res, 403, "Admin access required");
 
     const { fromDate, toDate } = req.query as Record<string, string>;
     const where: any = { isDraft: false }; // only submitted
@@ -671,7 +844,11 @@ export async function getDailySubmissionCounts(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "Daily submission counts", result);
   } catch (err: any) {
     console.error("getDailySubmissionCounts error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch report");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch report",
+    );
   }
 }
 
@@ -682,7 +859,8 @@ export async function getDailySubmissionCounts(req: Request, res: Response) {
  */
 export async function getTeamSubmissionCounts(req: Request, res: Response) {
   try {
-    if (!req.user?.roles?.includes?.("ADMIN")) return sendErrorResponse(res, 403, "Admin access required");
+    if (!req.user?.roles?.includes?.("ADMIN"))
+      return sendErrorResponse(res, 403, "Admin access required");
 
     const { fromDate, toDate, teamId } = req.query as Record<string, string>;
     const where: any = { isDraft: false };
@@ -701,15 +879,27 @@ export async function getTeamSubmissionCounts(req: Request, res: Response) {
 
     const mapped = await Promise.all(
       grouped.map(async (g) => {
-        const team = g.teamId ? await prisma.team.findUnique({ where: { id: g.teamId }, select: { id: true, name: true } }) : null;
-        return { team: team ? { id: team.id, name: team.name } : null, count: g._count._all };
+        const team = g.teamId
+          ? await prisma.team.findUnique({
+              where: { id: g.teamId },
+              select: { id: true, name: true },
+            })
+          : null;
+        return {
+          team: team ? { id: team.id, name: team.name } : null,
+          count: g._count._all,
+        };
       }),
     );
 
     return sendSuccessResponse(res, 200, "Team submission counts", mapped);
   } catch (err: any) {
     console.error("getTeamSubmissionCounts error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch team report");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch team report",
+    );
   }
 }
 
@@ -720,7 +910,8 @@ export async function getTeamSubmissionCounts(req: Request, res: Response) {
  */
 export async function getTemplateUsageStats(req: Request, res: Response) {
   try {
-    if (!req.user?.roles?.includes?.("ADMIN")) return sendErrorResponse(res, 403, "Admin access required");
+    if (!req.user?.roles?.includes?.("ADMIN"))
+      return sendErrorResponse(res, 403, "Admin access required");
 
     const { fromDate, toDate } = req.query as Record<string, string>;
     const where: any = { isDraft: false };
@@ -737,15 +928,27 @@ export async function getTemplateUsageStats(req: Request, res: Response) {
 
     const rows = await Promise.all(
       grouped.map(async (g) => {
-        const tpl = g.templateId ? await prisma.dsuTemplate.findUnique({ where: { id: g.templateId }, select: { id: true, name: true } }) : null;
-        return { template: tpl ? { id: tpl.id, name: tpl.name } : null, count: g._count._all };
+        const tpl = g.templateId
+          ? await prisma.dsuTemplate.findUnique({
+              where: { id: g.templateId },
+              select: { id: true, name: true },
+            })
+          : null;
+        return {
+          template: tpl ? { id: tpl.id, name: tpl.name } : null,
+          count: g._count._all,
+        };
       }),
     );
 
     return sendSuccessResponse(res, 200, "Template usage stats", rows);
   } catch (err: any) {
     console.error("getTemplateUsageStats error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch template stats");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch template stats",
+    );
   }
 }
 
@@ -755,7 +958,8 @@ export async function getTemplateUsageStats(req: Request, res: Response) {
  */
 export async function getSubmissionTimeStats(req: Request, res: Response) {
   try {
-    if (!req.user?.roles?.includes?.("ADMIN")) return sendErrorResponse(res, 403, "Admin access required");
+    if (!req.user?.roles?.includes?.("ADMIN"))
+      return sendErrorResponse(res, 403, "Admin access required");
 
     const { fromDate, toDate } = req.query as Record<string, string>;
     let whereConds: any = `WHERE "isDraft" = false`;
@@ -785,10 +989,19 @@ export async function getSubmissionTimeStats(req: Request, res: Response) {
     `;
 
     const result: any = await prisma.$queryRawUnsafe(sql, ...params);
-    return sendSuccessResponse(res, 200, "Submission time stats", result?.[0] ?? null);
+    return sendSuccessResponse(
+      res,
+      200,
+      "Submission time stats",
+      result?.[0] ?? null,
+    );
   } catch (err: any) {
     console.error("getSubmissionTimeStats error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to compute submission time stats");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to compute submission time stats",
+    );
   }
 }
 
@@ -803,7 +1016,8 @@ export async function getSubmissionTimeStats(req: Request, res: Response) {
  */
 export async function exportDsuEntries(req: Request, res: Response) {
   try {
-    if (!req.user?.roles?.includes?.("ADMIN")) return sendErrorResponse(res, 403, "Admin access required");
+    if (!req.user?.roles?.includes?.("ADMIN"))
+      return sendErrorResponse(res, 403, "Admin access required");
 
     // reuse listDsuEntries logic but fetch all (no pagination)
     const { fromDate, toDate, teamId, templateId } = req.body as any;
@@ -817,7 +1031,14 @@ export async function exportDsuEntries(req: Request, res: Response) {
     const data = await prisma.dsuEntry.findMany({
       where,
       include: {
-        account: { select: { id: true, firstName: true, lastName: true, registerNumber: true } },
+        account: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            registerNumber: true,
+          },
+        },
         template: { select: { id: true, name: true } },
       },
       orderBy: { date: "desc" },
@@ -828,6 +1049,135 @@ export async function exportDsuEntries(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "Export ready", { data });
   } catch (err: any) {
     console.error("exportDsuEntries error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to export DSU entries");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to export DSU entries",
+    );
+  }
+}
+
+/**
+ * GET /admin/dsu/reports
+ * Query params:
+ *   groupBy: comma-separated list of fields to group by. Allowed: date,teamId,templateId,accountId
+ *   fromDate, toDate
+ *   teamId, templateId, accountId
+ *   search (textSearch)
+ *   sortBy (count or any grouped field), sortOrder (asc|desc)
+ *   limit (for top-N groups)
+ *
+ * Examples:
+ *  - /admin/dsu/reports?groupBy=date
+ *  - /admin/dsu/reports?groupBy=teamId&fromDate=2026-01-01&toDate=2026-01-31
+ *  - /admin/dsu/reports?groupBy=teamId,templateId&limit=50
+ */
+/**
+ * GET /admin/dsu/reports
+ * Powerful admin DSU report API
+ */
+export async function getAdminDsuReports(req: Request, res: Response) {
+  try {
+    if (!req.user?.roles?.includes("ADMIN")) {
+      return sendErrorResponse(res, 403, "Admin access required");
+    }
+
+    const {
+      teamId,
+      accountId,
+      templateId,
+      fromDate,
+      toDate,
+      groupBy,
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string>;
+
+    const pageNumber = Number(page) || 1;
+    const pageSize = Math.min(Number(limit) || 20, 200);
+
+    const where: any = {
+      isDraft: false, // only submitted DSUs
+    };
+
+    if (teamId) where.teamId = teamId;
+    if (accountId) where.accountId = accountId;
+    if (templateId) where.templateId = templateId;
+
+    if (fromDate || toDate) {
+      where.date = {};
+      if (fromDate) where.date.gte = normalizeToDay(fromDate);
+      if (toDate) where.date.lte = normalizeToDay(toDate);
+    }
+
+    /* --------------------
+       GROUPED REPORT MODE
+       -------------------- */
+    if (groupBy) {
+      const allowedGroups = {
+        date: ["date"],
+        team: ["teamId"],
+        template: ["templateId"],
+        account: ["accountId"],
+      } as const;
+
+      const by = allowedGroups[groupBy as keyof typeof allowedGroups];
+      if (!by) {
+        return sendErrorResponse(res, 400, "Invalid groupBy value");
+      }
+
+      const grouped = await prisma.dsuEntry.groupBy({
+        by: by as any,
+        where,
+        _count: { _all: true },
+        orderBy: { _count: { id: "desc" } },
+      });
+
+      return sendSuccessResponse(res, 200, "DSU report generated", grouped);
+    }
+
+    /* --------------------
+       RAW LIST MODE
+       -------------------- */
+    const [total, data] = await prisma.$transaction([
+      prisma.dsuEntry.count({ where }),
+      prisma.dsuEntry.findMany({
+        where,
+        include: {
+          account: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              registerNumber: true,
+              designation: true,
+            },
+          },
+          template: {
+            select: { id: true, name: true },
+          },
+        },
+        orderBy: { date: "desc" },
+        skip: (pageNumber - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    return sendSuccessResponse(res, 200, "DSU entries fetched", {
+      data,
+      meta: {
+        page: pageNumber,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    });
+  } catch (err: any) {
+    console.error("getAdminDsuReports error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to generate DSU report",
+    );
   }
 }
