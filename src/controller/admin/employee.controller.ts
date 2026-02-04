@@ -24,9 +24,7 @@ export async function listEmployees(req: Request, res: Response) {
     =============================== */
     const isActiveParam = req.query.isActive;
     const isActive =
-      isActiveParam === undefined
-        ? true
-        : isActiveParam === "true";
+      isActiveParam === undefined ? true : isActiveParam === "true";
 
     /* ===============================
        SEARCH LOGIC
@@ -34,6 +32,18 @@ export async function listEmployees(req: Request, res: Response) {
     let where: any = {
       isActive,
     };
+    const { isBusy } = req.query;
+    if (isBusy !== undefined) {
+      if (isBusy === "true") {
+        where.isBusy = true;
+      } else if (isBusy === "false") {
+        where.isBusy = false;
+      } else {
+        return res.status(400).json({
+          message: "isBusy must be 'true' or 'false'",
+        });
+      }
+    }
 
     if (search) {
       const parts = search.split(/\s+/);
@@ -99,6 +109,7 @@ export async function listEmployees(req: Request, res: Response) {
           contactEmail: true,
           contactPhone: true,
           designation: true,
+          isBusy: true,
           avatar: true,
           jobType: true,
           isActive: true,
@@ -247,4 +258,3 @@ export async function updateEmployeeRoles(req: Request, res: Response) {
     return sendErrorResponse(res, 500, "Internal server error");
   }
 }
-

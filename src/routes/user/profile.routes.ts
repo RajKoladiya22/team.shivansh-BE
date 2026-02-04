@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getProfile, updateProfile } from "../../controller/user/user.controller";
+import { getProfile, updateMyBusyStatus, updateProfile } from "../../controller/user/user.controller";
 import { requireAuth } from "../../core/middleware/auth";
 import upload from "../../core/middleware/multer"; 
 
@@ -20,4 +20,13 @@ router.put(
   ]),
   updateProfile
 );
+
+router.patch(
+  "/account/busy",
+  requireAuth,
+  updateMyBusyStatus
+);
+
+
+
 export default router;

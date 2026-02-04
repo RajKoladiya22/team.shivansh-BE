@@ -9,6 +9,7 @@ import {
 } from "../../core/utils/httpResponse";
 import { buildFileUrl } from "../../core/middleware/multer/fileUrl";
 import { safeUnlink } from "../../core/middleware/multer/fileCleanup";
+import { getIo } from "../../core/utils/socket";
 
 /* ===== KEEP AS-IS ===== */
 interface BIODetails {
@@ -196,3 +197,50 @@ export async function getProfile(req: Request, res: Response) {
   }
 }
 
+/**
+ * PATCH /user/account/busy
+ * Body: { isBusy: boolean }
+ */
+export async function updateMyBusyStatus(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { isBusy } = req.body as { isBusy: boolean };
+    if (typeof isBusy !== "boolean") {
+      return sendErrorResponse(res, 400, "isBusy must be boolean");
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { accountId: true },
+    });
+    if (!user?.accountId) {
+      return sendErrorResponse(res, 400, "Invalid account");
+    }
+
+    const account = await prisma.account.update({
+      where: { id: user.accountId },
+      data: { isBusy },
+      select: {
+        id: true,
+        isBusy: true,
+        firstName: true,
+        lastName: true,
+      },
+    });
+
+    /** 🔔 emit socket event */
+    const io = getIo();
+    io.emit("busy:changed", {
+      accountId: account.id,
+      isBusy: account.isBusy,
+      source: "MANUAL",
+    });
+
+    return sendSuccessResponse(res, 200, "Busy status updated", account);
+  } catch (err: any) {
+    console.error("updateMyBusyStatus error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to update busy");
+  }
+}
