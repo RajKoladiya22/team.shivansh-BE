@@ -20,7 +20,7 @@ export async function listEmployees(req: Request, res: Response) {
       designation,
       jobType,
       isActive = "true",
-      excludeBusy,
+      isBusy,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
@@ -40,8 +40,16 @@ export async function listEmployees(req: Request, res: Response) {
       where.designation = { contains: designation, mode: "insensitive" };
     }
 
-    if (excludeBusy === "true") {
-      where.isBusy = false;
+    if (isBusy !== undefined) {
+      if (isBusy === "true") {
+        where.isBusy = true;
+      } else if (isBusy === "false") {
+        where.isBusy = false;
+      } else {
+        return res.status(400).json({
+          message: "isBusy must be 'true' or 'false'",
+        });
+      }
     }
 
     if (search) {
