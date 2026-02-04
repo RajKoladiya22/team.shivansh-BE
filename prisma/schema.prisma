@@ -156,6 +156,8 @@ model Account {
   templatePreferences       TemplatePreference[]
   // dailyStatusReports        DailyStatusReport[]
   dsuEntries                DsuEntry[]
+  leadHelpers               LeadHelper[]               @relation("HelperAccount")
+  addedHelpers              LeadHelper[]               @relation("HelperAddedBy")
 
   @@index([isActive])
   @@index([jobType])
@@ -791,6 +793,14 @@ enum LeadActivityAction {
   ASSIGN_CHANGED
   UPDATED
   CLOSED
+  HELPER_ADDED
+  HELPER_REMOVED
+}
+
+enum LeadHelperRole {
+  EXPORT
+  SUPPORT
+  CONSULT
 }
 
 model Lead {
@@ -821,6 +831,7 @@ model Lead {
   activity    LeadActivityLog[]
   customer    Customer?         @relation(fields: [customerId], references: [id])
   customerId  String?
+  leadHelpers LeadHelper[]
 
   @@index([source])
   @@index([status])
@@ -854,6 +865,30 @@ model LeadAssignment {
   @@index([leadId])
   @@index([accountId])
   @@index([teamId])
+}
+
+model LeadHelper {
+  id String @id @default(uuid())
+
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  accountId String
+  account   Account @relation("HelperAccount", fields: [accountId], references: [id])
+
+  role LeadHelperRole @default(SUPPORT)
+
+  addedBy    String? // accountId
+  addedByAcc Account? @relation("HelperAddedBy", fields: [addedBy], references: [id])
+
+  isActive Boolean @default(true)
+
+  addedAt   DateTime  @default(now())
+  removedAt DateTime?
+
+  @@unique([leadId, accountId])
+  @@index([leadId])
+  @@index([accountId])
 }
 
 model LeadActivityLog {

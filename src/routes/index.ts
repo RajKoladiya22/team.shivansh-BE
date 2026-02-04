@@ -12,6 +12,7 @@ import customersRouter from "./customer"
 import notificationsRouter from "./notifications";
 import templatesRouter from "./template";
 import dsuRouter from "./dsu";
+import commonRouter from "./common"
 
 
 const router = Router();
@@ -28,6 +29,7 @@ router.use("/tasks", tasksRouter);
 router.use("/customers", customersRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/templates", templatesRouter);
+router.use("/common", commonRouter);
 
 router.use("/dsu", dsuRouter);
 

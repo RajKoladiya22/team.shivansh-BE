@@ -15,6 +15,8 @@ import {
   listLeadsAdmin,
   getLeadActivityTimelineAdmin,
   getLeadCountByStatusAdmin,
+  addLeadHelperAdmin,
+  removeLeadHelperAdmin,
 } from "../../controller/admin/lead.controller";
 
 const router = Router();
@@ -95,6 +97,22 @@ router.get(
   requireRole("ADMIN"),
   requirePermission("ALL"),
   getLeadCountByStatusAdmin,
+);
+
+
+router.post(
+  "/leads/:id/helpers",
+  requireAuth,
+  requireRole("ADMIN"),
+  requirePermission("ALL"),
+  addLeadHelperAdmin,
+);
+router.delete(
+  "/leads/:id/helpers/:accountId",
+  requireAuth,
+  requireRole("ADMIN"),
+  requirePermission("ALL"),
+  removeLeadHelperAdmin,
 );
 
 export default router;

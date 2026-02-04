@@ -445,7 +445,7 @@ export async function closeLeadAdmin(req: Request, res: Response) {
 
 /**
  * GET /admin/leads
- * Filters: status, source, search, assignedTo, fromDate, toDate
+ * Filters: status, source, search, assignedTo, fromDate, toDate, helperAccountId, helperRole
  * Sorting, pagination
  */
 export async function listLeadsAdmin(req: Request, res: Response) {
@@ -454,7 +454,9 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       status,
       source,
       search,
-      assignedTo, // account name OR team name
+      assignedTo,
+      helperAccountId, // ✅ NEW
+      helperRole, // ✅ NEW
       fromDate,
       toDate,
       sortBy = "createdAt",
@@ -508,6 +510,19 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       };
     }
 
+    /* ---------------------
+       ✅ Lead Helper Filter
+    --------------------- */
+    if (helperAccountId || helperRole) {
+      where.leadHelpers = {
+        some: {
+          isActive: true,
+          ...(helperAccountId ? { accountId: helperAccountId } : {}),
+          ...(helperRole ? { role: helperRole as any } : {}),
+        },
+      };
+    }
+
     // ensure sortBy is safe - restrict to allowed columns to avoid SQL injection via Prisma (basic)
     const allowedSortFields = new Set([
       "createdAt",
@@ -520,12 +535,42 @@ export async function listLeadsAdmin(req: Request, res: Response) {
     const orderBy: any = {};
     orderBy[sortField] = sortOrder === "asc" ? "asc" : "desc";
 
+    // const [total, leads] = await prisma.$transaction([
+    //   prisma.lead.count({ where }),
+    //   prisma.lead.findMany({
+    //     where,
+    //     include: {
+    //       // only include the currently active assignment for display
+    //       assignments: {
+    //         where: { isActive: true },
+    //         include: {
+    //           account: {
+    //             select: {
+    //               id: true,
+    //               firstName: true,
+    //               lastName: true,
+    //               contactPhone: true,
+    //             },
+    //           },
+    //           team: { select: { id: true, name: true } },
+    //         },
+    //       },
+    //     },
+    //     orderBy,
+    //     skip: (pageNumber - 1) * pageSize,
+    //     take: pageSize,
+    //   }),
+    // ]);
+
     const [total, leads] = await prisma.$transaction([
       prisma.lead.count({ where }),
       prisma.lead.findMany({
         where,
+        orderBy,
+        skip: (pageNumber - 1) * pageSize,
+        take: pageSize,
         include: {
-          // only include the currently active assignment for display
+          /* Active assignment */
           assignments: {
             where: { isActive: true },
             include: {
@@ -540,10 +585,23 @@ export async function listLeadsAdmin(req: Request, res: Response) {
               team: { select: { id: true, name: true } },
             },
           },
+
+          /* ✅ Active helpers */
+          leadHelpers: {
+            where: { isActive: true },
+            include: {
+              account: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  designation: true,
+                  contactPhone: true,
+                },
+              },
+            },
+          },
         },
-        orderBy,
-        skip: (pageNumber - 1) * pageSize,
-        take: pageSize,
       }),
     ]);
 
@@ -622,15 +680,11 @@ export async function getLeadActivityTimelineAdmin(
   }
 }
 
-
 /**
  * GET /admin/leads/stats/status
  * Optional filters: fromDate, toDate, source
  */
-export async function getLeadCountByStatusAdmin(
-  req: Request,
-  res: Response,
-) {
+export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
   try {
     // guard: admin
     if (!req.user?.roles?.includes?.("ADMIN")) {
@@ -682,5 +736,108 @@ export async function getLeadCountByStatusAdmin(
       500,
       err?.message ?? "Failed to fetch lead counts",
     );
+  }
+}
+
+/**
+ * POST /admin/leads/:id/helpers
+ * Add helper/export employee to lead
+ */
+export async function addLeadHelperAdmin(req: Request, res: Response) {
+  try {
+    if (!req.user?.roles?.includes?.("ADMIN")) {
+      return sendErrorResponse(res, 403, "Admin access required");
+    }
+
+    const performerAccountId = await getAccountIdFromReqUser(req.user?.id);
+    if (!performerAccountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { id: leadId } = req.params;
+    const { accountId, role = "SUPPORT" } = req.body;
+
+    if (!accountId) {
+      return sendErrorResponse(res, 400, "accountId is required");
+    }
+
+    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+    if (!lead) return sendErrorResponse(res, 404, "Lead not found");
+
+    const helper = await prisma.leadHelper.upsert({
+      where: {
+        leadId_accountId: {
+          leadId,
+          accountId,
+        },
+      },
+      update: {
+        isActive: true,
+        removedAt: null,
+      },
+      create: {
+        leadId,
+        accountId,
+        role,
+        addedBy: performerAccountId,
+      },
+    });
+
+    const initialAssignee = await resolveAssigneeSnapshot({
+      accountId: accountId,
+    });
+
+    await prisma.leadActivityLog.create({
+      data: {
+        leadId,
+        action: "HELPER_ADDED",
+        performedBy: performerAccountId,
+        meta: {
+          initialAssignment: initialAssignee,
+          role,
+        },
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Helper added to lead", helper);
+  } catch (err: any) {
+    console.error(err);
+    return sendErrorResponse(res, 500, "Failed to add helper");
+  }
+}
+
+/**
+ * DELETE /admin/leads/:id/helpers/:accountId"
+ * Remove helper/export employee from lead
+ */
+
+export async function removeLeadHelperAdmin(req: Request, res: Response) {
+  try {
+    if (!req.user?.roles?.includes?.("ADMIN")) {
+      return sendErrorResponse(res, 403, "Admin access required");
+    }
+
+    const performerAccountId = await getAccountIdFromReqUser(req.user?.id);
+    const { id: leadId, accountId } = req.params;
+
+    await prisma.leadHelper.updateMany({
+      where: { leadId, accountId, isActive: true },
+      data: { isActive: false, removedAt: new Date() },
+    });
+
+    const initialAssignee = await resolveAssigneeSnapshot({
+      accountId: accountId,
+    });
+
+    await prisma.leadActivityLog.create({
+      data: {
+        leadId,
+        action: "HELPER_REMOVED",
+        performedBy: performerAccountId!,
+        meta: { initialAssignment: initialAssignee },
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Helper removed");
+  } catch (err) {
+    return sendErrorResponse(res, 500, "Failed to remove helper");
   }
 }
