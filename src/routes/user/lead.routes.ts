@@ -10,9 +10,9 @@ import {
   getMyLeadStatusStats,
   removeLeadHelper,
   addLeadHelper,
-  startLeadWork,
-  stopLeadWork,
-  getMyActiveWork,
+  // startLeadWork,
+  // stopLeadWork,
+  // getMyActiveWork,
 } from "../../controller/user/lead.controller";
 
 const router = Router();
@@ -27,8 +27,8 @@ router.get("/leads/:id/activity", requireAuth, getMyLeadActivity);
 router.get("/leads/my/stats/status", requireAuth, getMyLeadStatusStats);
 router.post("/leads/:id/helpers", requireAuth, addLeadHelper);
 router.delete("/leads/:id/helpers/:accountId", requireAuth, removeLeadHelper);
-router.post("/leads/:id/work/start", requireAuth, startLeadWork);
-router.post("/leads/work/stop", requireAuth, stopLeadWork);
-router.get("/leads/work/current", requireAuth, getMyActiveWork);
+// router.post("/leads/:id/work/start", requireAuth, startLeadWork);
+// router.post("/leads/work/stop", requireAuth, stopLeadWork);
+// router.get("/leads/work/current", requireAuth, getMyActiveWork);
 
 export default router;
