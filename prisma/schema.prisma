@@ -158,6 +158,7 @@ model Account {
   dsuEntries                DsuEntry[]
   leadHelpers               LeadHelper[]               @relation("HelperAccount")
   addedHelpers              LeadHelper[]               @relation("HelperAddedBy")
+  employeeLeadWorks         EmployeeLeadWork[]
 
   @@index([isActive])
   @@index([jobType])
@@ -795,6 +796,8 @@ enum LeadActivityAction {
   CLOSED
   HELPER_ADDED
   HELPER_REMOVED
+  WORK_STARTED
+  WORK_ENDED
 }
 
 enum LeadHelperRole {
@@ -827,11 +830,12 @@ model Lead {
 
   // account     Account?          @relation("LeadAccount", fields: [accountId], references: [id])
   // accountId   String?
-  assignments LeadAssignment[]
-  activity    LeadActivityLog[]
-  customer    Customer?         @relation(fields: [customerId], references: [id])
-  customerId  String?
-  leadHelpers LeadHelper[]
+  assignments       LeadAssignment[]
+  activity          LeadActivityLog[]
+  customer          Customer?          @relation(fields: [customerId], references: [id])
+  customerId        String?
+  leadHelpers       LeadHelper[]
+  employeeLeadWorks EmployeeLeadWork[]
 
   @@index([source])
   @@index([status])
@@ -889,6 +893,29 @@ model LeadHelper {
   @@unique([leadId, accountId])
   @@index([leadId])
   @@index([accountId])
+}
+
+model EmployeeLeadWork {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  isActive Boolean @default(true)
+
+  // optional context
+  startedFrom String? // MANUAL | AUTO | DSU | MOBILE
+  note        String?
+
+  @@unique([accountId, isActive]) // 🔒 ONLY ONE ACTIVE LEAD
+  @@index([accountId])
+  @@index([leadId])
 }
 
 model LeadActivityLog {

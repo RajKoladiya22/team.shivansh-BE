@@ -1,4 +1,4 @@
-// src/controller/open/employye.controller.ts
+// src/controller/common/employye.controller.ts
 
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
@@ -136,6 +136,94 @@ export async function listEmployees(req: Request, res: Response) {
       res,
       500,
       err?.message ?? "Failed to fetch employees",
+    );
+  }
+}
+
+
+/**
+ * GET /common/employees/:id
+ * Employee basic profile (common access)
+ */
+export async function getEmployeeById(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return sendErrorResponse(res, 400, "Employee id is required");
+    }
+
+    const account = await prisma.account.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        registerNumber: true,
+        firstName: true,
+        lastName: true,
+        designation: true,
+        jobType: true,
+        contactPhone: true,
+        contactEmail: true,
+        avatar: true,
+        bio: true,
+        address: true,
+        isBusy: true,
+        isActive: true,
+        joinedAt: true,
+        createdAt: true,
+
+        teams: {
+          where: { isActive: true },
+          select: {
+            role: true,
+            team: {
+              select: {
+                id: true,
+                name: true,
+                description: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!account || !account.isActive) {
+      return sendErrorResponse(res, 404, "Employee not found");
+    }
+
+    const response = {
+      id: account.id,
+      registerNumber: account.registerNumber,
+      name: `${account.firstName} ${account.lastName}`.trim(),
+      firstName: account.firstName,
+      lastName: account.lastName,
+      designation: account.designation,
+      jobType: account.jobType,
+      contactPhone: account.contactPhone,
+      contactEmail: account.contactEmail,
+      avatar: account.avatar,
+      bio: account.bio,
+      address: account.address,
+      isBusy: account.isBusy,
+      joinedAt: account.joinedAt,
+      createdAt: account.createdAt,
+
+      teams: account.teams.map((t) => ({
+        id: t.team.id,
+        name: t.team.name,
+        description: t.team.description,
+        role: t.role, // LEAD | MEMBER | null
+      })),
+    };
+
+    return sendSuccessResponse(res, 200, "Employee fetched", response);
+  } catch (err: any) {
+    console.error("getEmployeeById error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch employee",
     );
   }
 }

@@ -197,16 +197,68 @@ export async function getProfile(req: Request, res: Response) {
   }
 }
 
+// /**
+//  * PATCH /user/account/busy
+//  * Body: { isBusy: boolean }
+//  */
+// export async function updateMyBusyStatus(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+//     const { isBusy } = req.body as { isBusy: boolean };
+//     if (typeof isBusy !== "boolean") {
+//       return sendErrorResponse(res, 400, "isBusy must be boolean");
+//     }
+
+//     const user = await prisma.user.findUnique({
+//       where: { id: userId },
+//       select: { accountId: true },
+//     });
+//     if (!user?.accountId) {
+//       return sendErrorResponse(res, 400, "Invalid account");
+//     }
+
+//     const account = await prisma.account.update({
+//       where: { id: user.accountId },
+//       data: { isBusy },
+//       select: {
+//         id: true,
+//         isBusy: true,
+//         firstName: true,
+//         lastName: true,
+//       },
+//     });
+
+//     /** 🔔 emit socket event */
+//     const io = getIo();
+//     io.emit("busy:changed", {
+//       accountId: account.id,
+//       isBusy: account.isBusy,
+//       source: "MANUAL",
+//     });
+
+//     return sendSuccessResponse(res, 200, "Busy status updated", account);
+//   } catch (err: any) {
+//     console.error("updateMyBusyStatus error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to update busy");
+//   }
+// }
+
 /**
  * PATCH /user/account/busy
- * Body: { isBusy: boolean }
+ * Body: { isBusy: boolean; reason?: string }
  */
 export async function updateMyBusyStatus(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
 
-    const { isBusy } = req.body as { isBusy: boolean };
+    const { isBusy, reason } = req.body as {
+      isBusy: boolean;
+      reason?: string;
+    };
+
     if (typeof isBusy !== "boolean") {
       return sendErrorResponse(res, 400, "isBusy must be boolean");
     }
@@ -215,32 +267,86 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
       where: { id: userId },
       select: { accountId: true },
     });
+
     if (!user?.accountId) {
       return sendErrorResponse(res, 400, "Invalid account");
     }
 
-    const account = await prisma.account.update({
-      where: { id: user.accountId },
-      data: { isBusy },
-      select: {
-        id: true,
-        isBusy: true,
-        firstName: true,
-        lastName: true,
-      },
+    /**
+     * 🔒 Atomic operation
+     */
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Get current state
+      const current = await tx.account.findUnique({
+        where: { id: user.accountId },
+        select: { id: true, isBusy: true },
+      });
+
+      if (!current) throw new Error("Account not found");
+
+      // ⛔ No-op protection (prevents duplicate logs)
+      if (current.isBusy === isBusy) {
+        return {
+          account: current,
+          skipped: true,
+        };
+      }
+
+      // 2. Update account
+      const updatedAccount = await tx.account.update({
+        where: { id: user.accountId },
+        data: { isBusy },
+        select: {
+          id: true,
+          isBusy: true,
+          firstName: true,
+          lastName: true,
+        },
+      });
+
+      // 3. Create busy activity log
+      await tx.busyActivityLog.create({
+        data: {
+          accountId: user.accountId,
+          fromBusy: current.isBusy,
+          toBusy: isBusy,
+          reason: reason ?? "MANUAL",
+        },
+      });
+
+      return {
+        account: updatedAccount,
+        skipped: false,
+      };
     });
 
-    /** 🔔 emit socket event */
-    const io = getIo();
-    io.emit("busy:changed", {
-      accountId: account.id,
-      isBusy: account.isBusy,
-      source: "MANUAL",
-    });
+    /**
+     * 🔔 Emit socket only if state changed
+     */
+    if (!result.skipped) {
+      const io = getIo();
+      io.emit("busy:changed", {
+        accountId: result.account.id,
+        isBusy: result.account.isBusy,
+        source: reason ?? "MANUAL",
+      });
+    }
 
-    return sendSuccessResponse(res, 200, "Busy status updated", account);
+    return sendSuccessResponse(
+      res,
+      200,
+      result.skipped
+        ? "Busy status unchanged"
+        : "Busy status updated",
+      result.account,
+    );
   } catch (err: any) {
     console.error("updateMyBusyStatus error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to update busy");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to update busy status",
+    );
   }
 }
+

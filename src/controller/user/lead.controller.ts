@@ -72,6 +72,36 @@ async function resolvePerformerSnapshot(accountId: string | null) {
   };
 }
 
+async function assertLeadAccessForUser(leadId: string, accountId: string) {
+  const lead = await prisma.lead.findFirst({
+    where: {
+      id: leadId,
+      assignments: {
+        some: {
+          isActive: true,
+          OR: [
+            { accountId },
+            {
+              team: {
+                members: {
+                  some: { accountId },
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+    select: { id: true },
+  });
+
+  if (!lead) {
+    throw new Error("ACCESS_DENIED");
+  }
+
+  return lead;
+}
+
 /* ==========================
    USER (EMPLOYEE) CONTROLLER
    ========================== */
@@ -167,6 +197,20 @@ export async function listMyLeads(req: Request, res: Response) {
                 },
               },
               team: { select: { id: true, name: true } },
+            },
+          },
+          leadHelpers: {
+            where: { isActive: true },
+            include: {
+              account: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  designation: true,
+                  contactPhone: true,
+                },
+              },
             },
           },
         },
@@ -509,7 +553,6 @@ export async function getMyLeadActivity(req: Request, res: Response) {
   }
 }
 
-
 /**
  * GET /leads/my/stats/status
  * Lead counts by status for current user
@@ -571,8 +614,6 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
     );
   }
 }
-
-
 
 /**
  * GET /leads/my/dsu
@@ -714,6 +755,349 @@ export async function listMyDsuLeads(req: Request, res: Response) {
     });
   } catch (err: any) {
     console.error("List my DSU leads error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch DSU leads");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch DSU leads",
+    );
   }
 }
+
+/**
+ * POST /user/leads/:id/helpers
+ * Add helper/export employee to lead
+ */
+export async function addLeadHelper(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const performerAccountId = await getAccountIdFromReqUser(userId);
+    if (!performerAccountId)
+      return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: leadId } = req.params;
+    const { accountId, role = "SUPPORT" } = req.body;
+
+    if (!accountId) {
+      return sendErrorResponse(res, 400, "accountId is required");
+    }
+
+    // 🔐 ACCESS CHECK (admin OR assignee)
+    if (!req.user?.roles?.includes("ADMIN")) {
+      try {
+        await assertLeadAccessForUser(leadId, performerAccountId);
+      } catch {
+        return sendErrorResponse(res, 403, "Access denied");
+      }
+    }
+
+    // ensure lead exists
+    const leadExists = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true },
+    });
+    if (!leadExists) {
+      return sendErrorResponse(res, 404, "Lead not found");
+    }
+
+    const helper = await prisma.leadHelper.upsert({
+      where: {
+        leadId_accountId: {
+          leadId,
+          accountId,
+        },
+      },
+      update: {
+        isActive: true,
+        removedAt: null,
+        role,
+      },
+      create: {
+        leadId,
+        accountId,
+        role,
+        addedBy: performerAccountId,
+      },
+    });
+
+    const helperSnapshot = await resolveAssigneeSnapshot({ accountId });
+
+    await prisma.leadActivityLog.create({
+      data: {
+        leadId,
+        action: "HELPER_ADDED",
+        performedBy: performerAccountId,
+        meta: {
+          initialAssignment: helperSnapshot,
+          role,
+        },
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Helper added to Lead", helper);
+  } catch (err: any) {
+    console.error("addLeadHelper error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to add helper");
+  }
+}
+
+/**
+ * DELETE /user/leads/:id/helpers/:accountId"
+ * Remove helper/export employee from lead
+ */
+
+export async function removeLeadHelper(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const performerAccountId = await getAccountIdFromReqUser(userId);
+    if (!performerAccountId)
+      return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: leadId, accountId } = req.params;
+
+    // 🔐 ACCESS CHECK (admin OR assignee)
+    if (!req.user?.roles?.includes("ADMIN")) {
+      try {
+        await assertLeadAccessForUser(leadId, performerAccountId);
+      } catch {
+        return sendErrorResponse(res, 403, "Access denied");
+      }
+    }
+
+    const updated = await prisma.leadHelper.updateMany({
+      where: {
+        leadId,
+        accountId,
+        isActive: true,
+      },
+      data: {
+        isActive: false,
+        removedAt: new Date(),
+      },
+    });
+
+    if (updated.count === 0) {
+      return sendErrorResponse(res, 404, "Helper not found or already removed");
+    }
+
+    const helperSnapshot = await resolveAssigneeSnapshot({ accountId });
+
+    await prisma.leadActivityLog.create({
+      data: {
+        leadId,
+        action: "HELPER_REMOVED",
+        performedBy: performerAccountId,
+        meta: {
+          initialAssignment: helperSnapshot,
+        },
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Helper removed");
+  } catch (err: any) {
+    console.error("removeLeadHelper error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to remove helper",
+    );
+  }
+}
+
+export async function startLeadWork(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
+
+    const { id: leadId } = req.params;
+
+    // 🔐 ensure user has access (assignee OR team OR helper)
+    const hasAccess = await prisma.lead.findFirst({
+      where: {
+        id: leadId,
+        OR: [
+          {
+            assignments: {
+              some: {
+                isActive: true,
+                OR: [
+                  { accountId },
+                  { team: { members: { some: { accountId } } } },
+                ],
+              },
+            },
+          },
+          {
+            leadHelpers: {
+              some: { accountId, isActive: true },
+            },
+          },
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (!hasAccess) return sendErrorResponse(res, 403, "Access denied");
+
+    const active = await prisma.employeeLeadWork.findFirst({
+      where: { accountId, isActive: true },
+    });
+
+    if (active) {
+      return sendErrorResponse(
+        res,
+        409,
+        "You are already working on another lead",
+      );
+    }
+
+    const work = await prisma.$transaction(async (tx) => {
+      const w = await tx.employeeLeadWork.create({
+        data: {
+          accountId,
+          leadId,
+          startedFrom: "MANUAL",
+        },
+      });
+
+      // 🔁 auto busy ON
+      await tx.account.update({
+        where: { id: accountId },
+        data: { isBusy: true },
+      });
+
+      await tx.busyActivityLog.create({
+        data: {
+          accountId,
+          fromBusy: false,
+          toBusy: true,
+          reason: "LEAD_WORK_START",
+        },
+      });
+
+      const initialAssignee = await resolveAssigneeSnapshot({
+        accountId: accountId,
+      });
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId,
+          action: "WORK_STARTED",
+          performedBy: accountId,
+          meta: {
+            initialAssignment: initialAssignee,
+            startedAt: w.startedAt,
+          },
+        },
+      });
+
+      return w;
+    });
+
+    return sendSuccessResponse(res, 200, "Work started", work);
+  } catch (err: any) {
+    console.error("startLeadWork error:", err);
+    return sendErrorResponse(res, 500, err.message);
+  }
+}
+
+export async function stopLeadWork(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
+
+    const active = await prisma.employeeLeadWork.findFirst({
+      where: { accountId, isActive: true },
+    });
+
+    if (!active) return sendErrorResponse(res, 404, "No active work");
+
+    await prisma.$transaction(async (tx) => {
+      await tx.employeeLeadWork.update({
+        where: { id: active.id },
+        data: {
+          isActive: false,
+          endedAt: new Date(),
+        },
+      });
+
+      await tx.account.update({
+        where: { id: accountId },
+        data: { isBusy: false },
+      });
+
+      await tx.busyActivityLog.create({
+        data: {
+          accountId,
+          fromBusy: true,
+          toBusy: false,
+          reason: "LEAD_WORK_END",
+        },
+      });
+
+      const initialAssignee = await resolveAssigneeSnapshot({
+        accountId: accountId,
+      });
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId: active.leadId,
+          action: "WORK_ENDED",
+          performedBy: accountId,
+          meta: {
+            initialAssignment: initialAssignee,
+            endedAt: new Date().toISOString(),
+          },
+        },
+      });
+    });
+
+    return sendSuccessResponse(res, 200, "Work stopped");
+  } catch (err: any) {
+    console.error("stopLeadWork error:", err);
+    return sendErrorResponse(res, 500, err.message);
+  }
+}
+
+export async function getMyActiveWork(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return sendErrorResponse(res, 401, "Unauthorized");
+    }
+
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) {
+      return sendErrorResponse(res, 401, "Invalid user");
+    }
+
+    const work = await prisma.employeeLeadWork.findFirst({
+      where: { accountId, isActive: true },
+      include: {
+        lead: {
+          select: {
+            id: true,
+            customerName: true,
+            status: true,
+            productTitle: true,
+          },
+        },
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Active work", work);
+  } catch (error) {
+    console.error("Error in getMyActiveWork:", error);
+    return sendErrorResponse(res, 500, "Failed to get active work");
+  }
+}
+
