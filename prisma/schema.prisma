@@ -128,6 +128,9 @@ model Account {
   updatedAt      DateTime  @updatedAt
   isBusy         Boolean   @default(false)
 
+  activeLeadId String?
+  activeLead   Lead?   @relation(fields: [activeLeadId], references: [id])
+
   // Relation to
   user            User?
   registration    RegistrationRequest?
@@ -158,7 +161,7 @@ model Account {
   dsuEntries                DsuEntry[]
   leadHelpers               LeadHelper[]               @relation("HelperAccount")
   addedHelpers              LeadHelper[]               @relation("HelperAddedBy")
-  employeeLeadWorks         EmployeeLeadWork[]
+  // employeeLeadWorks         EmployeeLeadWork[]
 
   @@index([isActive])
   @@index([jobType])
@@ -835,7 +838,8 @@ model Lead {
   customer          Customer?          @relation(fields: [customerId], references: [id])
   customerId        String?
   leadHelpers       LeadHelper[]
-  employeeLeadWorks EmployeeLeadWork[]
+  // employeeLeadWorks EmployeeLeadWork[]
+  accounts          Account[]
 
   @@index([source])
   @@index([status])
@@ -895,28 +899,28 @@ model LeadHelper {
   @@index([accountId])
 }
 
-model EmployeeLeadWork {
-  id String @id @default(uuid())
+// model EmployeeLeadWork {
+//   id String @id @default(uuid())
 
-  accountId String
-  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+//   accountId String
+//   account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
-  leadId String
-  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+//   leadId String
+//   lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
-  startedAt DateTime  @default(now())
-  endedAt   DateTime?
+//   startedAt DateTime  @default(now())
+//   endedAt   DateTime?
 
-  isActive Boolean @default(true)
+//   isActive Boolean @default(true)
 
-  // optional context
-  startedFrom String? // MANUAL | AUTO | DSU | MOBILE
-  note        String?
+//   // optional context
+//   startedFrom String? // MANUAL | AUTO | DSU | MOBILE
+//   note        String?
 
-  @@unique([accountId, isActive]) // 🔒 ONLY ONE ACTIVE LEAD
-  @@index([accountId])
-  @@index([leadId])
-}
+//   // @@unique([accountId, isActive]) // 🔒 ONLY ONE ACTIVE LEAD
+//   @@index([accountId])
+//   @@index([leadId])
+// }
 
 model LeadActivityLog {
   id String @id @default(uuid())

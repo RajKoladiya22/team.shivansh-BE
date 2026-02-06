@@ -5,6 +5,7 @@ import {
   sendErrorResponse,
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
+import { getIo } from "../../core/utils/socket";
 
 /**
  * Helpers (kept local so this file is self-contained)
@@ -118,6 +119,11 @@ export async function listMyLeads(req: Request, res: Response) {
     const accountId = await getAccountIdFromReqUser(userId);
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { activeLeadId: true },
+    });
+
     const {
       status,
       source,
@@ -180,7 +186,7 @@ export async function listMyLeads(req: Request, res: Response) {
     const orderBy: any = {};
     orderBy[sortField] = sortOrder === "asc" ? "asc" : "desc";
 
-    const [total, leads] = await prisma.$transaction([
+    const [total, leads] = await Promise.all([
       prisma.lead.count({ where }),
       prisma.lead.findMany({
         where,
@@ -220,8 +226,38 @@ export async function listMyLeads(req: Request, res: Response) {
       }),
     ]);
 
+    const activeLeadId = account?.activeLeadId;
+
+    // Status priority map
+    const STATUS_PRIORITY: Record<string, number> = {
+      PENDING: 1,
+      IN_PROGRESS: 2,
+      DONE: 3,
+      CLOSED: 3,
+    };
+
+    leads.sort((a, b) => {
+      // ⭐ 1. Active working lead always first
+      if (a.id === activeLeadId) return -1;
+      if (b.id === activeLeadId) return 1;
+
+      // ⭐ 2. Status priority sorting
+      const aPriority = STATUS_PRIORITY[a.status] ?? 99;
+      const bPriority = STATUS_PRIORITY[b.status] ?? 99;
+
+      if (aPriority !== bPriority) return aPriority - bPriority;
+
+      // ⭐ 3. Fallback → keep DB sort order (createdAt etc)
+      return 0;
+    });
+
+    const MyleadsData = leads.map((lead) => ({
+      ...lead,
+      isWorking: lead.id === activeLeadId,
+    }));
+
     return sendSuccessResponse(res, 200, "My leads fetched", {
-      data: leads,
+      data: MyleadsData,
       meta: {
         page: pageNumber,
         limit: pageSize,
@@ -907,6 +943,171 @@ export async function removeLeadHelper(req: Request, res: Response) {
   }
 }
 
+export async function startLeadWork(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
+
+    const { id: leadId } = req.params;
+
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { activeLeadId: true },
+    });
+
+    if (account?.activeLeadId) {
+      return sendErrorResponse(res, 409, "Already working on another lead");
+    }
+
+    const initialAssignee = await resolveAssigneeSnapshot({
+      accountId: accountId,
+    });
+
+    await prisma.$transaction([
+      prisma.account.update({
+        where: { id: accountId },
+        data: {
+          isBusy: true,
+          activeLeadId: leadId,
+        },
+      }),
+
+      prisma.lead.update({
+        where: { id: leadId },
+        data: { status: "IN_PROGRESS" },
+      }),
+
+      prisma.leadActivityLog.create({
+        data: {
+          leadId,
+          action: "WORK_STARTED",
+          performedBy: accountId,
+          meta: {
+            initialAssignment: initialAssignee,
+            startedAt: new Date().toISOString(),
+          },
+        },
+      }),
+
+      prisma.busyActivityLog.create({
+        data: {
+          accountId: accountId,
+          fromBusy: true,
+          toBusy: false,
+          reason: "WORK_STARTED",
+        },
+      }),
+    ]);
+
+    const io = getIo();
+    io.emit("busy:changed", {
+      accountId: accountId,
+      isBusy: true,
+      source: "WORK_STARTED",
+    });
+
+    return sendSuccessResponse(res, 200, "Work started", {leadId});
+  } catch (err: any) {
+    return sendErrorResponse(res, 500, err.message);
+  }
+}
+
+export async function stopLeadWork(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const accountId = await getAccountIdFromReqUser(userId);
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
+
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { activeLeadId: true },
+    });
+
+    if (!account?.activeLeadId) {
+      return sendErrorResponse(res, 404, "No active work");
+    }
+
+    const initialAssignee = await resolveAssigneeSnapshot({
+      accountId: accountId,
+    });
+
+    await prisma.$transaction([
+      prisma.account.update({
+        where: { id: accountId },
+        data: {
+          isBusy: false,
+          activeLeadId: null,
+        },
+      }),
+
+      prisma.leadActivityLog.create({
+        data: {
+          leadId: account.activeLeadId,
+          action: "WORK_ENDED",
+          performedBy: accountId,
+          meta: {
+            initialAssignment: initialAssignee,
+            endedAt: new Date().toISOString(),
+          },
+        },
+      }),
+
+      prisma.busyActivityLog.create({
+        data: {
+          accountId: accountId,
+          fromBusy: false,
+          toBusy: true,
+          reason: "WORK_ENDED",
+        },
+      }),
+    ]);
+
+    const io = getIo();
+    io.emit("busy:changed", {
+      accountId: accountId,
+      isBusy: false,
+      source: "WORK_ENDED",
+    });
+
+    return sendSuccessResponse(res, 200, "Work stopped", {
+      leadId:account
+    });
+  } catch (err: any) {
+    return sendErrorResponse(res, 500, err.message);
+  }
+}
+
+export async function getMyActiveWork(req: Request, res: Response) {
+  const userId = req.user?.id;
+  if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+  const accountId = await getAccountIdFromReqUser(userId);
+  if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
+
+  const account = await prisma.account.findUnique({
+    where: { id: accountId },
+    include: {
+      activeLead: {
+        select: {
+          id: true,
+          customerName: true,
+          status: true,
+          productTitle: true,
+        },
+      },
+    },
+  });
+
+  return sendSuccessResponse(res, 200, "Active work", {
+      leadId:account?.activeLead
+    });
+}
+
 // export async function startLeadWork(req: Request, res: Response) {
 //   try {
 //     const userId = req.user?.id;
@@ -1000,6 +1201,13 @@ export async function removeLeadHelper(req: Request, res: Response) {
 //       return w;
 //     });
 
+//     const io = getIo();
+// io.emit("busy:changed", {
+//   accountId: accountId,
+//   isBusy: true,
+//   source: "WORK_STARTED",
+// });
+
 //     return sendSuccessResponse(res, 200, "Work started", work);
 //   } catch (err: any) {
 //     console.error("startLeadWork error:", err);
@@ -1021,9 +1229,17 @@ export async function removeLeadHelper(req: Request, res: Response) {
 
 //     if (!active) return sendErrorResponse(res, 404, "No active work");
 
+//     console.log("\n\nactive------------------------->\n", active);
+//     console.log("\naccountId------------------------->\n", accountId);
+
 //     await prisma.$transaction(async (tx) => {
-//       await tx.employeeLeadWork.update({
-//         where: { id: active.id },
+//       await tx.employeeLeadWork.updateMany({
+//         where: {
+//           id: active.id,
+//           accountId,
+//           isActive: true,
+//           endedAt: null
+//         },
 //         data: {
 //           isActive: false,
 //           endedAt: new Date(),
@@ -1044,9 +1260,9 @@ export async function removeLeadHelper(req: Request, res: Response) {
 //         },
 //       });
 
-//       const initialAssignee = await resolveAssigneeSnapshot({
-//         accountId: accountId,
-//       });
+// const initialAssignee = await resolveAssigneeSnapshot({
+//   accountId: accountId,
+// });
 
 //       await tx.leadActivityLog.create({
 //         data: {
@@ -1059,6 +1275,13 @@ export async function removeLeadHelper(req: Request, res: Response) {
 //           },
 //         },
 //       });
+//     });
+
+//     const io = getIo();
+//     io.emit("busy:changed", {
+//       accountId: accountId,
+//       isBusy: false,
+//       source: "WORK_ENDED",
 //     });
 
 //     return sendSuccessResponse(res, 200, "Work stopped");
@@ -1100,4 +1323,3 @@ export async function removeLeadHelper(req: Request, res: Response) {
 //     return sendErrorResponse(res, 500, "Failed to get active work");
 //   }
 // }
-
