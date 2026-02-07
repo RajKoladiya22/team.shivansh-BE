@@ -966,7 +966,8 @@ export async function startLeadWork(req: Request, res: Response) {
       accountId: accountId,
     });
 
-    await prisma.$transaction([
+    // await prisma.$transaction([
+    await Promise.all([
       prisma.account.update({
         where: { id: accountId },
         data: {
@@ -1015,6 +1016,73 @@ export async function startLeadWork(req: Request, res: Response) {
   }
 }
 
+// export async function stopLeadWork(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+//     const accountId = await getAccountIdFromReqUser(userId);
+//     if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
+
+//     const account = await prisma.account.findUnique({
+//       where: { id: accountId },
+//       select: { activeLeadId: true },
+//     });
+
+//     if (!account?.activeLeadId) {
+//       return sendErrorResponse(res, 404, "No active work");
+//     }
+
+//     const initialAssignee = await resolveAssigneeSnapshot({
+//       accountId: accountId,
+//     });
+
+//     await prisma.$transaction([
+//       prisma.account.update({
+//         where: { id: accountId },
+//         data: {
+//           isBusy: false,
+//           activeLeadId: null,
+//         },
+//       }),
+
+//       prisma.leadActivityLog.create({
+//         data: {
+//           leadId: account.activeLeadId,
+//           action: "WORK_ENDED",
+//           performedBy: accountId,
+//           meta: {
+//             initialAssignment: initialAssignee,
+//             endedAt: new Date().toISOString(),
+//           },
+//         },
+//       }),
+
+//       prisma.busyActivityLog.create({
+//         data: {
+//           accountId: accountId,
+//           fromBusy: false,
+//           toBusy: true,
+//           reason: "WORK_ENDED",
+//         },
+//       }),
+//     ]);
+
+//     const io = getIo();
+//     io.emit("busy:changed", {
+//       accountId: accountId,
+//       isBusy: false,
+//       source: "WORK_ENDED",
+//     });
+
+//     return sendSuccessResponse(res, 200, "Work stopped", {
+//       leadId:account
+//     });
+//   } catch (err: any) {
+//     return sendErrorResponse(res, 500, err.message);
+//   }
+// }
+
 export async function stopLeadWork(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
@@ -1023,20 +1091,65 @@ export async function stopLeadWork(req: Request, res: Response) {
     const accountId = await getAccountIdFromReqUser(userId);
     if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
 
+    // fetch account with activeLeadId (we need activeLeadId before we clear it)
     const account = await prisma.account.findUnique({
       where: { id: accountId },
       select: { activeLeadId: true },
     });
 
-    if (!account?.activeLeadId) {
+    const leadId = account?.activeLeadId;
+    if (!leadId) {
       return sendErrorResponse(res, 404, "No active work");
     }
 
-    const initialAssignee = await resolveAssigneeSnapshot({
-      accountId: accountId,
+    // Find the most recent WORK_STARTED entry for this lead by this account
+    const lastStart = await prisma.leadActivityLog.findFirst({
+      where: {
+        leadId,
+        performedBy: accountId,
+        action: "WORK_STARTED",
+      },
+      orderBy: { createdAt: "desc" },
+      take: 1,
     });
 
-    await prisma.$transaction([
+    const now = new Date();
+    let durationSeconds = 0;
+    let startedAtIso: string | null = null;
+
+    if (lastStart?.meta && typeof lastStart.meta === "object") {
+      // prefer meta.startedAt if present, else fallback to createdAt
+      startedAtIso = (lastStart.meta as any).startedAt ?? lastStart.createdAt.toISOString();
+      if (startedAtIso) {
+        const startedAtDate = new Date(startedAtIso);
+        if (!isNaN(startedAtDate.getTime())) {
+          durationSeconds = Math.max(0, Math.floor((now.getTime() - startedAtDate.getTime()) / 1000));
+        }
+      }
+    } else {
+      // fallback: use createdAt from lastStart if present
+      if (lastStart?.createdAt) {
+        const startedAtDate = lastStart.createdAt;
+        durationSeconds = Math.max(0, Math.floor((now.getTime() - startedAtDate.getTime()) / 1000));
+        startedAtIso = startedAtDate.toISOString();
+      }
+    }
+
+    // Prepare meta for WORK_ENDED
+    const endedAtIso = now.toISOString();
+    const workEndMeta = {
+      initialAssignment: await resolveAssigneeSnapshot({ accountId }),
+      startedAt: startedAtIso,
+      endedAt: endedAtIso,
+      durationSeconds,
+    };
+
+    // Transaction:
+    // - clear account.activeLeadId, set isBusy false
+    // - create WORK_ENDED log with duration
+    // - increment lead.totalWorkSeconds by durationSeconds
+    // - create busyActivityLog event
+    const [updatedAccount, workLog, updatedLead] = await Promise.all([
       prisma.account.update({
         where: { id: accountId },
         data: {
@@ -1047,40 +1160,52 @@ export async function stopLeadWork(req: Request, res: Response) {
 
       prisma.leadActivityLog.create({
         data: {
-          leadId: account.activeLeadId,
+          leadId,
           action: "WORK_ENDED",
           performedBy: accountId,
-          meta: {
-            initialAssignment: initialAssignee,
-            endedAt: new Date().toISOString(),
-          },
+          meta: workEndMeta,
         },
       }),
 
-      prisma.busyActivityLog.create({
+      prisma.lead.update({
+        where: { id: leadId },
         data: {
-          accountId: accountId,
-          fromBusy: false,
-          toBusy: true,
-          reason: "WORK_ENDED",
+          totalWorkSeconds: { increment: durationSeconds },
         },
+        select: { id: true, totalWorkSeconds: true },
       }),
+
+      // create busyActivityLog (optional, can be part of separate array entry above)
     ]);
+
+    // create busyActivityLog outside the above array (or include it in the transaction if preferred)
+    await prisma.busyActivityLog.create({
+      data: {
+        accountId: accountId,
+        fromBusy: true,
+        toBusy: false,
+        reason: "WORK_ENDED",
+      },
+    });
 
     const io = getIo();
     io.emit("busy:changed", {
-      accountId: accountId,
+      accountId,
       isBusy: false,
       source: "WORK_ENDED",
     });
 
     return sendSuccessResponse(res, 200, "Work stopped", {
-      leadId:account
+      leadId,
+      durationSeconds,
+      totalWorkSeconds: (updatedLead as any)?.totalWorkSeconds ?? null,
+      endedAt: endedAtIso,
     });
   } catch (err: any) {
     return sendErrorResponse(res, 500, err.message);
   }
 }
+
 
 export async function getMyActiveWork(req: Request, res: Response) {
   const userId = req.user?.id;

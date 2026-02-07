@@ -831,6 +831,8 @@ model Lead {
   updatedAt    DateTime  @updatedAt
   closedAt     DateTime?
 
+  totalWorkSeconds Int @default(0)
+
   // account     Account?          @relation("LeadAccount", fields: [accountId], references: [id])
   // accountId   String?
   assignments       LeadAssignment[]
@@ -898,29 +900,6 @@ model LeadHelper {
   @@index([leadId])
   @@index([accountId])
 }
-
-// model EmployeeLeadWork {
-//   id String @id @default(uuid())
-
-//   accountId String
-//   account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-//   leadId String
-//   lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
-
-//   startedAt DateTime  @default(now())
-//   endedAt   DateTime?
-
-//   isActive Boolean @default(true)
-
-//   // optional context
-//   startedFrom String? // MANUAL | AUTO | DSU | MOBILE
-//   note        String?
-
-//   // @@unique([accountId, isActive]) // 🔒 ONLY ONE ACTIVE LEAD
-//   @@index([accountId])
-//   @@index([leadId])
-// }
 
 model LeadActivityLog {
   id String @id @default(uuid())
