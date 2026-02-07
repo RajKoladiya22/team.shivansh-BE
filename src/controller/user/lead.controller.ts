@@ -1010,78 +1010,11 @@ export async function startLeadWork(req: Request, res: Response) {
       source: "WORK_STARTED",
     });
 
-    return sendSuccessResponse(res, 200, "Work started", {leadId});
+    return sendSuccessResponse(res, 200, "Work started", { leadId });
   } catch (err: any) {
     return sendErrorResponse(res, 500, err.message);
   }
 }
-
-// export async function stopLeadWork(req: Request, res: Response) {
-//   try {
-//     const userId = req.user?.id;
-//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-//     const accountId = await getAccountIdFromReqUser(userId);
-//     if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
-
-//     const account = await prisma.account.findUnique({
-//       where: { id: accountId },
-//       select: { activeLeadId: true },
-//     });
-
-//     if (!account?.activeLeadId) {
-//       return sendErrorResponse(res, 404, "No active work");
-//     }
-
-//     const initialAssignee = await resolveAssigneeSnapshot({
-//       accountId: accountId,
-//     });
-
-//     await prisma.$transaction([
-//       prisma.account.update({
-//         where: { id: accountId },
-//         data: {
-//           isBusy: false,
-//           activeLeadId: null,
-//         },
-//       }),
-
-//       prisma.leadActivityLog.create({
-//         data: {
-//           leadId: account.activeLeadId,
-//           action: "WORK_ENDED",
-//           performedBy: accountId,
-//           meta: {
-//             initialAssignment: initialAssignee,
-//             endedAt: new Date().toISOString(),
-//           },
-//         },
-//       }),
-
-//       prisma.busyActivityLog.create({
-//         data: {
-//           accountId: accountId,
-//           fromBusy: false,
-//           toBusy: true,
-//           reason: "WORK_ENDED",
-//         },
-//       }),
-//     ]);
-
-//     const io = getIo();
-//     io.emit("busy:changed", {
-//       accountId: accountId,
-//       isBusy: false,
-//       source: "WORK_ENDED",
-//     });
-
-//     return sendSuccessResponse(res, 200, "Work stopped", {
-//       leadId:account
-//     });
-//   } catch (err: any) {
-//     return sendErrorResponse(res, 500, err.message);
-//   }
-// }
 
 export async function stopLeadWork(req: Request, res: Response) {
   try {
@@ -1119,18 +1052,25 @@ export async function stopLeadWork(req: Request, res: Response) {
 
     if (lastStart?.meta && typeof lastStart.meta === "object") {
       // prefer meta.startedAt if present, else fallback to createdAt
-      startedAtIso = (lastStart.meta as any).startedAt ?? lastStart.createdAt.toISOString();
+      startedAtIso =
+        (lastStart.meta as any).startedAt ?? lastStart.createdAt.toISOString();
       if (startedAtIso) {
         const startedAtDate = new Date(startedAtIso);
         if (!isNaN(startedAtDate.getTime())) {
-          durationSeconds = Math.max(0, Math.floor((now.getTime() - startedAtDate.getTime()) / 1000));
+          durationSeconds = Math.max(
+            0,
+            Math.floor((now.getTime() - startedAtDate.getTime()) / 1000),
+          );
         }
       }
     } else {
       // fallback: use createdAt from lastStart if present
       if (lastStart?.createdAt) {
         const startedAtDate = lastStart.createdAt;
-        durationSeconds = Math.max(0, Math.floor((now.getTime() - startedAtDate.getTime()) / 1000));
+        durationSeconds = Math.max(
+          0,
+          Math.floor((now.getTime() - startedAtDate.getTime()) / 1000),
+        );
         startedAtIso = startedAtDate.toISOString();
       }
     }
@@ -1206,7 +1146,6 @@ export async function stopLeadWork(req: Request, res: Response) {
   }
 }
 
-
 export async function getMyActiveWork(req: Request, res: Response) {
   const userId = req.user?.id;
   if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
@@ -1228,10 +1167,81 @@ export async function getMyActiveWork(req: Request, res: Response) {
     },
   });
 
+  if (!account?.activeLeadId) {
+    return sendSuccessResponse(res, 200, "No active work", null);
+  }
+
   return sendSuccessResponse(res, 200, "Active work", {
-      leadId:account?.activeLead
-    });
+    leadId: account?.activeLead,
+  });
 }
+
+// export async function stopLeadWork(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+//     const accountId = await getAccountIdFromReqUser(userId);
+//     if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
+
+//     const account = await prisma.account.findUnique({
+//       where: { id: accountId },
+//       select: { activeLeadId: true },
+//     });
+
+//     if (!account?.activeLeadId) {
+//       return sendErrorResponse(res, 404, "No active work");
+//     }
+
+//     const initialAssignee = await resolveAssigneeSnapshot({
+//       accountId: accountId,
+//     });
+
+//     await prisma.$transaction([
+//       prisma.account.update({
+//         where: { id: accountId },
+//         data: {
+//           isBusy: false,
+//           activeLeadId: null,
+//         },
+//       }),
+
+//       prisma.leadActivityLog.create({
+//         data: {
+//           leadId: account.activeLeadId,
+//           action: "WORK_ENDED",
+//           performedBy: accountId,
+//           meta: {
+//             initialAssignment: initialAssignee,
+//             endedAt: new Date().toISOString(),
+//           },
+//         },
+//       }),
+
+//       prisma.busyActivityLog.create({
+//         data: {
+//           accountId: accountId,
+//           fromBusy: false,
+//           toBusy: true,
+//           reason: "WORK_ENDED",
+//         },
+//       }),
+//     ]);
+
+//     const io = getIo();
+//     io.emit("busy:changed", {
+//       accountId: accountId,
+//       isBusy: false,
+//       source: "WORK_ENDED",
+//     });
+
+//     return sendSuccessResponse(res, 200, "Work stopped", {
+//       leadId:account
+//     });
+//   } catch (err: any) {
+//     return sendErrorResponse(res, 500, err.message);
+//   }
+// }
 
 // export async function startLeadWork(req: Request, res: Response) {
 //   try {

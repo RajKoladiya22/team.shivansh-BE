@@ -249,6 +249,108 @@ export async function getProfile(req: Request, res: Response) {
  * PATCH /user/account/busy
  * Body: { isBusy: boolean; reason?: string }
  */
+// export async function updateMyBusyStatus(req: Request, res: Response) {
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+//     const { isBusy, reason } = req.body as {
+//       isBusy: boolean;
+//       reason?: string;
+//     };
+
+//     if (typeof isBusy !== "boolean") {
+//       return sendErrorResponse(res, 400, "isBusy must be boolean");
+//     }
+
+//     const user = await prisma.user.findUnique({
+//       where: { id: userId },
+//       select: { accountId: true },
+//     });
+
+//     if (!user?.accountId) {
+//       return sendErrorResponse(res, 400, "Invalid account");
+//     }
+
+//     /**
+//      * 🔒 Atomic operation
+//      */
+//     const result = await prisma.$transaction(async (tx) => {
+//       // 1. Get current state
+//       const current = await tx.account.findUnique({
+//         where: { id: user.accountId },
+//         select: { id: true, isBusy: true },
+//       });
+
+//       if (!current) throw new Error("Account not found");
+
+//       // ⛔ No-op protection (prevents duplicate logs)
+//       if (current.isBusy === isBusy) {
+//         return {
+//           account: current,
+//           skipped: true,
+//         };
+//       }
+
+//       // 2. Update account
+//       const updatedAccount = await tx.account.update({
+//         where: { id: user.accountId },
+//         data: { isBusy },
+//         select: {
+//           id: true,
+//           isBusy: true,
+//           firstName: true,
+//           lastName: true,
+//         },
+//       });
+
+//       // 3. Create busy activity log
+//       await tx.busyActivityLog.create({
+//         data: {
+//           accountId: user.accountId,
+//           fromBusy: current.isBusy,
+//           toBusy: isBusy,
+//           reason: reason ?? "MANUAL",
+//         },
+//       });
+
+//       return {
+//         account: updatedAccount,
+//         skipped: false,
+//       };
+//     });
+
+//     /**
+//      * 🔔 Emit socket only if state changed
+//      */
+//     if (!result.skipped) {
+//       const io = getIo();
+//       io.emit("busy:changed", {
+//         accountId: result.account.id,
+//         isBusy: result.account.isBusy,
+//         source: reason ?? "MANUAL",
+//       });
+//     }
+
+//     return sendSuccessResponse(
+//       res,
+//       200,
+//       result.skipped
+//         ? "Busy status unchanged"
+//         : "Busy status updated",
+//       result.account,
+//     );
+//   } catch (err: any) {
+//     console.error("updateMyBusyStatus error:", err);
+//     return sendErrorResponse(
+//       res,
+//       500,
+//       err?.message ?? "Failed to update busy status",
+//     );
+//   }
+// }
+
+
 export async function updateMyBusyStatus(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
@@ -272,60 +374,120 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
       return sendErrorResponse(res, 400, "Invalid account");
     }
 
-    /**
-     * 🔒 Atomic operation
-     */
+    const now = new Date();
+
     const result = await prisma.$transaction(async (tx) => {
-      // 1. Get current state
-      const current = await tx.account.findUnique({
+      const account = await tx.account.findUnique({
         where: { id: user.accountId },
-        select: { id: true, isBusy: true },
-      });
-
-      if (!current) throw new Error("Account not found");
-
-      // ⛔ No-op protection (prevents duplicate logs)
-      if (current.isBusy === isBusy) {
-        return {
-          account: current,
-          skipped: true,
-        };
-      }
-
-      // 2. Update account
-      const updatedAccount = await tx.account.update({
-        where: { id: user.accountId },
-        data: { isBusy },
         select: {
           id: true,
           isBusy: true,
-          firstName: true,
-          lastName: true,
+          activeLeadId: true,
         },
       });
 
-      // 3. Create busy activity log
+      if (!account) throw new Error("Account not found");
+
+      // ⛔ No-op protection
+      if (account.isBusy === isBusy && !account.activeLeadId) {
+        return { skipped: true, account };
+      }
+
+      /* =====================================================
+         🛑 AUTO-STOP LEAD WORK (CRITICAL FIX)
+      ===================================================== */
+      if (account.activeLeadId && isBusy === false) {
+        const leadId = account.activeLeadId;
+
+        const lastStart = await tx.leadActivityLog.findFirst({
+          where: {
+            leadId,
+            performedBy: account.id,
+            action: "WORK_STARTED",
+          },
+          orderBy: { createdAt: "desc" },
+        });
+
+        let durationSeconds = 0;
+        let startedAtIso: string | null = null;
+
+        if (lastStart?.meta && typeof lastStart.meta === "object") {
+          startedAtIso =
+            (lastStart.meta as any).startedAt ??
+            lastStart.createdAt.toISOString();
+        }
+
+        if (startedAtIso) {
+          const startedAt = new Date(startedAtIso);
+          if (!isNaN(startedAt.getTime())) {
+            durationSeconds = Math.max(
+              0,
+              Math.floor((now.getTime() - startedAt.getTime()) / 1000),
+            );
+          }
+        }
+
+        // 🔻 END WORK
+        await tx.leadActivityLog.create({
+          data: {
+            leadId,
+            action: "WORK_ENDED",
+            performedBy: account.id,
+            meta: {
+              startedAt: startedAtIso,
+              endedAt: now.toISOString(),
+              durationSeconds,
+              autoStopped: true,
+              reason: reason ?? "MANUAL_BUSY_CHANGE",
+            },
+          },
+        });
+
+        await tx.lead.update({
+          where: { id: leadId },
+          data: {
+            totalWorkSeconds: { increment: durationSeconds },
+          },
+        });
+
+        // clear active lead
+        await tx.account.update({
+          where: { id: account.id },
+          data: {
+            activeLeadId: null,
+          },
+        });
+      }
+
+      /* =====================================================
+         UPDATE BUSY STATE
+      ===================================================== */
+      const updatedAccount = await tx.account.update({
+        where: { id: account.id },
+        data: { isBusy },
+        select: { id: true, isBusy: true },
+      });
+
       await tx.busyActivityLog.create({
         data: {
-          accountId: user.accountId,
-          fromBusy: current.isBusy,
+          accountId: account.id,
+          fromBusy: account.isBusy,
           toBusy: isBusy,
           reason: reason ?? "MANUAL",
         },
       });
 
       return {
-        account: updatedAccount,
         skipped: false,
+        account: updatedAccount,
       };
     });
 
-    /**
-     * 🔔 Emit socket only if state changed
-     */
+    /* =====================================================
+       SOCKET EVENT
+    ===================================================== */
     if (!result.skipped) {
-      const io = getIo();
-      io.emit("busy:changed", {
+      getIo().emit("busy:changed", {
         accountId: result.account.id,
         isBusy: result.account.isBusy,
         source: reason ?? "MANUAL",
@@ -342,11 +504,8 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
     );
   } catch (err: any) {
     console.error("updateMyBusyStatus error:", err);
-    return sendErrorResponse(
-      res,
-      500,
-      err?.message ?? "Failed to update busy status",
-    );
+    return sendErrorResponse(res, 500, err.message);
   }
 }
+
 
