@@ -232,8 +232,9 @@ export async function listMyLeads(req: Request, res: Response) {
     const STATUS_PRIORITY: Record<string, number> = {
       PENDING: 1,
       IN_PROGRESS: 2,
-      DONE: 3,
-      CLOSED: 3,
+      DEMO_DONE:2.5,
+      CONVERTED: 3,
+      CLOSED: 4,
     };
 
     leads.sort((a, b) => {

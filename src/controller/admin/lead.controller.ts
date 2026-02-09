@@ -428,7 +428,7 @@ export async function closeLeadAdmin(req: Request, res: Response) {
     await prisma.$transaction(async (tx) => {
       await tx.lead.update({
         where: { id },
-        data: { status: "CLOSED", closedAt: new Date() },
+        data: { status: "CLOSED", closedAt: new Date(), remark : "not interested" },
       });
 
       await tx.leadActivityLog.create({
@@ -783,8 +783,9 @@ export async function listLeadsAdmin(req: Request, res: Response) {
     const STATUS_PRIORITY: Record<string, number> = {
       PENDING: 1,
       IN_PROGRESS: 2,
+      DEMO_DONE:2.5,
       CONVERTED: 3,
-      CLOSED: 3,
+      CLOSED: 4,
     };
 
     // ✅ Smart sorting: Working leads first, then by status priority

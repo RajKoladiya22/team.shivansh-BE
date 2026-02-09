@@ -788,6 +788,7 @@ enum LeadStatus {
   IN_PROGRESS
   CLOSED
   CONVERTED
+  DEMO_DONE
 }
 
 enum LeadActivityAction {
