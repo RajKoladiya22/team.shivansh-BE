@@ -374,6 +374,14 @@ export async function updateLeadAdmin(req: Request, res: Response) {
               ? new Date()
               : undefined,
         },
+        include: {
+          assignments: {
+            include: {
+              account: true,
+              team: true,
+            },
+          },
+        },
       });
 
       await tx.leadActivityLog.create({
@@ -633,7 +641,7 @@ export async function closeLeadAdmin(req: Request, res: Response) {
  * GET /admin/leads
  * Filters: status, source, search, assignedTo, fromDate, toDate, helperAccountId, helperRole
  * Sorting, pagination
- * 
+ *
  * Priority sorting:
  * 1. Working leads (leads being actively worked on by any account)
  * 2. PENDING leads
@@ -783,12 +791,12 @@ export async function listLeadsAdmin(req: Request, res: Response) {
     leads.sort((a, b) => {
       // Check if lead A is being worked on
       const isAWorking = a.assignments?.some(
-        (assignment) => assignment.account?.activeLeadId === a.id
+        (assignment) => assignment.account?.activeLeadId === a.id,
       );
-      
+
       // Check if lead B is being worked on
       const isBWorking = b.assignments?.some(
-        (assignment) => assignment.account?.activeLeadId === b.id
+        (assignment) => assignment.account?.activeLeadId === b.id,
       );
 
       // 1️⃣ Working leads always come first
@@ -810,7 +818,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
     // ✅ Add isWorking flag to each lead
     const leadsWithWorkingFlag = leads.map((lead) => {
       const isWorking = lead.assignments?.some(
-        (assignment) => assignment.account?.activeLeadId === lead.id
+        (assignment) => assignment.account?.activeLeadId === lead.id,
       );
 
       return {

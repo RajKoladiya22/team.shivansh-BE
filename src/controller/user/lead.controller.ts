@@ -421,6 +421,14 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       const updatedLead = await tx.lead.update({
         where: { id },
         data,
+        include: {
+          assignments: {
+            include: {
+              account: true,
+              team: true,
+            },
+          },
+        },
       });
 
       // build snapshots and diffs
