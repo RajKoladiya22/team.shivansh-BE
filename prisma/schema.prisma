@@ -816,6 +816,7 @@ model Lead {
   source LeadSource
   type   LeadType
   status LeadStatus @default(PENDING)
+  statusMark Json? 
 
   customerName String
   mobileNumber String

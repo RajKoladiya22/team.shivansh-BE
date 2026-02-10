@@ -364,6 +364,28 @@ export async function updateLeadAdmin(req: Request, res: Response) {
     const existing = await prisma.lead.findUnique({ where: { id } });
     if (!existing) return sendErrorResponse(res, 404, "Lead not found");
 
+    // prepare statusMark safely
+    const statusMark = {
+      ...(existing.statusMark as Record<string, boolean> | null),
+    };
+
+    if (data.status === "CLOSED") {
+      statusMark.close = true;
+    }
+
+    if (data.status === "DEMO_DONE") {
+      statusMark.demo = true;
+    }
+
+    if (data.status === "CONVERTED") {
+      statusMark.converted = true;
+    }
+
+    // only assign if something changed
+    if (Object.keys(statusMark).length > 0) {
+      data.statusMark = statusMark;
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
       const lead = await tx.lead.update({
         where: { id },
@@ -428,7 +450,11 @@ export async function closeLeadAdmin(req: Request, res: Response) {
     await prisma.$transaction(async (tx) => {
       await tx.lead.update({
         where: { id },
-        data: { status: "CLOSED", closedAt: new Date(), remark : "not interested" },
+        data: {
+          status: "CLOSED",
+          closedAt: new Date(),
+          remark: "not interested",
+        },
       });
 
       await tx.leadActivityLog.create({
@@ -783,7 +809,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
     const STATUS_PRIORITY: Record<string, number> = {
       PENDING: 1,
       IN_PROGRESS: 2,
-      DEMO_DONE:2.5,
+      DEMO_DONE: 2.5,
       CONVERTED: 3,
       CLOSED: 4,
     };

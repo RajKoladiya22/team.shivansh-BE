@@ -103,6 +103,77 @@ async function assertLeadAccessForUser(leadId: string, accountId: string) {
   return lead;
 }
 
+async function stopWorkIfActive(tx: any, accountId: string, leadId: string) {
+  const account = await tx.account.findUnique({
+    where: { id: accountId },
+    select: { activeLeadId: true },
+  });
+
+  // Only stop if user is working on THIS lead
+  if (account?.activeLeadId !== leadId) return;
+
+  const lastStart = await tx.leadActivityLog.findFirst({
+    where: {
+      leadId,
+      performedBy: accountId,
+      action: "WORK_STARTED",
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!lastStart) return;
+
+  const now = new Date();
+  const startedAtIso =
+    (lastStart.meta as any)?.startedAt ?? lastStart.createdAt.toISOString();
+
+  const durationSeconds = Math.max(
+    0,
+    Math.floor((now.getTime() - new Date(startedAtIso).getTime()) / 1000),
+  );
+
+  // WORK_ENDED log
+  await tx.leadActivityLog.create({
+    data: {
+      leadId,
+      action: "WORK_ENDED",
+      performedBy: accountId,
+      meta: {
+        startedAt: startedAtIso,
+        endedAt: now.toISOString(),
+        durationSeconds,
+        reason: "LEAD_STATUS_TERMINAL",
+      },
+    },
+  });
+
+  // increment lead work time
+  await tx.lead.update({
+    where: { id: leadId },
+    data: {
+      totalWorkSeconds: { increment: durationSeconds },
+    },
+  });
+
+  // clear busy state.   const Acc = 
+  await tx.account.update({
+    where: { id: accountId },
+    data: {
+      isBusy: false,
+      activeLeadId: null,
+    },
+  });
+
+  // console.log("\n\n\n\n\n\nAcc\n", Acc, "\n\n\n\n\n\n\n");
+
+  const io = getIo();
+  io.emit("busy:changed", {
+    accountId,
+    isBusy: false,
+    source: "WORK_ENDED",
+  });
+}
+
 /* ==========================
    USER (EMPLOYEE) CONTROLLER
    ========================== */
@@ -232,7 +303,7 @@ export async function listMyLeads(req: Request, res: Response) {
     const STATUS_PRIORITY: Record<string, number> = {
       PENDING: 1,
       IN_PROGRESS: 2,
-      DEMO_DONE:2.5,
+      DEMO_DONE: 2.5,
       CONVERTED: 3,
       CLOSED: 4,
     };
@@ -362,7 +433,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
     const userId = req.user?.id;
     const { id } = req.params;
     const { status, remark, cost, customerName } = req.body as {
-      status?: "PENDING" | "IN_PROGRESS" | "CLOSED" | "CONVERTED";
+      status?: "PENDING" | "IN_PROGRESS" | "CLOSED" | "CONVERTED" | "DEMO_DONE";
       remark?: string;
       cost?: number;
       customerName?: string;
@@ -371,6 +442,14 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
     const accountId = await getAccountIdFromReqUser(userId);
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+    const TERMINAL_STATUSES = ["CLOSED", "DEMO_DONE", "CONVERTED"] as const;
+
+    const isTerminalStatus =
+      typeof status !== "undefined" &&
+      TERMINAL_STATUSES.includes(status as (typeof TERMINAL_STATUSES)[number]);
+
+    // console.log("\n\n\nisTerminalStatus\n", isTerminalStatus);
 
     if (
       typeof status === "undefined" &&
@@ -403,6 +482,9 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       },
     });
 
+    // console.log("\n\n\n\nLEAD\n", lead);
+    
+
     if (!lead) return sendErrorResponse(res, 403, "Access denied");
 
     const performerSnapshot = await resolvePerformerSnapshot(accountId);
@@ -416,6 +498,31 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       if (typeof customerName !== "undefined") data.customerName = customerName;
       if (data.status === "CLOSED" || data.status === "CONVERTED") {
         data.closedAt = new Date();
+      }
+      // prepare statusMark safely
+      const statusMark = {
+        ...(lead.statusMark as Record<string, boolean> | null),
+      };
+
+      if (status === "CLOSED") {
+        statusMark.close = true;
+      }
+
+      if (status === "DEMO_DONE") {
+        statusMark.demo = true;
+      }
+
+      if (status === "CONVERTED") {
+        statusMark.converted = true;
+      }
+
+      // only assign if something changed
+      if (Object.keys(statusMark).length > 0) {
+        data.statusMark = statusMark;
+      }
+
+      if (isTerminalStatus) {
+        await stopWorkIfActive(tx, accountId, id);
       }
 
       // perform update
@@ -1184,286 +1291,3 @@ export async function getMyActiveWork(req: Request, res: Response) {
     leadId: account?.activeLead,
   });
 }
-
-// export async function stopLeadWork(req: Request, res: Response) {
-//   try {
-//     const userId = req.user?.id;
-//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-//     const accountId = await getAccountIdFromReqUser(userId);
-//     if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
-
-//     const account = await prisma.account.findUnique({
-//       where: { id: accountId },
-//       select: { activeLeadId: true },
-//     });
-
-//     if (!account?.activeLeadId) {
-//       return sendErrorResponse(res, 404, "No active work");
-//     }
-
-//     const initialAssignee = await resolveAssigneeSnapshot({
-//       accountId: accountId,
-//     });
-
-//     await prisma.$transaction([
-//       prisma.account.update({
-//         where: { id: accountId },
-//         data: {
-//           isBusy: false,
-//           activeLeadId: null,
-//         },
-//       }),
-
-//       prisma.leadActivityLog.create({
-//         data: {
-//           leadId: account.activeLeadId,
-//           action: "WORK_ENDED",
-//           performedBy: accountId,
-//           meta: {
-//             initialAssignment: initialAssignee,
-//             endedAt: new Date().toISOString(),
-//           },
-//         },
-//       }),
-
-//       prisma.busyActivityLog.create({
-//         data: {
-//           accountId: accountId,
-//           fromBusy: false,
-//           toBusy: true,
-//           reason: "WORK_ENDED",
-//         },
-//       }),
-//     ]);
-
-//     const io = getIo();
-//     io.emit("busy:changed", {
-//       accountId: accountId,
-//       isBusy: false,
-//       source: "WORK_ENDED",
-//     });
-
-//     return sendSuccessResponse(res, 200, "Work stopped", {
-//       leadId:account
-//     });
-//   } catch (err: any) {
-//     return sendErrorResponse(res, 500, err.message);
-//   }
-// }
-
-// export async function startLeadWork(req: Request, res: Response) {
-//   try {
-//     const userId = req.user?.id;
-//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-//     const accountId = await getAccountIdFromReqUser(userId);
-//     if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
-
-//     const { id: leadId } = req.params;
-
-//     // 🔐 ensure user has access (assignee OR team OR helper)
-//     const hasAccess = await prisma.lead.findFirst({
-//       where: {
-//         id: leadId,
-//         OR: [
-//           {
-//             assignments: {
-//               some: {
-//                 isActive: true,
-//                 OR: [
-//                   { accountId },
-//                   { team: { members: { some: { accountId } } } },
-//                 ],
-//               },
-//             },
-//           },
-//           {
-//             leadHelpers: {
-//               some: { accountId, isActive: true },
-//             },
-//           },
-//         ],
-//       },
-//       select: { id: true },
-//     });
-
-//     if (!hasAccess) return sendErrorResponse(res, 403, "Access denied");
-
-//     const active = await prisma.employeeLeadWork.findFirst({
-//       where: { accountId, isActive: true },
-//     });
-
-//     if (active) {
-//       return sendErrorResponse(
-//         res,
-//         409,
-//         "You are already working on another lead",
-//       );
-//     }
-
-//     const work = await prisma.$transaction(async (tx) => {
-//       const w = await tx.employeeLeadWork.create({
-//         data: {
-//           accountId,
-//           leadId,
-//           startedFrom: "MANUAL",
-//         },
-//       });
-
-//       // 🔁 auto busy ON
-//       await tx.account.update({
-//         where: { id: accountId },
-//         data: { isBusy: true },
-//       });
-
-//       await tx.busyActivityLog.create({
-//         data: {
-//           accountId,
-//           fromBusy: false,
-//           toBusy: true,
-//           reason: "LEAD_WORK_START",
-//         },
-//       });
-
-//       const initialAssignee = await resolveAssigneeSnapshot({
-//         accountId: accountId,
-//       });
-
-//       await tx.leadActivityLog.create({
-//         data: {
-//           leadId,
-//           action: "WORK_STARTED",
-//           performedBy: accountId,
-//           meta: {
-//             initialAssignment: initialAssignee,
-//             startedAt: w.startedAt,
-//           },
-//         },
-//       });
-
-//       return w;
-//     });
-
-//     const io = getIo();
-// io.emit("busy:changed", {
-//   accountId: accountId,
-//   isBusy: true,
-//   source: "WORK_STARTED",
-// });
-
-//     return sendSuccessResponse(res, 200, "Work started", work);
-//   } catch (err: any) {
-//     console.error("startLeadWork error:", err);
-//     return sendErrorResponse(res, 500, err.message);
-//   }
-// }
-
-// export async function stopLeadWork(req: Request, res: Response) {
-//   try {
-//     const userId = req.user?.id;
-//     if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-//     const accountId = await getAccountIdFromReqUser(userId);
-//     if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
-
-//     const active = await prisma.employeeLeadWork.findFirst({
-//       where: { accountId, isActive: true },
-//     });
-
-//     if (!active) return sendErrorResponse(res, 404, "No active work");
-
-//     console.log("\n\nactive------------------------->\n", active);
-//     console.log("\naccountId------------------------->\n", accountId);
-
-//     await prisma.$transaction(async (tx) => {
-//       await tx.employeeLeadWork.updateMany({
-//         where: {
-//           id: active.id,
-//           accountId,
-//           isActive: true,
-//           endedAt: null
-//         },
-//         data: {
-//           isActive: false,
-//           endedAt: new Date(),
-//         },
-//       });
-
-//       await tx.account.update({
-//         where: { id: accountId },
-//         data: { isBusy: false },
-//       });
-
-//       await tx.busyActivityLog.create({
-//         data: {
-//           accountId,
-//           fromBusy: true,
-//           toBusy: false,
-//           reason: "LEAD_WORK_END",
-//         },
-//       });
-
-// const initialAssignee = await resolveAssigneeSnapshot({
-//   accountId: accountId,
-// });
-
-//       await tx.leadActivityLog.create({
-//         data: {
-//           leadId: active.leadId,
-//           action: "WORK_ENDED",
-//           performedBy: accountId,
-//           meta: {
-//             initialAssignment: initialAssignee,
-//             endedAt: new Date().toISOString(),
-//           },
-//         },
-//       });
-//     });
-
-//     const io = getIo();
-//     io.emit("busy:changed", {
-//       accountId: accountId,
-//       isBusy: false,
-//       source: "WORK_ENDED",
-//     });
-
-//     return sendSuccessResponse(res, 200, "Work stopped");
-//   } catch (err: any) {
-//     console.error("stopLeadWork error:", err);
-//     return sendErrorResponse(res, 500, err.message);
-//   }
-// }
-
-// export async function getMyActiveWork(req: Request, res: Response) {
-//   try {
-//     const userId = req.user?.id;
-//     if (!userId) {
-//       return sendErrorResponse(res, 401, "Unauthorized");
-//     }
-
-//     const accountId = await getAccountIdFromReqUser(userId);
-//     if (!accountId) {
-//       return sendErrorResponse(res, 401, "Invalid user");
-//     }
-
-//     const work = await prisma.employeeLeadWork.findFirst({
-//       where: { accountId, isActive: true },
-//       include: {
-//         lead: {
-//           select: {
-//             id: true,
-//             customerName: true,
-//             status: true,
-//             productTitle: true,
-//           },
-//         },
-//       },
-//     });
-
-//     return sendSuccessResponse(res, 200, "Active work", work);
-//   } catch (error) {
-//     console.error("Error in getMyActiveWork:", error);
-//     return sendErrorResponse(res, 500, "Failed to get active work");
-//   }
-// }
