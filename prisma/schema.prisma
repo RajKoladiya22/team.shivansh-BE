@@ -786,9 +786,9 @@ enum LeadType {
 enum LeadStatus {
   PENDING
   IN_PROGRESS
-  CLOSED
-  CONVERTED
   DEMO_DONE
+  CONVERTED
+  CLOSED
 }
 
 enum LeadActivityAction {
@@ -813,10 +813,10 @@ enum LeadHelperRole {
 model Lead {
   id String @id @default(uuid())
 
-  source LeadSource
-  type   LeadType
-  status LeadStatus @default(PENDING)
-  statusMark Json? 
+  source     LeadSource
+  type       LeadType
+  status     LeadStatus @default(PENDING)
+  statusMark Json?
 
   customerName String
   mobileNumber String
@@ -825,7 +825,8 @@ model Lead {
   cost         Decimal? @db.Decimal(12, 2)
   remark       String?
 
-  isActive Boolean @default(true)
+  isActive  Boolean @default(true)
+  isWorking Boolean @default(false)
 
   createdBy    String? // accountId
   createdByAcc Account?  @relation("LeadCreatedBy", fields: [createdBy], references: [id])
@@ -837,18 +838,19 @@ model Lead {
 
   // account     Account?          @relation("LeadAccount", fields: [accountId], references: [id])
   // accountId   String?
-  assignments       LeadAssignment[]
-  activity          LeadActivityLog[]
-  customer          Customer?          @relation(fields: [customerId], references: [id])
-  customerId        String?
-  leadHelpers       LeadHelper[]
+  assignments LeadAssignment[]
+  activity    LeadActivityLog[]
+  customer    Customer?         @relation(fields: [customerId], references: [id])
+  customerId  String?
+  leadHelpers LeadHelper[]
   // employeeLeadWorks EmployeeLeadWork[]
-  accounts          Account[]
+  accounts    Account[]
 
+  @@index([isWorking])
+  @@index([createdAt, status])
   @@index([source])
   @@index([status])
   @@index([mobileNumber])
-  @@index([createdAt])
 }
 
 model LeadAssignment {

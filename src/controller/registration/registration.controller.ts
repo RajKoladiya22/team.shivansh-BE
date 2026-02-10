@@ -11,6 +11,7 @@ import {
 import { sendMail } from "../../core/mailer";
 import { welcomeEmployeeHtml } from "../../core/mailer/templates";
 import { generateUniqueUsername } from "../../core/utils/username.util";
+import { triggerAdminRegistrationNotification } from "../../services/notifications";
 
 async function generateNextRegisterNumber(tx: Prisma.TransactionClient) {
   const lastAccount = await tx.account.findFirst({
@@ -30,14 +31,13 @@ async function generateNextRegisterNumber(tx: Prisma.TransactionClient) {
   if (lastAccount?.registerNumber) {
     const numericPart = parseInt(
       lastAccount.registerNumber.replace("SI", ""),
-      10
+      10,
     );
     nextNumber = numericPart + 1;
   }
 
   return `SI${String(nextNumber).padStart(5, "0")}`;
 }
-
 
 /* =====================================================
    REGISTER EMPLOYEE (CREATE REGISTRATION REQUEST ONLY)
@@ -46,7 +46,6 @@ export async function registerEmployee(req: Request, res: Response) {
   try {
     const { firstName, lastName, email, phone } = req.body;
     // console.log("\n\n\n--->\n\n\n\n");
-    
 
     if (!firstName || !lastName || !email || !phone) {
       return sendErrorResponse(res, 400, "All fields are required");
@@ -69,7 +68,7 @@ export async function registerEmployee(req: Request, res: Response) {
       return sendErrorResponse(
         res,
         409,
-        "Employee already exists with this email or phone"
+        "Employee already exists with this email or phone",
       );
     }
 
@@ -88,11 +87,21 @@ export async function registerEmployee(req: Request, res: Response) {
       return sendErrorResponse(
         res,
         409,
-        "A registration request is already pending"
+        "A registration request is already pending",
       );
     }
 
-    await prisma.registrationRequest.create({
+    // await prisma.registrationRequest.create({
+    //   data: {
+    //     firstName: firstName.trim(),
+    //     lastName: lastName.trim(),
+    //     contactEmail: normalizedEmail,
+    //     contactPhone: normalizedPhone,
+    //     status: "PENDING",
+    //   },
+    // });
+
+    const request = await prisma.registrationRequest.create({
       data: {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
@@ -102,10 +111,21 @@ export async function registerEmployee(req: Request, res: Response) {
       },
     });
 
+    // 🔔 notify admins
+    if (request) {
+      await triggerAdminRegistrationNotification({
+        requestId: request.id,
+        firstName: request.firstName || "",
+        lastName: request.lastName || "",
+        email: request.contactEmail || "",
+        phone: request.contactPhone || "",
+      });
+    }
+
     return sendSuccessResponse(
       res,
       201,
-      "Registration request submitted successfully"
+      "Registration request submitted successfully",
     );
   } catch (error) {
     console.error("registerEmployee error:", error);
@@ -148,7 +168,7 @@ export async function approveRegistration(req: Request, res: Response) {
       return sendErrorResponse(
         res,
         409,
-        "Account already exists for this email or phone"
+        "Account already exists for this email or phone",
       );
     }
 
@@ -158,7 +178,6 @@ export async function approveRegistration(req: Request, res: Response) {
     const username = await generateUniqueUsername(request.firstName || "user");
 
     const { account, user } = await prisma.$transaction(async (tx) => {
-
       const registerNumber = await generateNextRegisterNumber(tx);
 
       const account = await tx.account.create({
@@ -210,19 +229,22 @@ export async function approveRegistration(req: Request, res: Response) {
       account.contactEmail,
       user.username ?? "-",
       tempPassword,
-      "https://team.shivanshinfosys.in/login"
+      "https://team.shivanshinfosys.in/signin",
     );
 
+    // const sendmail =
     await sendMail(
       account.contactEmail,
       "Your Shivansh Team Account Is Ready",
-      html
+      html,
     );
+
+    // console.log("\n\n\nsendmail", sendmail);
 
     return sendSuccessResponse(
       res,
       200,
-      "Employee approved and onboarded successfully"
+      "Employee approved and onboarded successfully",
     );
   } catch (error) {
     console.error("approveRegistration error:", error);
@@ -284,10 +306,30 @@ export async function listRegistrations(req: Request, res: Response) {
     const searchFilter = search
       ? {
           OR: [
-            { firstName: { contains: search, mode: Prisma.QueryMode.insensitive } },
-            { lastName: { contains: search, mode: Prisma.QueryMode.insensitive } },
-            { contactEmail: { contains: search, mode: Prisma.QueryMode.insensitive } },
-            { contactPhone: { contains: search, mode: Prisma.QueryMode.insensitive } },
+            {
+              firstName: {
+                contains: search,
+                mode: Prisma.QueryMode.insensitive,
+              },
+            },
+            {
+              lastName: {
+                contains: search,
+                mode: Prisma.QueryMode.insensitive,
+              },
+            },
+            {
+              contactEmail: {
+                contains: search,
+                mode: Prisma.QueryMode.insensitive,
+              },
+            },
+            {
+              contactPhone: {
+                contains: search,
+                mode: Prisma.QueryMode.insensitive,
+              },
+            },
             search.includes(" ")
               ? {
                   AND: [
@@ -322,14 +364,13 @@ export async function listRegistrations(req: Request, res: Response) {
       res,
       200,
       `${statusQuery || "PENDING"} registrations fetched`,
-      registrations
+      registrations,
     );
   } catch (error) {
     console.error("listRegistrations error:", error);
     return sendErrorResponse(res, 500, "Internal server error");
   }
 }
-
 
 // export async function listRegistrations(req: Request, res: Response) {
 //   try {
@@ -396,7 +437,6 @@ export async function listRegistrations(req: Request, res: Response) {
 //     return sendErrorResponse(res, 500, "Internal server error");
 //   }
 // }
-
 
 // export async function rejectRegistration(req: Request, res: Response) {
 //   const adminId = (req as any).user.id;

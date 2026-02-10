@@ -481,7 +481,14 @@ export async function closeLeadAdmin(req: Request, res: Response) {
  * GET /admin/leads
  * Filters: status, source, search, assignedTo, fromDate, toDate, helperAccountId, helperRole
  * Sorting, pagination
+ *
+ * Priority sorting:
+ * 1. Working leads (leads being actively worked on by any account)
+ * 2. PENDING leads
+ * 3. IN_PROGRESS leads
+ * 4. CLOSED/CONVERTED leads
  */
+
 // export async function listLeadsAdmin(req: Request, res: Response) {
 //   try {
 //     const {
@@ -489,8 +496,8 @@ export async function closeLeadAdmin(req: Request, res: Response) {
 //       source,
 //       search,
 //       assignedTo,
-//       helperAccountId, // ✅ NEW
-//       helperRole, // ✅ NEW
+//       helperAccountId,
+//       helperRole,
 //       fromDate,
 //       toDate,
 //       sortBy = "createdAt",
@@ -545,7 +552,7 @@ export async function closeLeadAdmin(req: Request, res: Response) {
 //     }
 
 //     /* ---------------------
-//        ✅ Lead Helper Filter
+//        Lead Helper Filter
 //     --------------------- */
 //     if (helperAccountId || helperRole) {
 //       where.leadHelpers = {
@@ -557,7 +564,7 @@ export async function closeLeadAdmin(req: Request, res: Response) {
 //       };
 //     }
 
-//     // ensure sortBy is safe - restrict to allowed columns to avoid SQL injection via Prisma (basic)
+//     // Ensure sortBy is safe - restrict to allowed columns
 //     const allowedSortFields = new Set([
 //       "createdAt",
 //       "updatedAt",
@@ -569,34 +576,7 @@ export async function closeLeadAdmin(req: Request, res: Response) {
 //     const orderBy: any = {};
 //     orderBy[sortField] = sortOrder === "asc" ? "asc" : "desc";
 
-//     // const [total, leads] = await prisma.$transaction([
-//     //   prisma.lead.count({ where }),
-//     //   prisma.lead.findMany({
-//     //     where,
-//     //     include: {
-//     //       // only include the currently active assignment for display
-//     //       assignments: {
-//     //         where: { isActive: true },
-//     //         include: {
-//     //           account: {
-//     //             select: {
-//     //               id: true,
-//     //               firstName: true,
-//     //               lastName: true,
-//     //               contactPhone: true,
-//     //             },
-//     //           },
-//     //           team: { select: { id: true, name: true } },
-//     //         },
-//     //       },
-//     //     },
-//     //     orderBy,
-//     //     skip: (pageNumber - 1) * pageSize,
-//     //     take: pageSize,
-//     //   }),
-//     // ]);
-
-//     const [total, leads] = await prisma.$transaction([
+//     const [total, leads] = await Promise.all([
 //       prisma.lead.count({ where }),
 //       prisma.lead.findMany({
 //         where,
@@ -614,13 +594,14 @@ export async function closeLeadAdmin(req: Request, res: Response) {
 //                   firstName: true,
 //                   lastName: true,
 //                   contactPhone: true,
+//                   activeLeadId: true, // ✅ Include to check if working
 //                 },
 //               },
 //               team: { select: { id: true, name: true } },
 //             },
 //           },
 
-//           /* ✅ Active helpers */
+//           /* Active helpers */
 //           leadHelpers: {
 //             where: { isActive: true },
 //             include: {
@@ -639,8 +620,69 @@ export async function closeLeadAdmin(req: Request, res: Response) {
 //       }),
 //     ]);
 
+//     // ✅ Status priority map
+//     const STATUS_PRIORITY: Record<string, number> = {
+//       PENDING: 1,
+//       IN_PROGRESS: 2,
+//       DEMO_DONE: 2.5,
+//       CONVERTED: 3,
+//       CLOSED: 4,
+//     };
+
+//     // ✅ Smart sorting: Working leads first, then by status priority
+//     leads.sort((a, b) => {
+//       // Check if lead A is being worked on
+//       const isAWorking = a.assignments?.some(
+//         (assignment) => assignment.account?.activeLeadId === a.id,
+//       );
+
+//       // Check if lead B is being worked on
+//       const isBWorking = b.assignments?.some(
+//         (assignment) => assignment.account?.activeLeadId === b.id,
+//       );
+
+//       // 1️⃣ Working leads always come first
+//       if (isAWorking && !isBWorking) return -1;
+//       if (!isAWorking && isBWorking) return 1;
+
+//       // 2️⃣ Both working or both not working → sort by status priority
+//       const aPriority = STATUS_PRIORITY[a.status] ?? 99;
+//       const bPriority = STATUS_PRIORITY[b.status] ?? 99;
+
+//       if (aPriority !== bPriority) {
+//         return aPriority - bPriority;
+//       }
+
+//       // 3️⃣ Same status → maintain DB sort order (by sortBy field)
+//       return 0;
+//     });
+
+//     // ✅ Add isWorking flag to each lead
+//     const leadsWithWorkingFlag = leads.map((lead) => {
+//       const isWorking = lead.assignments?.some(
+//         (assignment) => assignment.account?.activeLeadId === lead.id,
+//       );
+
+//       return {
+//         ...lead,
+//         isWorking,
+//         // Clean up activeLeadId from account object (don't expose to frontend)
+//         assignments: lead.assignments?.map((assignment) => ({
+//           ...assignment,
+//           account: assignment.account
+//             ? {
+//                 id: assignment.account.id,
+//                 firstName: assignment.account.firstName,
+//                 lastName: assignment.account.lastName,
+//                 contactPhone: assignment.account.contactPhone,
+//               }
+//             : null,
+//         })),
+//       };
+//     });
+
 //     return sendSuccessResponse(res, 200, "Leads fetched", {
-//       data: leads,
+//       data: leadsWithWorkingFlag,
 //       meta: {
 //         page: pageNumber,
 //         limit: pageSize,
@@ -665,14 +707,7 @@ export async function closeLeadAdmin(req: Request, res: Response) {
 
 /**
  * GET /admin/leads
- * Filters: status, source, search, assignedTo, fromDate, toDate, helperAccountId, helperRole
- * Sorting, pagination
- *
- * Priority sorting:
- * 1. Working leads (leads being actively worked on by any account)
- * 2. PENDING leads
- * 3. IN_PROGRESS leads
- * 4. CLOSED/CONVERTED leads
+ * Fully optimized (DB-first ordering, minimal payload, no JS sorting)
  */
 export async function listLeadsAdmin(req: Request, res: Response) {
   try {
@@ -680,20 +715,23 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       status,
       source,
       search,
-      assignedTo,
+      assignedToAccountId,
+      assignedToTeamId,
       helperAccountId,
       helperRole,
       fromDate,
       toDate,
-      sortBy = "createdAt",
-      sortOrder = "desc",
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
 
-    const pageNumber = Math.max(Number(page || 1), 1);
-    const pageSize = Math.min(Number(limit || 20), 100);
+    const pageNumber = Math.max(Number(page), 1);
+    const pageSize = Math.min(Number(limit), 100);
+    const skip = (pageNumber - 1) * pageSize;
 
+    /* -------------------------
+       WHERE (index-friendly)
+    ------------------------- */
     const where: any = {};
 
     if (status) where.status = status;
@@ -713,32 +751,16 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       ];
     }
 
-    if (assignedTo) {
+    if (assignedToAccountId || assignedToTeamId) {
       where.assignments = {
         some: {
           isActive: true,
-          OR: [
-            {
-              account: {
-                OR: [
-                  { firstName: { contains: assignedTo, mode: "insensitive" } },
-                  { lastName: { contains: assignedTo, mode: "insensitive" } },
-                ],
-              },
-            },
-            {
-              team: {
-                name: { contains: assignedTo, mode: "insensitive" },
-              },
-            },
-          ],
+          ...(assignedToAccountId ? { accountId: assignedToAccountId } : {}),
+          ...(assignedToTeamId ? { teamId: assignedToTeamId } : {}),
         },
       };
     }
 
-    /* ---------------------
-       Lead Helper Filter
-    --------------------- */
     if (helperAccountId || helperRole) {
       where.leadHelpers = {
         some: {
@@ -749,47 +771,69 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       };
     }
 
-    // Ensure sortBy is safe - restrict to allowed columns
-    const allowedSortFields = new Set([
-      "createdAt",
-      "updatedAt",
-      "closedAt",
-      "customerName",
-      "status",
-    ]);
-    const sortField = allowedSortFields.has(sortBy) ? sortBy : "createdAt";
-    const orderBy: any = {};
-    orderBy[sortField] = sortOrder === "asc" ? "asc" : "desc";
+    /* -------------------------
+       DB ORDERING (NO JS SORT)
+       Priority:
+       1. Working leads
+       2. Status
+       3. Newest first
+    ------------------------- */
+    const orderBy = [
+      { isWorking: "desc" as const }, // indexed boolean
+      { status: "asc" as const },     // enum index
+      { createdAt: "desc" as const }, // btree index
+    ];
 
+    /* -------------------------
+       QUERY (minimal payload)
+    ------------------------- */
     const [total, leads] = await Promise.all([
       prisma.lead.count({ where }),
       prisma.lead.findMany({
         where,
         orderBy,
-        skip: (pageNumber - 1) * pageSize,
+        skip,
         take: pageSize,
-        include: {
-          /* Active assignment */
+        select: {
+          id: true,
+          source: true,
+          type: true,
+          status: true,
+          customerName: true,
+          mobileNumber: true,
+          productTitle: true,
+          cost: true,
+          remark: true,
+          isWorking: true,
+          createdAt: true,
+          updatedAt: true,
+
           assignments: {
             where: { isActive: true },
-            include: {
+            select: {
+              id: true,
+              type: true,
               account: {
                 select: {
                   id: true,
                   firstName: true,
                   lastName: true,
                   contactPhone: true,
-                  activeLeadId: true, // ✅ Include to check if working
                 },
               },
-              team: { select: { id: true, name: true } },
+              team: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
             },
           },
 
-          /* Active helpers */
           leadHelpers: {
             where: { isActive: true },
-            include: {
+            select: {
+              role: true,
               account: {
                 select: {
                   id: true,
@@ -805,69 +849,11 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       }),
     ]);
 
-    // ✅ Status priority map
-    const STATUS_PRIORITY: Record<string, number> = {
-      PENDING: 1,
-      IN_PROGRESS: 2,
-      DEMO_DONE: 2.5,
-      CONVERTED: 3,
-      CLOSED: 4,
-    };
-
-    // ✅ Smart sorting: Working leads first, then by status priority
-    leads.sort((a, b) => {
-      // Check if lead A is being worked on
-      const isAWorking = a.assignments?.some(
-        (assignment) => assignment.account?.activeLeadId === a.id,
-      );
-
-      // Check if lead B is being worked on
-      const isBWorking = b.assignments?.some(
-        (assignment) => assignment.account?.activeLeadId === b.id,
-      );
-
-      // 1️⃣ Working leads always come first
-      if (isAWorking && !isBWorking) return -1;
-      if (!isAWorking && isBWorking) return 1;
-
-      // 2️⃣ Both working or both not working → sort by status priority
-      const aPriority = STATUS_PRIORITY[a.status] ?? 99;
-      const bPriority = STATUS_PRIORITY[b.status] ?? 99;
-
-      if (aPriority !== bPriority) {
-        return aPriority - bPriority;
-      }
-
-      // 3️⃣ Same status → maintain DB sort order (by sortBy field)
-      return 0;
-    });
-
-    // ✅ Add isWorking flag to each lead
-    const leadsWithWorkingFlag = leads.map((lead) => {
-      const isWorking = lead.assignments?.some(
-        (assignment) => assignment.account?.activeLeadId === lead.id,
-      );
-
-      return {
-        ...lead,
-        isWorking,
-        // Clean up activeLeadId from account object (don't expose to frontend)
-        assignments: lead.assignments?.map((assignment) => ({
-          ...assignment,
-          account: assignment.account
-            ? {
-                id: assignment.account.id,
-                firstName: assignment.account.firstName,
-                lastName: assignment.account.lastName,
-                contactPhone: assignment.account.contactPhone,
-              }
-            : null,
-        })),
-      };
-    });
-
+    /* -------------------------
+       RESPONSE
+    ------------------------- */
     return sendSuccessResponse(res, 200, "Leads fetched", {
-      data: leadsWithWorkingFlag,
+      data: leads,
       meta: {
         page: pageNumber,
         limit: pageSize,
@@ -878,17 +864,15 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       },
     });
   } catch (err: any) {
-    console.error("List leads error:", err);
-    if (err?.code === "P2021" || err?.code === "P2022") {
-      return sendErrorResponse(
-        res,
-        500,
-        "Database schema mismatch. Run Prisma migration.",
-      );
-    }
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch leads");
+    console.error("Optimized list leads error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch leads",
+    );
   }
 }
+
 
 /**
  * GET /admin/leads/:id/activity
@@ -1069,7 +1053,6 @@ export async function addLeadHelperAdmin(req: Request, res: Response) {
  * DELETE /admin/leads/:id/helpers/:accountId"
  * Remove helper/export employee from lead
  */
-
 export async function removeLeadHelperAdmin(req: Request, res: Response) {
   try {
     if (!req.user?.roles?.includes?.("ADMIN")) {

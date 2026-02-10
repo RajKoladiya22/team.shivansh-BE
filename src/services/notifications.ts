@@ -180,3 +180,119 @@ export async function triggerAssignmentNotification({
     console.error("triggerAssignmentNotification failed:", error);
   }
 }
+
+// src/services/notifications.ts
+
+export async function triggerAdminRegistrationNotification({
+  requestId,
+  firstName,
+  lastName,
+  email,
+  phone,
+}: {
+  requestId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+}) {
+  try {
+    // 1. Fetch ADMIN accounts
+    const admins = await prisma.account.findMany({
+      where: { designation: "Owner", isActive: true },
+      select: { id: true },
+    });
+
+    if (admins.length === 0) return;
+
+    const adminIds = admins.map((a) => a.id);
+
+    // 2. Persist notifications
+    const notifications = await prisma.$transaction(
+      adminIds.map((accountId) =>
+        prisma.notification.create({
+          data: {
+            accountId,
+            category: "SYSTEM",
+            level: "INFO",
+            title: "New employee registration request",
+            body: `${firstName} ${lastName} requested access`,
+            actionUrl: `/employee/requests`,
+            dedupeKey: `registration:${requestId}:admin:${accountId}`,
+            deliveryChannels: ["web", "chrome"],
+            payload: {
+              requestId,
+              firstName,
+              lastName,
+              email,
+              phone,
+            },
+          },
+        }),
+      ),
+    );
+
+    // 3. Socket delivery (best effort)
+    let io;
+    try {
+      io = getIo();
+    } catch {
+      io = null;
+    }
+
+    if (io) {
+      notifications.forEach((n) => {
+        io.to(`notif:${n.accountId}`).emit("notification", {
+          id: n.id,
+          category: n.category,
+          level: n.level,
+          title: n.title,
+          body: n.body,
+          actionUrl: n.actionUrl ?? undefined,
+          payload: n.payload,
+          createdAt: n.createdAt.toISOString(),
+        });
+      });
+    }
+
+    // 4. Push notifications
+    const subscriptions = await prisma.notificationSubscription.findMany({
+      where: {
+        accountId: { in: adminIds },
+        isActive: true,
+        platform: { in: ["web", "chrome"] },
+      },
+    });
+
+    for (const sub of subscriptions) {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: {
+              p256dh: sub.p256dh,
+              auth: sub.auth,
+            },
+          },
+          JSON.stringify({
+            title: "New employee registration request",
+            body: `${firstName} ${lastName} requested access`,
+            data: {
+              actionUrl: `/employee/requests`,
+            },
+          }),
+        );
+      } catch (err) {
+        console.warn("⚠️ Admin push failed", err);
+      }
+    }
+
+    // 5. Mark sent
+    await prisma.notification.updateMany({
+      where: { id: { in: notifications.map((n) => n.id) } },
+      data: { sentAt: new Date() },
+    });
+  } catch (err) {
+    console.error("triggerAdminRegistrationNotification failed:", err);
+  }
+}

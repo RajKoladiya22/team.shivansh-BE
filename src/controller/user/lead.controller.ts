@@ -152,10 +152,11 @@ async function stopWorkIfActive(tx: any, accountId: string, leadId: string) {
     where: { id: leadId },
     data: {
       totalWorkSeconds: { increment: durationSeconds },
+      isWorking: false,
     },
   });
 
-  // clear busy state.   const Acc = 
+  // clear busy state.   const Acc =
   await tx.account.update({
     where: { id: accountId },
     data: {
@@ -189,11 +190,6 @@ export async function listMyLeads(req: Request, res: Response) {
 
     const accountId = await getAccountIdFromReqUser(userId);
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
-
-    const account = await prisma.account.findUnique({
-      where: { id: accountId },
-      select: { activeLeadId: true },
-    });
 
     const {
       status,
@@ -254,8 +250,14 @@ export async function listMyLeads(req: Request, res: Response) {
       "status",
     ]);
     const sortField = allowedSortFields.has(sortBy) ? sortBy : "createdAt";
-    const orderBy: any = {};
-    orderBy[sortField] = sortOrder === "asc" ? "asc" : "desc";
+    // const orderBy: any = {};
+    // orderBy[sortField] = sortOrder === "asc" ? "asc" : "desc";
+
+    const orderBy = [
+      { isWorking: "desc" as const }, // indexed boolean
+      { status: "asc" as const }, // enum index
+      { createdAt: "desc" as const }, // btree index
+    ];
 
     const [total, leads] = await Promise.all([
       prisma.lead.count({ where }),
@@ -297,39 +299,39 @@ export async function listMyLeads(req: Request, res: Response) {
       }),
     ]);
 
-    const activeLeadId = account?.activeLeadId;
+    // const activeLeadId = account?.activeLeadId;
 
     // Status priority map
-    const STATUS_PRIORITY: Record<string, number> = {
-      PENDING: 1,
-      IN_PROGRESS: 2,
-      DEMO_DONE: 2.5,
-      CONVERTED: 3,
-      CLOSED: 4,
-    };
+    // const STATUS_PRIORITY: Record<string, number> = {
+    //   PENDING: 1,
+    //   IN_PROGRESS: 2,
+    //   DEMO_DONE: 2.5,
+    //   CONVERTED: 3,
+    //   CLOSED: 4,
+    // };
 
-    leads.sort((a, b) => {
-      // ⭐ 1. Active working lead always first
-      if (a.id === activeLeadId) return -1;
-      if (b.id === activeLeadId) return 1;
+    // leads.sort((a, b) => {
+    //   // ⭐ 1. Active working lead always first
+    //   if (a.id === activeLeadId) return -1;
+    //   if (b.id === activeLeadId) return 1;
 
-      // ⭐ 2. Status priority sorting
-      const aPriority = STATUS_PRIORITY[a.status] ?? 99;
-      const bPriority = STATUS_PRIORITY[b.status] ?? 99;
+    //   // ⭐ 2. Status priority sorting
+    //   const aPriority = STATUS_PRIORITY[a.status] ?? 99;
+    //   const bPriority = STATUS_PRIORITY[b.status] ?? 99;
 
-      if (aPriority !== bPriority) return aPriority - bPriority;
+    //   if (aPriority !== bPriority) return aPriority - bPriority;
 
-      // ⭐ 3. Fallback → keep DB sort order (createdAt etc)
-      return 0;
-    });
+    //   // ⭐ 3. Fallback → keep DB sort order (createdAt etc)
+    //   return 0;
+    // });
 
-    const MyleadsData = leads.map((lead) => ({
-      ...lead,
-      isWorking: lead.id === activeLeadId,
-    }));
+    // const MyleadsData = leads.map((lead) => ({
+    //   ...lead,
+    //   isWorking: lead.id === activeLeadId,
+    // }));
 
     return sendSuccessResponse(res, 200, "My leads fetched", {
-      data: MyleadsData,
+      data: leads,
       meta: {
         page: pageNumber,
         limit: pageSize,
@@ -443,7 +445,12 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
     const accountId = await getAccountIdFromReqUser(userId);
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
-    const TERMINAL_STATUSES = ["CLOSED", "DEMO_DONE", "CONVERTED"] as const;
+    const TERMINAL_STATUSES = [
+      "CLOSED",
+      "DEMO_DONE",
+      "CONVERTED",
+      "PENDING",
+    ] as const;
 
     const isTerminalStatus =
       typeof status !== "undefined" &&
@@ -483,7 +490,6 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
     });
 
     // console.log("\n\n\n\nLEAD\n", lead);
-    
 
     if (!lead) return sendErrorResponse(res, 403, "Access denied");
 
@@ -1094,7 +1100,7 @@ export async function startLeadWork(req: Request, res: Response) {
 
       prisma.lead.update({
         where: { id: leadId },
-        data: { status: "IN_PROGRESS" },
+        data: { status: "IN_PROGRESS", isWorking: true },
       }),
 
       prisma.leadActivityLog.create({
@@ -1227,6 +1233,7 @@ export async function stopLeadWork(req: Request, res: Response) {
         where: { id: leadId },
         data: {
           totalWorkSeconds: { increment: durationSeconds },
+          isWorking: false,
         },
         select: { id: true, totalWorkSeconds: true },
       }),

@@ -49,9 +49,10 @@ async function main() {
       firstName: "Admin",
       lastName: "User",
       contactEmail: adminEmail,
-      contactPhone: "9999999999",
+      contactPhone: "+91 9913423994",
       isActive: true,
-      designation: "Administrator",
+      designation: "Owner",
+      registerNumber: "SI00001",
       joinedAt: new Date(),
     },
   });

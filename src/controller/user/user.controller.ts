@@ -447,6 +447,7 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
           where: { id: leadId },
           data: {
             totalWorkSeconds: { increment: durationSeconds },
+            isWorking : false 
           },
         });
 
