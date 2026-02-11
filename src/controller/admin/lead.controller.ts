@@ -7,6 +7,7 @@ import {
 } from "../../core/utils/httpResponse";
 import { randomUUID } from "crypto";
 import { triggerAssignmentNotification } from "../../services/notifications";
+import { getIo } from "../../core/utils/socket";
 
 /**
  * Helper: get accountId from req.user.id (user table -> accountId)
@@ -316,6 +317,11 @@ export async function assignLeadAdmin(req: Request, res: Response) {
       });
     });
 
+    const io = getIo();
+    io.to(`lead:${id}`).emit("lead:assignment-changed", {
+      leadId: id,
+    });
+
     return sendSuccessResponse(res, 200, "Lead reassigned");
   } catch (err) {
     console.error(err);
@@ -421,6 +427,14 @@ export async function updateLeadAdmin(req: Request, res: Response) {
       return lead;
     });
 
+    const io = getIo();
+    io.to(`lead:${id}`).emit("lead:updated", {
+      leadId: updated.id,
+      status: updated.status,
+      isWorking: updated.isWorking,
+      updatedAt: updated.updatedAt,
+    });
+
     return sendSuccessResponse(res, 200, "Lead updated", updated);
   } catch (err: any) {
     console.error("Update lead error:", err);
@@ -470,10 +484,402 @@ export async function closeLeadAdmin(req: Request, res: Response) {
       });
     });
 
+    const io = getIo();
+    io.to(`lead:${id}`).emit("lead:closed", {
+      leadId: id,
+      status: "CLOSED",
+    });
+
     return sendSuccessResponse(res, 200, "Lead closed");
   } catch (err: any) {
     console.error("Close lead error:", err);
     return sendErrorResponse(res, 500, err?.message ?? "Failed to close lead");
+  }
+}
+
+/**
+ * GET /admin/leads
+ * Fully optimized (DB-first ordering, minimal payload, no JS sorting)
+ */
+export async function listLeadsAdmin(req: Request, res: Response) {
+  try {
+    const {
+      status,
+      source,
+      search,
+      assignedToAccountId,
+      assignedToTeamId,
+      helperAccountId,
+      helperRole,
+      fromDate,
+      toDate,
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string>;
+
+    const pageNumber = Math.max(Number(page), 1);
+    const pageSize = Math.min(Number(limit), 100);
+    const skip = (pageNumber - 1) * pageSize;
+
+    /* -------------------------
+       WHERE (index-friendly)
+    ------------------------- */
+    const where: any = {};
+
+    if (status) where.status = status;
+    if (source) where.source = source;
+
+    if (fromDate || toDate) {
+      where.createdAt = {};
+      if (fromDate) where.createdAt.gte = new Date(fromDate);
+      if (toDate) where.createdAt.lte = new Date(toDate);
+    }
+
+    if (search) {
+      where.OR = [
+        { customerName: { contains: search, mode: "insensitive" } },
+        { mobileNumber: { contains: search } },
+        { productTitle: { contains: search, mode: "insensitive" } },
+      ];
+    }
+
+    if (assignedToAccountId || assignedToTeamId) {
+      where.assignments = {
+        some: {
+          isActive: true,
+          ...(assignedToAccountId ? { accountId: assignedToAccountId } : {}),
+          ...(assignedToTeamId ? { teamId: assignedToTeamId } : {}),
+        },
+      };
+    }
+
+    if (helperAccountId || helperRole) {
+      where.leadHelpers = {
+        some: {
+          isActive: true,
+          ...(helperAccountId ? { accountId: helperAccountId } : {}),
+          ...(helperRole ? { role: helperRole as any } : {}),
+        },
+      };
+    }
+
+    /* -------------------------
+       DB ORDERING (NO JS SORT)
+       Priority:
+       1. Working leads
+       2. Status
+       3. Newest first
+    ------------------------- */
+    const orderBy = [
+      { isWorking: "desc" as const }, // indexed boolean
+      { status: "asc" as const }, // enum index
+      { createdAt: "desc" as const }, // btree index
+    ];
+
+    /* -------------------------
+       QUERY (minimal payload)
+    ------------------------- */
+    const [total, leads] = await Promise.all([
+      prisma.lead.count({ where }),
+      prisma.lead.findMany({
+        where,
+        orderBy,
+        skip,
+        take: pageSize,
+        select: {
+          id: true,
+          source: true,
+          type: true,
+          status: true,
+          customerName: true,
+          mobileNumber: true,
+          productTitle: true,
+          cost: true,
+          remark: true,
+          isWorking: true,
+          createdAt: true,
+          updatedAt: true,
+
+          assignments: {
+            where: { isActive: true },
+            select: {
+              id: true,
+              type: true,
+              account: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  contactPhone: true,
+                },
+              },
+              team: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
+          },
+
+          leadHelpers: {
+            where: { isActive: true },
+            select: {
+              role: true,
+              account: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  designation: true,
+                  contactPhone: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    /* -------------------------
+       RESPONSE
+    ------------------------- */
+    return sendSuccessResponse(res, 200, "Leads fetched", {
+      data: leads,
+      meta: {
+        page: pageNumber,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+        hasNext: pageNumber * pageSize < total,
+        hasPrev: pageNumber > 1,
+      },
+    });
+  } catch (err: any) {
+    console.error("Optimized list leads error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch leads");
+  }
+}
+
+/**
+ * GET /admin/leads/:id/activity
+ */
+export async function getLeadActivityTimelineAdmin(
+  req: Request,
+  res: Response,
+) {
+  try {
+    const adminUserId = req.user?.id;
+    if (!adminUserId) return sendErrorResponse(res, 401, "Unauthorized");
+    if (!req.user?.roles?.includes?.("ADMIN"))
+      return sendErrorResponse(res, 403, "Admin access required");
+
+    const { id } = req.params;
+    const leadExists = await prisma.lead.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!leadExists) return sendErrorResponse(res, 404, "Lead not found");
+
+    const activity = await prisma.leadActivityLog.findMany({
+      where: { leadId: id },
+      orderBy: { createdAt: "desc" },
+      include: {
+        performedByAccount: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            designation: true,
+            contactPhone: true,
+          },
+        },
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Lead activity timeline fetched", {
+      leadId: id,
+      total: activity.length,
+      activity,
+    });
+  } catch (err: any) {
+    console.error("Admin lead activity timeline error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch lead activity",
+    );
+  }
+}
+
+/**
+ * GET /admin/leads/stats/status
+ * Optional filters: fromDate, toDate, source
+ */
+export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
+  try {
+    // guard: admin
+    if (!req.user?.roles?.includes?.("ADMIN")) {
+      return sendErrorResponse(res, 403, "Admin access required");
+    }
+
+    const { fromDate, toDate, source } = req.query as Record<string, string>;
+
+    const where: any = {};
+
+    if (source) where.source = source;
+
+    if (fromDate || toDate) {
+      where.createdAt = {};
+      if (fromDate) where.createdAt.gte = new Date(fromDate);
+      if (toDate) where.createdAt.lte = new Date(toDate);
+    }
+
+    /**
+     * Use groupBy (single DB roundtrip, very fast)
+     */
+    const grouped = await prisma.lead.groupBy({
+      by: ["status"],
+      where,
+      _count: { _all: true },
+    });
+
+    /**
+     * Normalize output to include all statuses
+     */
+    const result = {
+      PENDING: 0,
+      IN_PROGRESS: 0,
+      CLOSED: 0,
+      CONVERTED: 0,
+      TOTAL: 0,
+    };
+
+    for (const row of grouped) {
+      result[row.status as keyof typeof result] = row._count._all;
+      result.TOTAL += row._count._all;
+    }
+
+    return sendSuccessResponse(res, 200, "Lead counts fetched", result);
+  } catch (err: any) {
+    console.error("Lead count by status error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch lead counts",
+    );
+  }
+}
+
+/**
+ * POST /admin/leads/:id/helpers
+ * Add helper/export employee to lead
+ */
+export async function addLeadHelperAdmin(req: Request, res: Response) {
+  try {
+    if (!req.user?.roles?.includes?.("ADMIN")) {
+      return sendErrorResponse(res, 403, "Admin access required");
+    }
+
+    const performerAccountId = await getAccountIdFromReqUser(req.user?.id);
+    if (!performerAccountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { id: leadId } = req.params;
+    const { accountId, role = "SUPPORT" } = req.body;
+
+    if (!accountId) {
+      return sendErrorResponse(res, 400, "accountId is required");
+    }
+
+    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+    if (!lead) return sendErrorResponse(res, 404, "Lead not found");
+
+    const helper = await prisma.leadHelper.upsert({
+      where: {
+        leadId_accountId: {
+          leadId,
+          accountId,
+        },
+      },
+      update: {
+        isActive: true,
+        removedAt: null,
+      },
+      create: {
+        leadId,
+        accountId,
+        role,
+        addedBy: performerAccountId,
+      },
+    });
+
+    const initialAssignee = await resolveAssigneeSnapshot({
+      accountId: accountId,
+    });
+
+    await prisma.leadActivityLog.create({
+      data: {
+        leadId,
+        action: "HELPER_ADDED",
+        performedBy: performerAccountId,
+        meta: {
+          initialAssignment: initialAssignee,
+          role,
+        },
+      },
+    });
+
+    const io = getIo();
+    io.to(`lead:${leadId}`).emit("lead:helpers-updated", {
+      leadId,
+    });
+
+    return sendSuccessResponse(res, 200, "Helper added to lead", helper);
+  } catch (err: any) {
+    console.error(err);
+    return sendErrorResponse(res, 500, "Failed to add helper");
+  }
+}
+
+/**
+ * DELETE /admin/leads/:id/helpers/:accountId"
+ * Remove helper/export employee from lead
+ */
+export async function removeLeadHelperAdmin(req: Request, res: Response) {
+  try {
+    if (!req.user?.roles?.includes?.("ADMIN")) {
+      return sendErrorResponse(res, 403, "Admin access required");
+    }
+
+    const performerAccountId = await getAccountIdFromReqUser(req.user?.id);
+    const { id: leadId, accountId } = req.params;
+
+    await prisma.leadHelper.updateMany({
+      where: { leadId, accountId, isActive: true },
+      data: { isActive: false, removedAt: new Date() },
+    });
+
+    const initialAssignee = await resolveAssigneeSnapshot({
+      accountId: accountId,
+    });
+
+    await prisma.leadActivityLog.create({
+      data: {
+        leadId,
+        action: "HELPER_REMOVED",
+        performedBy: performerAccountId!,
+        meta: { initialAssignment: initialAssignee },
+      },
+    });
+
+    const io = getIo();
+    io.to(`lead:${leadId}`).emit("lead:helpers-updated", {
+      leadId,
+    });
+
+    return sendSuccessResponse(res, 200, "Helper removed");
+  } catch (err) {
+    return sendErrorResponse(res, 500, "Failed to remove helper");
   }
 }
 
@@ -704,384 +1110,3 @@ export async function closeLeadAdmin(req: Request, res: Response) {
 //     return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch leads");
 //   }
 // }
-
-/**
- * GET /admin/leads
- * Fully optimized (DB-first ordering, minimal payload, no JS sorting)
- */
-export async function listLeadsAdmin(req: Request, res: Response) {
-  try {
-    const {
-      status,
-      source,
-      search,
-      assignedToAccountId,
-      assignedToTeamId,
-      helperAccountId,
-      helperRole,
-      fromDate,
-      toDate,
-      page = "1",
-      limit = "20",
-    } = req.query as Record<string, string>;
-
-    const pageNumber = Math.max(Number(page), 1);
-    const pageSize = Math.min(Number(limit), 100);
-    const skip = (pageNumber - 1) * pageSize;
-
-    /* -------------------------
-       WHERE (index-friendly)
-    ------------------------- */
-    const where: any = {};
-
-    if (status) where.status = status;
-    if (source) where.source = source;
-
-    if (fromDate || toDate) {
-      where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate) where.createdAt.lte = new Date(toDate);
-    }
-
-    if (search) {
-      where.OR = [
-        { customerName: { contains: search, mode: "insensitive" } },
-        { mobileNumber: { contains: search } },
-        { productTitle: { contains: search, mode: "insensitive" } },
-      ];
-    }
-
-    if (assignedToAccountId || assignedToTeamId) {
-      where.assignments = {
-        some: {
-          isActive: true,
-          ...(assignedToAccountId ? { accountId: assignedToAccountId } : {}),
-          ...(assignedToTeamId ? { teamId: assignedToTeamId } : {}),
-        },
-      };
-    }
-
-    if (helperAccountId || helperRole) {
-      where.leadHelpers = {
-        some: {
-          isActive: true,
-          ...(helperAccountId ? { accountId: helperAccountId } : {}),
-          ...(helperRole ? { role: helperRole as any } : {}),
-        },
-      };
-    }
-
-    /* -------------------------
-       DB ORDERING (NO JS SORT)
-       Priority:
-       1. Working leads
-       2. Status
-       3. Newest first
-    ------------------------- */
-    const orderBy = [
-      { isWorking: "desc" as const }, // indexed boolean
-      { status: "asc" as const },     // enum index
-      { createdAt: "desc" as const }, // btree index
-    ];
-
-    /* -------------------------
-       QUERY (minimal payload)
-    ------------------------- */
-    const [total, leads] = await Promise.all([
-      prisma.lead.count({ where }),
-      prisma.lead.findMany({
-        where,
-        orderBy,
-        skip,
-        take: pageSize,
-        select: {
-          id: true,
-          source: true,
-          type: true,
-          status: true,
-          customerName: true,
-          mobileNumber: true,
-          productTitle: true,
-          cost: true,
-          remark: true,
-          isWorking: true,
-          createdAt: true,
-          updatedAt: true,
-
-          assignments: {
-            where: { isActive: true },
-            select: {
-              id: true,
-              type: true,
-              account: {
-                select: {
-                  id: true,
-                  firstName: true,
-                  lastName: true,
-                  contactPhone: true,
-                },
-              },
-              team: {
-                select: {
-                  id: true,
-                  name: true,
-                },
-              },
-            },
-          },
-
-          leadHelpers: {
-            where: { isActive: true },
-            select: {
-              role: true,
-              account: {
-                select: {
-                  id: true,
-                  firstName: true,
-                  lastName: true,
-                  designation: true,
-                  contactPhone: true,
-                },
-              },
-            },
-          },
-        },
-      }),
-    ]);
-
-    /* -------------------------
-       RESPONSE
-    ------------------------- */
-    return sendSuccessResponse(res, 200, "Leads fetched", {
-      data: leads,
-      meta: {
-        page: pageNumber,
-        limit: pageSize,
-        total,
-        totalPages: Math.ceil(total / pageSize),
-        hasNext: pageNumber * pageSize < total,
-        hasPrev: pageNumber > 1,
-      },
-    });
-  } catch (err: any) {
-    console.error("Optimized list leads error:", err);
-    return sendErrorResponse(
-      res,
-      500,
-      err?.message ?? "Failed to fetch leads",
-    );
-  }
-}
-
-
-/**
- * GET /admin/leads/:id/activity
- */
-export async function getLeadActivityTimelineAdmin(
-  req: Request,
-  res: Response,
-) {
-  try {
-    const adminUserId = req.user?.id;
-    if (!adminUserId) return sendErrorResponse(res, 401, "Unauthorized");
-    if (!req.user?.roles?.includes?.("ADMIN"))
-      return sendErrorResponse(res, 403, "Admin access required");
-
-    const { id } = req.params;
-    const leadExists = await prisma.lead.findUnique({
-      where: { id },
-      select: { id: true },
-    });
-    if (!leadExists) return sendErrorResponse(res, 404, "Lead not found");
-
-    const activity = await prisma.leadActivityLog.findMany({
-      where: { leadId: id },
-      orderBy: { createdAt: "desc" },
-      include: {
-        performedByAccount: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            designation: true,
-            contactPhone: true,
-          },
-        },
-      },
-    });
-
-    return sendSuccessResponse(res, 200, "Lead activity timeline fetched", {
-      leadId: id,
-      total: activity.length,
-      activity,
-    });
-  } catch (err: any) {
-    console.error("Admin lead activity timeline error:", err);
-    return sendErrorResponse(
-      res,
-      500,
-      err?.message ?? "Failed to fetch lead activity",
-    );
-  }
-}
-
-/**
- * GET /admin/leads/stats/status
- * Optional filters: fromDate, toDate, source
- */
-export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
-  try {
-    // guard: admin
-    if (!req.user?.roles?.includes?.("ADMIN")) {
-      return sendErrorResponse(res, 403, "Admin access required");
-    }
-
-    const { fromDate, toDate, source } = req.query as Record<string, string>;
-
-    const where: any = {};
-
-    if (source) where.source = source;
-
-    if (fromDate || toDate) {
-      where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate) where.createdAt.lte = new Date(toDate);
-    }
-
-    /**
-     * Use groupBy (single DB roundtrip, very fast)
-     */
-    const grouped = await prisma.lead.groupBy({
-      by: ["status"],
-      where,
-      _count: { _all: true },
-    });
-
-    /**
-     * Normalize output to include all statuses
-     */
-    const result = {
-      PENDING: 0,
-      IN_PROGRESS: 0,
-      CLOSED: 0,
-      CONVERTED: 0,
-      TOTAL: 0,
-    };
-
-    for (const row of grouped) {
-      result[row.status as keyof typeof result] = row._count._all;
-      result.TOTAL += row._count._all;
-    }
-
-    return sendSuccessResponse(res, 200, "Lead counts fetched", result);
-  } catch (err: any) {
-    console.error("Lead count by status error:", err);
-    return sendErrorResponse(
-      res,
-      500,
-      err?.message ?? "Failed to fetch lead counts",
-    );
-  }
-}
-
-/**
- * POST /admin/leads/:id/helpers
- * Add helper/export employee to lead
- */
-export async function addLeadHelperAdmin(req: Request, res: Response) {
-  try {
-    if (!req.user?.roles?.includes?.("ADMIN")) {
-      return sendErrorResponse(res, 403, "Admin access required");
-    }
-
-    const performerAccountId = await getAccountIdFromReqUser(req.user?.id);
-    if (!performerAccountId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const { id: leadId } = req.params;
-    const { accountId, role = "SUPPORT" } = req.body;
-
-    if (!accountId) {
-      return sendErrorResponse(res, 400, "accountId is required");
-    }
-
-    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
-    if (!lead) return sendErrorResponse(res, 404, "Lead not found");
-
-    const helper = await prisma.leadHelper.upsert({
-      where: {
-        leadId_accountId: {
-          leadId,
-          accountId,
-        },
-      },
-      update: {
-        isActive: true,
-        removedAt: null,
-      },
-      create: {
-        leadId,
-        accountId,
-        role,
-        addedBy: performerAccountId,
-      },
-    });
-
-    const initialAssignee = await resolveAssigneeSnapshot({
-      accountId: accountId,
-    });
-
-    await prisma.leadActivityLog.create({
-      data: {
-        leadId,
-        action: "HELPER_ADDED",
-        performedBy: performerAccountId,
-        meta: {
-          initialAssignment: initialAssignee,
-          role,
-        },
-      },
-    });
-
-    return sendSuccessResponse(res, 200, "Helper added to lead", helper);
-  } catch (err: any) {
-    console.error(err);
-    return sendErrorResponse(res, 500, "Failed to add helper");
-  }
-}
-
-/**
- * DELETE /admin/leads/:id/helpers/:accountId"
- * Remove helper/export employee from lead
- */
-export async function removeLeadHelperAdmin(req: Request, res: Response) {
-  try {
-    if (!req.user?.roles?.includes?.("ADMIN")) {
-      return sendErrorResponse(res, 403, "Admin access required");
-    }
-
-    const performerAccountId = await getAccountIdFromReqUser(req.user?.id);
-    const { id: leadId, accountId } = req.params;
-
-    await prisma.leadHelper.updateMany({
-      where: { leadId, accountId, isActive: true },
-      data: { isActive: false, removedAt: new Date() },
-    });
-
-    const initialAssignee = await resolveAssigneeSnapshot({
-      accountId: accountId,
-    });
-
-    await prisma.leadActivityLog.create({
-      data: {
-        leadId,
-        action: "HELPER_REMOVED",
-        performedBy: performerAccountId!,
-        meta: { initialAssignment: initialAssignee },
-      },
-    });
-
-    return sendSuccessResponse(res, 200, "Helper removed");
-  } catch (err) {
-    return sendErrorResponse(res, 500, "Failed to remove helper");
-  }
-}

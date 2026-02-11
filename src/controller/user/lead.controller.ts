@@ -170,6 +170,7 @@ async function stopWorkIfActive(tx: any, accountId: string, leadId: string) {
   const io = getIo();
   io.emit("busy:changed", {
     accountId,
+    leadId:leadId,
     isBusy: false,
     source: "WORK_ENDED",
   });
@@ -1128,6 +1129,7 @@ export async function startLeadWork(req: Request, res: Response) {
     const io = getIo();
     io.emit("busy:changed", {
       accountId: accountId,
+      leadId:leadId,
       isBusy: true,
       source: "WORK_STARTED",
     });
@@ -1254,6 +1256,7 @@ export async function stopLeadWork(req: Request, res: Response) {
     const io = getIo();
     io.emit("busy:changed", {
       accountId,
+      leadId:leadId,
       isBusy: false,
       source: "WORK_ENDED",
     });

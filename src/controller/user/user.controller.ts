@@ -77,8 +77,8 @@ export async function updateProfile(req: Request, res: Response) {
     const deleteKeys: string[] = Array.isArray(rawDelete)
       ? rawDelete
       : rawDelete
-      ? [rawDelete]
-      : [];
+        ? [rawDelete]
+        : [];
 
     // console.log("\nParsed delete keys:", deleteKeys);
 
@@ -101,8 +101,7 @@ export async function updateProfile(req: Request, res: Response) {
       if (docs[key]) {
         // console.log("\nDeleting document:", key, docs[key]);
         // console.log("\n storageDir:", storageDir);
-        
-        
+
         safeUnlink(path.join(storageDir, docs[key].filename));
         delete docs[key];
       }
@@ -168,7 +167,6 @@ export async function getProfile(req: Request, res: Response) {
     }
 
     // console.log("\n\n\nuserId:=====>", userId);
-    
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -350,7 +348,6 @@ export async function getProfile(req: Request, res: Response) {
 //   }
 // }
 
-
 export async function updateMyBusyStatus(req: Request, res: Response) {
   try {
     const userId = req.user?.id;
@@ -375,6 +372,7 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
     }
 
     const now = new Date();
+    let tag: boolean = false;
 
     const result = await prisma.$transaction(async (tx) => {
       const account = await tx.account.findUnique({
@@ -398,6 +396,7 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
       ===================================================== */
       if (account.activeLeadId && isBusy === false) {
         const leadId = account.activeLeadId;
+        tag = leadId ? true : false;
 
         const lastStart = await tx.leadActivityLog.findFirst({
           where: {
@@ -447,7 +446,7 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
           where: { id: leadId },
           data: {
             totalWorkSeconds: { increment: durationSeconds },
-            isWorking : false 
+            isWorking: false,
           },
         });
 
@@ -486,10 +485,11 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
 
     /* =====================================================
        SOCKET EVENT
-    ===================================================== */
+      ===================================================== */
     if (!result.skipped) {
       getIo().emit("busy:changed", {
         accountId: result.account.id,
+        leadId: tag,
         isBusy: result.account.isBusy,
         source: reason ?? "MANUAL",
       });
@@ -498,9 +498,7 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
     return sendSuccessResponse(
       res,
       200,
-      result.skipped
-        ? "Busy status unchanged"
-        : "Busy status updated",
+      result.skipped ? "Busy status unchanged" : "Busy status updated",
       result.account,
     );
   } catch (err: any) {
@@ -508,5 +506,3 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
     return sendErrorResponse(res, 500, err.message);
   }
 }
-
-
