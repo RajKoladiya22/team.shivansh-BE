@@ -436,7 +436,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
     const userId = req.user?.id;
     const { id } = req.params;
     const { status, remark, cost, customerName } = req.body as {
-      status?: "PENDING" | "IN_PROGRESS" | "CLOSED" | "CONVERTED" | "DEMO_DONE";
+      status?: "PENDING" | "IN_PROGRESS" | "CLOSED" | "CONVERTED" | "DEMO_DONE" | "INTERESTED";
       remark?: string;
       cost?: number;
       customerName?: string;
