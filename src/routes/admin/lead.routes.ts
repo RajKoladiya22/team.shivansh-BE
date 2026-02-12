@@ -17,6 +17,7 @@ import {
   getLeadCountByStatusAdmin,
   addLeadHelperAdmin,
   removeLeadHelperAdmin,
+  getLeadByIdAdmin,
 } from "../../controller/admin/lead.controller";
 
 const router = Router();
@@ -45,6 +46,18 @@ router.get(
   requireRole("ADMIN"),
   requirePermission("ALL"),
   listLeadsAdmin,
+);
+
+/**
+ * List Details
+ * GET /admin/leads/:id
+ */
+router.get(
+  "/leads/:id",
+  requireAuth,
+  requireRole("ADMIN"),
+  requirePermission("ALL"),
+  getLeadByIdAdmin,
 );
 
 /**

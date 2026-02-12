@@ -868,6 +868,7 @@ model LeadAssignment {
   team   Team?   @relation(fields: [teamId], references: [id])
 
   remark Json?
+  WorkSeconds Int @default(0)
 
   isActive Boolean @default(true)
 
@@ -891,7 +892,7 @@ model LeadHelper {
   accountId String
   account   Account @relation("HelperAccount", fields: [accountId], references: [id])
 
-  role LeadHelperRole @default(SUPPORT)
+  role LeadHelperRole @default(EXPORT)
 
   addedBy    String? // accountId
   addedByAcc Account? @relation("HelperAddedBy", fields: [addedBy], references: [id])

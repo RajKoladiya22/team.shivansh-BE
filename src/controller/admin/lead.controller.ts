@@ -597,6 +597,8 @@ export async function listLeadsAdmin(req: Request, res: Response) {
           cost: true,
           remark: true,
           isWorking: true,
+          statusMark: true,
+          totalWorkSeconds: true,
           createdAt: true,
           updatedAt: true,
 
@@ -605,6 +607,8 @@ export async function listLeadsAdmin(req: Request, res: Response) {
             select: {
               id: true,
               type: true,
+              isActive: true,
+              assignedAt: true,
               account: {
                 select: {
                   id: true,
@@ -626,6 +630,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
             where: { isActive: true },
             select: {
               role: true,
+              isActive: true,
               account: {
                 select: {
                   id: true,
@@ -661,223 +666,113 @@ export async function listLeadsAdmin(req: Request, res: Response) {
   }
 }
 
-export async function listLeadsAdmins(req: Request, res: Response) {
+/**
+ * GET /admin/leads/:id
+ * Fetch single lead detail (optimized)
+ */
+export async function getLeadByIdAdmin(req: Request, res: Response) {
   try {
-    const {
-      status,
-      source,
-      search,
-      assignedTo,
-      helperAccountId,
-      helperRole,
-      fromDate,
-      toDate,
-      sortBy = "createdAt",
-      sortOrder = "desc",
-      page = "1",
-      limit = "20",
-    } = req.query as Record<string, string>;
+    const adminUserId = req.user?.id;
 
-    const pageNumber = Math.max(Number(page || 1), 1);
-    const pageSize = Math.min(Number(limit || 20), 100);
+    if (!adminUserId) return sendErrorResponse(res, 401, "Unauthorized");
 
-    const where: any = {};
+    if (!req.user?.roles?.includes?.("ADMIN"))
+      return sendErrorResponse(res, 403, "Admin access required");
 
-    if (status) where.status = status;
-    if (source) where.source = source;
+    const { id } = req.params;
 
-    if (fromDate || toDate) {
-      where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate) where.createdAt.lte = new Date(toDate);
+    if (!id) {
+      return sendErrorResponse(res, 400, "Lead ID is required");
     }
 
-    if (search) {
-      where.OR = [
-        { customerName: { contains: search, mode: "insensitive" } },
-        { mobileNumber: { contains: search } },
-        { productTitle: { contains: search, mode: "insensitive" } },
-      ];
-    }
+    const lead = await prisma.lead.findUnique({
+      where: { id },
 
-    if (assignedTo) {
-      where.assignments = {
-        some: {
-          isActive: true,
-          OR: [
-            {
-              account: {
-                OR: [
-                  { firstName: { contains: assignedTo, mode: "insensitive" } },
-                  { lastName: { contains: assignedTo, mode: "insensitive" } },
-                ],
+      select: {
+        id: true,
+        source: true,
+        type: true,
+        status: true,
+        statusMark: true,
+
+        customerName: true,
+        mobileNumber: true,
+
+        product: true,
+        productTitle: true,
+        cost: true,
+        remark: true,
+
+        isWorking: true,
+        totalWorkSeconds: true,
+
+        createdAt: true,
+        updatedAt: true,
+        closedAt: true,
+
+        /* -------------------------
+           ACTIVE ASSIGNMENTS
+        ------------------------- */
+        assignments: {
+          where: { isActive: true },
+          select: {
+            id: true,
+            type: true,
+            remark: true,
+            assignedAt: true,
+            isActive: true,
+
+            account: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                designation: true,
+                contactPhone: true,
               },
             },
-            {
-              team: {
-                name: { contains: assignedTo, mode: "insensitive" },
-              },
-            },
-          ],
-        },
-      };
-    }
 
-    /* ---------------------
-       Lead Helper Filter
-    --------------------- */
-    if (helperAccountId || helperRole) {
-      where.leadHelpers = {
-        some: {
-          isActive: true,
-          ...(helperAccountId ? { accountId: helperAccountId } : {}),
-          ...(helperRole ? { role: helperRole as any } : {}),
-        },
-      };
-    }
-
-    // Ensure sortBy is safe - restrict to allowed columns
-    const allowedSortFields = new Set([
-      "createdAt",
-      "updatedAt",
-      "closedAt",
-      "customerName",
-      "status",
-    ]);
-    const sortField = allowedSortFields.has(sortBy) ? sortBy : "createdAt";
-    // const orderBy: any = {};
-    const orderBy = [
-      { isWorking: "desc" as const }, // indexed boolean
-      { status: "asc" as const }, // enum index
-      { createdAt: "desc" as const }, // btree index
-    ];
-
-    const [total, leads] = await Promise.all([
-      prisma.lead.count({ where }),
-      prisma.lead.findMany({
-        where,
-        orderBy,
-        skip: (pageNumber - 1) * pageSize,
-        take: pageSize,
-        include: {
-          /* Active assignment */
-          assignments: {
-            where: { isActive: true },
-            include: {
-              account: {
-                select: {
-                  id: true,
-                  firstName: true,
-                  lastName: true,
-                  contactPhone: true,
-                  activeLeadId: true, // ✅ Include to check if working
-                },
-              },
-              team: { select: { id: true, name: true } },
-            },
-          },
-
-          /* Active helpers */
-          leadHelpers: {
-            where: { isActive: true },
-            include: {
-              account: {
-                select: {
-                  id: true,
-                  firstName: true,
-                  lastName: true,
-                  designation: true,
-                  contactPhone: true,
-                },
+            team: {
+              select: {
+                id: true,
+                name: true,
               },
             },
           },
         },
-      }),
-    ]);
 
-    // // ✅ Status priority map
-    // const STATUS_PRIORITY: Record<string, number> = {
-    //   PENDING: 1,
-    //   IN_PROGRESS: 2,
-    //   DEMO_DONE: 2.5,
-    //   CONVERTED: 3,
-    //   CLOSED: 4,
-    // };
+        /* -------------------------
+           ACTIVE HELPERS
+        ------------------------- */
+        leadHelpers: {
+          where: { isActive: true },
+          select: {
+            role: true,
+            addedAt: true,
+            isActive: true,
 
-    // // ✅ Smart sorting: Working leads first, then by status priority
-    // leads.sort((a, b) => {
-    //   // Check if lead A is being worked on
-    //   const isAWorking = a.assignments?.some(
-    //     (assignment) => assignment.account?.activeLeadId === a.id,
-    //   );
-
-    //   // Check if lead B is being worked on
-    //   const isBWorking = b.assignments?.some(
-    //     (assignment) => assignment.account?.activeLeadId === b.id,
-    //   );
-
-    //   // 1️⃣ Working leads always come first
-    //   if (isAWorking && !isBWorking) return -1;
-    //   if (!isAWorking && isBWorking) return 1;
-
-    //   // 2️⃣ Both working or both not working → sort by status priority
-    //   const aPriority = STATUS_PRIORITY[a.status] ?? 99;
-    //   const bPriority = STATUS_PRIORITY[b.status] ?? 99;
-
-    //   if (aPriority !== bPriority) {
-    //     return aPriority - bPriority;
-    //   }
-
-    //   // 3️⃣ Same status → maintain DB sort order (by sortBy field)
-    //   return 0;
-    // });
-
-    // // ✅ Add isWorking flag to each lead
-    // const leadsWithWorkingFlag = leads.map((lead) => {
-    //   const isWorking = lead.assignments?.some(
-    //     (assignment) => assignment.account?.activeLeadId === lead.id,
-    //   );
-
-    //   return {
-    //     ...lead,
-    //     isWorking,
-    //     // Clean up activeLeadId from account object (don't expose to frontend)
-    //     assignments: lead.assignments?.map((assignment) => ({
-    //       ...assignment,
-    //       account: assignment.account
-    //         ? {
-    //             id: assignment.account.id,
-    //             firstName: assignment.account.firstName,
-    //             lastName: assignment.account.lastName,
-    //             contactPhone: assignment.account.contactPhone,
-    //           }
-    //         : null,
-    //     })),
-    //   };
-    // });
-
-    return sendSuccessResponse(res, 200, "Leads fetched", {
-      data: leads,
-      meta: {
-        page: pageNumber,
-        limit: pageSize,
-        total,
-        totalPages: Math.ceil(total / pageSize),
-        hasNext: pageNumber * pageSize < total,
-        hasPrev: pageNumber > 1,
+            account: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                designation: true,
+                contactPhone: true,
+              },
+            },
+          },
+        },
       },
     });
-  } catch (err: any) {
-    console.error("List leads error:", err);
-    if (err?.code === "P2021" || err?.code === "P2022") {
-      return sendErrorResponse(
-        res,
-        500,
-        "Database schema mismatch. Run Prisma migration.",
-      );
+
+    if (!lead) {
+      return sendErrorResponse(res, 404, "Lead not found");
     }
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch leads");
+
+    return sendSuccessResponse(res, 200, "Lead fetched", lead);
+  } catch (err: any) {
+    console.error("Get lead by ID error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch lead");
   }
 }
 
@@ -1005,7 +900,7 @@ export async function addLeadHelperAdmin(req: Request, res: Response) {
     if (!performerAccountId) return sendErrorResponse(res, 401, "Unauthorized");
 
     const { id: leadId } = req.params;
-    const { accountId, role = "SUPPORT" } = req.body;
+    const { accountId, role = "EXPORT" } = req.body;
 
     if (!accountId) {
       return sendErrorResponse(res, 400, "accountId is required");

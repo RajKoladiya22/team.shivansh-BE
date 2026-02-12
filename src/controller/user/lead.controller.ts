@@ -936,7 +936,7 @@ export async function addLeadHelper(req: Request, res: Response) {
       return sendErrorResponse(res, 401, "Invalid session");
 
     const { id: leadId } = req.params;
-    const { accountId, role = "SUPPORT" } = req.body;
+    const { accountId, role = "EXPORT" } = req.body;
 
     if (!accountId) {
       return sendErrorResponse(res, 400, "accountId is required");
