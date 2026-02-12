@@ -170,7 +170,7 @@ async function stopWorkIfActive(tx: any, accountId: string, leadId: string) {
   const io = getIo();
   io.emit("busy:changed", {
     accountId,
-    leadId:leadId,
+    leadId: leadId,
     isBusy: false,
     source: "WORK_ENDED",
   });
@@ -436,7 +436,13 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
     const userId = req.user?.id;
     const { id } = req.params;
     const { status, remark, cost, customerName } = req.body as {
-      status?: "PENDING" | "IN_PROGRESS" | "CLOSED" | "CONVERTED" | "DEMO_DONE" | "INTERESTED";
+      status?:
+        | "PENDING"
+        | "IN_PROGRESS"
+        | "CLOSED"
+        | "CONVERTED"
+        | "DEMO_DONE"
+        | "INTERESTED";
       remark?: string;
       cost?: number;
       customerName?: string;
@@ -742,7 +748,14 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
       },
     };
 
-    const statuses = ["PENDING", "IN_PROGRESS", "CLOSED", "CONVERTED"] as const;
+    const statuses = [
+      "PENDING",
+      "IN_PROGRESS",
+      "DEMO_DONE",
+      "INTERESTED",
+      "CONVERTED",
+      "CLOSED",
+    ] as const;
 
     const counts = await prisma.$transaction(
       statuses.map((status) =>
@@ -755,13 +768,10 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
       ),
     );
 
-    const data = {
-      PENDING: counts[0],
-      IN_PROGRESS: counts[1],
-      CLOSED: counts[2],
-      CONVERTED: counts[3],
-      TOTAL: counts.reduce((a, b) => a + b, 0),
-    };
+    const data: Record<string, number> = {};
+    statuses.forEach((status, index) => {
+      data[status] = counts[index];
+    });
 
     return sendSuccessResponse(res, 200, "My lead counts fetched", data);
   } catch (err: any) {
@@ -1129,7 +1139,7 @@ export async function startLeadWork(req: Request, res: Response) {
     const io = getIo();
     io.emit("busy:changed", {
       accountId: accountId,
-      leadId:leadId,
+      leadId: leadId,
       isBusy: true,
       source: "WORK_STARTED",
     });
@@ -1256,7 +1266,7 @@ export async function stopLeadWork(req: Request, res: Response) {
     const io = getIo();
     io.emit("busy:changed", {
       accountId,
-      leadId:leadId,
+      leadId: leadId,
       isBusy: false,
       source: "WORK_ENDED",
     });
