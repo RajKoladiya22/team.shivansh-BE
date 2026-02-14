@@ -8,7 +8,7 @@ const JWT_EXPIRES_IN = env.JWT_ACCESS_EXPIRES_IN as `${number}${string}`;
 
 export interface AccessTokenPayload {
   id?: string;
-  accountId: string;
+  accountId?: string;
   email?: string;
   roles?: string[];
   permissions?: string[];
