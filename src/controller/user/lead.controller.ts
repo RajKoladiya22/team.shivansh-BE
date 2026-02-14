@@ -6,18 +6,19 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { getIo } from "../../core/utils/socket";
+import { randomUUID } from "node:crypto";
 
 /**
  * Helpers (kept local so this file is self-contained)
  */
-const getAccountIdFromReqUser = async (userId?: string | null) => {
-  if (!userId) return null;
-  const u = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { accountId: true },
-  });
-  return u?.accountId ?? null;
-};
+// const getAccountIdFromReqUser = async (userId?: string | null) => {
+//   if (!userId) return null;
+//   const u = await prisma.user.findUnique({
+//     where: { id: userId },
+//     select: { accountId: true },
+//   });
+//   return u?.accountId ?? null;
+// };
 
 const normalizeMobile = (m: unknown) => String(m ?? "").replace(/\D/g, "");
 
@@ -181,15 +182,180 @@ async function stopWorkIfActive(tx: any, accountId: string, leadId: string) {
    ========================== */
 
 /**
+ * POST /leads/my
+ * User creates lead and auto-assigns to self
+ */
+export async function createMyLead(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const {
+      source = "MANUAL",
+      type = "LEAD",
+      customerName,
+      mobileNumber,
+      product,
+      productTitle,
+      cost,
+      remark,
+      demoDate,
+    } = req.body as Record<string, any>;
+
+    if (!customerName || !mobileNumber)
+      return sendErrorResponse(
+        res,
+        400,
+        "Customer name and mobile are required",
+      );
+
+    const normalizedMobile = normalizeMobile(mobileNumber);
+
+    const resolvedProduct = product
+      ? {
+          id: product.id || randomUUID(),
+          slug: product.slug ?? null,
+          link: product.link ?? null,
+          title: product.title ?? null,
+        }
+      : undefined;
+
+    const finalProductTitle = resolvedProduct?.title ?? productTitle ?? null;
+
+    const now = new Date();
+
+    const newLead = await prisma.$transaction(async (tx) => {
+      /* -------------------------
+         1️⃣ Upsert Customer
+      ------------------------- */
+
+      const customer = await tx.customer.upsert({
+        where: { normalizedMobile },
+        create: {
+          name: customerName,
+          mobile: mobileNumber,
+          normalizedMobile,
+          createdBy: accountId,
+        },
+        update: {
+          name: customerName,
+        },
+      });
+
+      /* -------------------------
+         2️⃣ Create Lead
+      ------------------------- */
+
+      const lead = await tx.lead.create({
+        data: {
+          source,
+          type,
+          customerId: customer.id,
+          customerName,
+          mobileNumber: normalizedMobile,
+          product: resolvedProduct,
+          productTitle: finalProductTitle,
+          cost: cost ?? undefined,
+          remark: remark ?? undefined,
+          createdBy: accountId,
+
+          demoScheduledAt: demoDate ? new Date(demoDate) : undefined,
+          demoCount: demoDate ? 1 : 0,
+          demoMeta: demoDate
+            ? {
+                history: [
+                  {
+                    type: "SCHEDULED",
+                    at: new Date(demoDate),
+                    by: accountId,
+                  },
+                ],
+              }
+            : undefined,
+        },
+      });
+
+      /* -------------------------
+         3️⃣ Self Assignment
+      ------------------------- */
+
+      await tx.leadAssignment.create({
+        data: {
+          leadId: lead.id,
+          type: "ACCOUNT",
+          accountId,
+          isActive: true,
+          assignedBy: accountId,
+          assignedAt: now,
+        },
+      });
+
+      /* -------------------------
+         4️⃣ Activity Log
+      ------------------------- */
+
+      const initialAssignee = await resolveAssigneeSnapshot({
+        accountId,
+      });
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId: lead.id,
+          action: "CREATED",
+          performedBy: accountId,
+          meta: {
+            source,
+            type,
+            selfAssigned: true,
+            initialAssignment: initialAssignee,
+            demoScheduledAt: demoDate ?? null,
+          },
+        },
+      });
+
+      return lead;
+    });
+
+    /* -------------------------
+       🔔 Socket Emit (Minimal)
+    ------------------------- */
+
+    try {
+      const io = getIo();
+
+      const payload = {
+        id: newLead.id,
+        customerName: newLead.customerName,
+        status: newLead.status,
+        demoScheduledAt: newLead.demoScheduledAt,
+        createdAt: newLead.createdAt,
+      };
+
+      io.to(`leads:user:${accountId}`).emit("lead:created", payload);
+      io.to("leads:admin").emit("lead:created", payload);
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(
+      res,
+      201,
+      "Lead created and assigned to you",
+      newLead,
+    );
+  } catch (err: any) {
+    console.error("Create my lead error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to create lead");
+  }
+}
+
+/**
  * GET /leads/my
  * List leads assigned to the current user's account or teams
  */
 export async function listMyLeads(req: Request, res: Response) {
   try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const accountId = await getAccountIdFromReqUser(userId);
+    const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
     const {
@@ -199,30 +365,45 @@ export async function listMyLeads(req: Request, res: Response) {
       fromDate,
       toDate,
       sortBy = "createdAt",
-      sortOrder = "desc",
+      demoFromDate,
+      demoToDate,
+      demoStatus,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
 
     const pageNumber = Math.max(Number(page), 1);
     const pageSize = Math.min(Number(limit), 100);
+    const skip = (pageNumber - 1) * pageSize;
 
     const where: any = {
-      assignments: {
-        some: {
-          isActive: true,
-          OR: [
-            { accountId: accountId },
-            {
-              team: {
-                members: {
-                  some: { accountId: accountId },
+      OR: [
+        {
+          assignments: {
+            some: {
+              isActive: true,
+              OR: [
+                { accountId },
+                {
+                  team: {
+                    members: {
+                      some: { accountId },
+                    },
+                  },
                 },
-              },
+              ],
             },
-          ],
+          },
         },
-      },
+        {
+          leadHelpers: {
+            some: {
+              isActive: true,
+              accountId,
+            },
+          },
+        },
+      ],
     };
 
     if (status) where.status = status;
@@ -235,24 +416,41 @@ export async function listMyLeads(req: Request, res: Response) {
     }
 
     if (search) {
-      where.OR = [
-        { customerName: { contains: search, mode: "insensitive" } },
-        { mobileNumber: { contains: search } },
-        { productTitle: { contains: search, mode: "insensitive" } },
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { customerName: { contains: search, mode: "insensitive" } },
+            { mobileNumber: { contains: search } },
+            { productTitle: { contains: search, mode: "insensitive" } },
+          ],
+        },
       ];
     }
 
-    // sanitize sortBy
-    const allowedSortFields = new Set([
-      "createdAt",
-      "updatedAt",
-      "closedAt",
-      "customerName",
-      "status",
-    ]);
-    const sortField = allowedSortFields.has(sortBy) ? sortBy : "createdAt";
-    // const orderBy: any = {};
-    // orderBy[sortField] = sortOrder === "asc" ? "asc" : "desc";
+    if (demoFromDate || demoToDate) {
+      where.demoScheduledAt = {};
+      if (demoFromDate) where.demoScheduledAt.gte = new Date(demoFromDate);
+      if (demoToDate) where.demoScheduledAt.lte = new Date(demoToDate);
+    }
+
+    if (demoStatus) {
+      const now = new Date();
+
+      if (demoStatus === "overdue") {
+        where.demoScheduledAt = { lt: now };
+        where.demoDoneAt = null;
+      }
+
+      if (demoStatus === "upcoming") {
+        where.demoScheduledAt = { gt: now };
+        where.demoDoneAt = null;
+      }
+
+      if (demoStatus === "done") {
+        where.demoDoneAt = { not: null };
+      }
+    }
 
     const orderBy = [
       { isWorking: "desc" as const }, // indexed boolean
@@ -295,44 +493,21 @@ export async function listMyLeads(req: Request, res: Response) {
           },
         },
         orderBy,
-        skip: (pageNumber - 1) * pageSize,
+        skip,
         take: pageSize,
       }),
     ]);
 
-    // const activeLeadId = account?.activeLeadId;
-
-    // Status priority map
-    // const STATUS_PRIORITY: Record<string, number> = {
-    //   PENDING: 1,
-    //   IN_PROGRESS: 2,
-    //   DEMO_DONE: 2.5,
-    //   CONVERTED: 3,
-    //   CLOSED: 4,
-    // };
-
-    // leads.sort((a, b) => {
-    //   // ⭐ 1. Active working lead always first
-    //   if (a.id === activeLeadId) return -1;
-    //   if (b.id === activeLeadId) return 1;
-
-    //   // ⭐ 2. Status priority sorting
-    //   const aPriority = STATUS_PRIORITY[a.status] ?? 99;
-    //   const bPriority = STATUS_PRIORITY[b.status] ?? 99;
-
-    //   if (aPriority !== bPriority) return aPriority - bPriority;
-
-    //   // ⭐ 3. Fallback → keep DB sort order (createdAt etc)
-    //   return 0;
-    // });
-
-    // const MyleadsData = leads.map((lead) => ({
-    //   ...lead,
-    //   isWorking: lead.id === activeLeadId,
-    // }));
+    const enriched = leads.map((lead) => ({
+      ...lead,
+      isHelper: lead.leadHelpers.length > 0,
+      isAssigned: lead.assignments.some(
+        (a) => a.accountId === accountId || a.teamId !== null, // already filtered by team membership
+      ),
+    }));
 
     return sendSuccessResponse(res, 200, "My leads fetched", {
-      data: leads,
+      data: enriched,
       meta: {
         page: pageNumber,
         limit: pageSize,
@@ -354,11 +529,10 @@ export async function listMyLeads(req: Request, res: Response) {
  */
 export async function getMyLeadById(req: Request, res: Response) {
   try {
-    const userId = req.user?.id;
     const { id } = req.params;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+    if (!id) return sendErrorResponse(res, 400, "Lead ID required");
 
-    const accountId = await getAccountIdFromReqUser(userId);
+    const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
     const lead = await prisma.lead.findFirst({
@@ -368,11 +542,11 @@ export async function getMyLeadById(req: Request, res: Response) {
           some: {
             isActive: true,
             OR: [
-              { accountId: accountId },
+              { accountId },
               {
                 team: {
                   members: {
-                    some: { accountId: accountId },
+                    some: { accountId },
                   },
                 },
               },
@@ -380,6 +554,7 @@ export async function getMyLeadById(req: Request, res: Response) {
           },
         },
       },
+
       include: {
         // include all assignments (active + history) so UI can show reassign history
         assignments: {
@@ -415,10 +590,27 @@ export async function getMyLeadById(req: Request, res: Response) {
             },
           },
         },
+        leadHelpers: {
+          where: { isActive: true },
+          select: {
+            role: true,
+            addedAt: true,
+            account: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                designation: true,
+                contactPhone: true,
+              },
+            },
+          },
+        },
       },
     });
 
-    if (!lead) return sendErrorResponse(res, 404, "Lead not found");
+    if (!lead)
+      return sendErrorResponse(res, 404, "Lead not found or not accessible");
 
     return sendSuccessResponse(res, 200, "Lead fetched", lead);
   } catch (err: any) {
@@ -433,7 +625,6 @@ export async function getMyLeadById(req: Request, res: Response) {
  */
 export async function updateMyLeadStatus(req: Request, res: Response) {
   try {
-    const userId = req.user?.id;
     const { id } = req.params;
     const { status, remark, cost, customerName } = req.body as {
       status?:
@@ -447,9 +638,16 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       cost?: number;
       customerName?: string;
     };
+    if (
+      status === undefined &&
+      remark === undefined &&
+      cost === undefined &&
+      customerName === undefined
+    ) {
+      return sendErrorResponse(res, 400, "Nothing to update");
+    }
 
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-    const accountId = await getAccountIdFromReqUser(userId);
+    const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
     const TERMINAL_STATUSES = [
@@ -647,6 +845,24 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       return updatedLead;
     });
 
+    try {
+      const io = getIo();
+
+      const patchPayload = {
+        id,
+        patch: {
+          status: updated.status,
+          demoDoneAt: updated.demoDoneAt,
+          updatedAt: updated.updatedAt,
+        },
+      };
+
+      io.to(`leads:user:${accountId}`).emit("lead:patch", patchPayload);
+      io.to("leads:admin").emit("lead:patch", patchPayload);
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
     return sendSuccessResponse(res, 200, "Lead updated", updated);
   } catch (err: any) {
     console.error("Update lead status error:", err);
@@ -660,12 +876,11 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
  */
 export async function getMyLeadActivity(req: Request, res: Response) {
   try {
-    const userId = req.user?.id;
     const { id } = req.params;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
 
-    const accountId = await getAccountIdFromReqUser(userId);
-    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+    const accountId = req.user?.accountId;
+    if (!accountId || !id)
+      return sendErrorResponse(res, 401, "Invalid session user");
 
     const hasAccess = await prisma.lead.findFirst({
       where: {
@@ -724,10 +939,7 @@ export async function getMyLeadActivity(req: Request, res: Response) {
  */
 export async function getMyLeadStatusStats(req: Request, res: Response) {
   try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const accountId = await getAccountIdFromReqUser(userId);
+    const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
     const baseWhere = {
@@ -792,10 +1004,7 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
  */
 export async function listMyDsuLeads(req: Request, res: Response) {
   try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const accountId = await getAccountIdFromReqUser(userId);
+    const accountId = await req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
     const {
@@ -938,33 +1147,27 @@ export async function listMyDsuLeads(req: Request, res: Response) {
  */
 export async function addLeadHelper(req: Request, res: Response) {
   try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const performerAccountId = await getAccountIdFromReqUser(userId);
+    const performerAccountId = req.user?.accountId;
     if (!performerAccountId)
       return sendErrorResponse(res, 401, "Invalid session");
 
     const { id: leadId } = req.params;
     const { accountId, role = "EXPORT" } = req.body;
 
-    if (!accountId) {
-      return sendErrorResponse(res, 400, "accountId is required");
-    }
-
-    // 🔐 ACCESS CHECK (admin OR assignee)
-    if (!req.user?.roles?.includes("ADMIN")) {
-      try {
-        await assertLeadAccessForUser(leadId, performerAccountId);
-      } catch {
-        return sendErrorResponse(res, 403, "Access denied");
-      }
+    if (!leadId || !accountId) {
+      return sendErrorResponse(res, 400, "Invalid parameters");
     }
 
     // ensure lead exists
     const leadExists = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true },
+      select: {
+        id: true,
+        assignments: {
+          where: { isActive: true },
+          select: { accountId: true, teamId: true },
+        },
+      },
     });
     if (!leadExists) {
       return sendErrorResponse(res, 404, "Lead not found");
@@ -1004,6 +1207,46 @@ export async function addLeadHelper(req: Request, res: Response) {
       },
     });
 
+    let recipientAccountIds: string[] = [accountId];
+
+    if (leadExists.assignments[0]?.accountId) {
+      recipientAccountIds.push(leadExists.assignments[0].accountId);
+    } else if (leadExists.assignments[0]?.teamId) {
+      const members = await prisma.teamMember.findMany({
+        where: {
+          teamId: leadExists.assignments[0].teamId,
+          isActive: true,
+        },
+        select: { accountId: true },
+      });
+      recipientAccountIds.push(...members.map((m) => m.accountId));
+    }
+
+    recipientAccountIds = [...new Set(recipientAccountIds)];
+
+    try {
+      const io = getIo();
+
+      const patchPayload = {
+        id: leadId,
+        patch: {
+          helperAdded: {
+            accountId,
+            role,
+            addedAt: new Date(),
+          },
+        },
+      };
+
+      recipientAccountIds.forEach((accId) => {
+        io.to(`leads:user:${accId}`).emit("lead:patch", patchPayload);
+      });
+
+      io.to("leads:admin").emit("lead:patch", patchPayload);
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
     return sendSuccessResponse(res, 200, "Helper added to Lead", helper);
   } catch (err: any) {
     console.error("addLeadHelper error:", err);
@@ -1015,13 +1258,9 @@ export async function addLeadHelper(req: Request, res: Response) {
  * DELETE /user/leads/:id/helpers/:accountId"
  * Remove helper/export employee from lead
  */
-
 export async function removeLeadHelper(req: Request, res: Response) {
   try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const performerAccountId = await getAccountIdFromReqUser(userId);
+    const performerAccountId = req.user?.accountId;
     if (!performerAccountId)
       return sendErrorResponse(res, 401, "Invalid session");
 
@@ -1035,6 +1274,30 @@ export async function removeLeadHelper(req: Request, res: Response) {
         return sendErrorResponse(res, 403, "Access denied");
       }
     }
+
+    const existingLead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: {
+        id: true,
+        assignments: {
+          where: { isActive: true },
+          select: { accountId: true, teamId: true },
+        },
+      },
+    });
+
+    if (!existingLead) return sendErrorResponse(res, 404, "Lead not found");
+    const helper = await prisma.leadHelper.findFirst({
+      where: {
+        leadId,
+        accountId,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+
+    if (!helper)
+      return sendErrorResponse(res, 404, "Helper not found or already removed");
 
     const updated = await prisma.leadHelper.updateMany({
       where: {
@@ -1065,6 +1328,46 @@ export async function removeLeadHelper(req: Request, res: Response) {
       },
     });
 
+    let recipientAccountIds: string[] = [accountId];
+
+    if (existingLead.assignments[0]?.accountId) {
+      recipientAccountIds.push(existingLead.assignments[0].accountId);
+    } else if (existingLead.assignments[0]?.teamId) {
+      const members = await prisma.teamMember.findMany({
+        where: {
+          teamId: existingLead.assignments[0].teamId,
+          isActive: true,
+        },
+        select: { accountId: true },
+      });
+
+      recipientAccountIds.push(...members.map((m) => m.accountId));
+    }
+
+    recipientAccountIds = [...new Set(recipientAccountIds)];
+
+    try {
+      const io = getIo();
+
+      const patchPayload = {
+        id: leadId,
+        patch: {
+          helperRemoved: {
+            accountId,
+            removedAt: new Date(),
+          },
+        },
+      };
+
+      recipientAccountIds.forEach((accId) => {
+        io.to(`leads:user:${accId}`).emit("lead:patch", patchPayload);
+      });
+
+      io.to("leads:admin").emit("lead:patch", patchPayload);
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
     return sendSuccessResponse(res, 200, "Helper removed");
   } catch (err: any) {
     console.error("removeLeadHelper error:", err);
@@ -1078,13 +1381,12 @@ export async function removeLeadHelper(req: Request, res: Response) {
 
 export async function startLeadWork(req: Request, res: Response) {
   try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const accountId = await getAccountIdFromReqUser(userId);
+    const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
 
     const { id: leadId } = req.params;
+
+    if (!leadId) return sendErrorResponse(res, 400, "Lead ID required");
 
     const account = await prisma.account.findUnique({
       where: { id: accountId },
@@ -1129,20 +1431,32 @@ export async function startLeadWork(req: Request, res: Response) {
       prisma.busyActivityLog.create({
         data: {
           accountId: accountId,
-          fromBusy: true,
-          toBusy: false,
+          fromBusy: false,
+          toBusy: true,
           reason: "WORK_STARTED",
         },
       }),
     ]);
 
-    const io = getIo();
-    io.emit("busy:changed", {
-      accountId: accountId,
-      leadId: leadId,
-      isBusy: true,
-      source: "WORK_STARTED",
-    });
+    try {
+      const io = getIo();
+
+      io.to(`leads:user:${accountId}`).emit("lead:patch", {
+        id: leadId,
+        patch: {
+          status: "IN_PROGRESS",
+          isWorking: true,
+        },
+      });
+
+      io.emit("busy:changed", {
+        accountId,
+        leadId,
+        isBusy: true,
+      });
+    } catch {
+      console.warn("Socket emit skipped");
+    }
 
     return sendSuccessResponse(res, 200, "Work started", { leadId });
   } catch (err: any) {
@@ -1152,10 +1466,7 @@ export async function startLeadWork(req: Request, res: Response) {
 
 export async function stopLeadWork(req: Request, res: Response) {
   try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const accountId = await getAccountIdFromReqUser(userId);
+    const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
 
     // fetch account with activeLeadId (we need activeLeadId before we clear it)
@@ -1263,13 +1574,24 @@ export async function stopLeadWork(req: Request, res: Response) {
       },
     });
 
-    const io = getIo();
-    io.emit("busy:changed", {
-      accountId,
-      leadId: leadId,
-      isBusy: false,
-      source: "WORK_ENDED",
-    });
+    try {
+      const io = getIo();
+
+      io.to(`leads:user:${accountId}`).emit("lead:patch", {
+        id: leadId,
+        patch: {
+          isWorking: false,
+        },
+      });
+
+      io.emit("busy:changed", {
+        accountId,
+        leadId: leadId,
+        isBusy: false,
+      });
+    } catch {
+      console.warn("Socket emit skipped");
+    }
 
     return sendSuccessResponse(res, 200, "Work stopped", {
       leadId,
@@ -1282,32 +1604,95 @@ export async function stopLeadWork(req: Request, res: Response) {
   }
 }
 
+/**
+ * GET /user/leads/work/current
+ */
 export async function getMyActiveWork(req: Request, res: Response) {
-  const userId = req.user?.id;
-  if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
 
-  const accountId = await getAccountIdFromReqUser(userId);
-  if (!accountId) return sendErrorResponse(res, 401, "Invalid user");
+    /* 1️⃣ Fetch Account (light select) */
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: {
+        activeLeadId: true,
+      },
+    });
 
-  const account = await prisma.account.findUnique({
-    where: { id: accountId },
-    include: {
-      activeLead: {
+    if (!account?.activeLeadId) {
+      return sendSuccessResponse(res, 200, "No active work", null);
+    }
+
+    const leadId = account.activeLeadId;
+
+    /* 2️⃣ Fetch Lead + Last Start */
+    const [lead, lastStart] = await Promise.all([
+      prisma.lead.findUnique({
+        where: { id: leadId },
         select: {
           id: true,
           customerName: true,
           status: true,
           productTitle: true,
+          isWorking: true,
+          totalWorkSeconds: true,
         },
-      },
-    },
-  });
+      }),
 
-  if (!account?.activeLeadId) {
-    return sendSuccessResponse(res, 200, "No active work", null);
+      prisma.leadActivityLog.findFirst({
+        where: {
+          leadId,
+          performedBy: accountId,
+          action: "WORK_STARTED",
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          createdAt: true,
+          meta: true,
+        },
+      }),
+    ]);
+
+    if (!lead) {
+      // Lead deleted or inconsistent state
+      return sendSuccessResponse(res, 200, "No active work", null);
+    }
+
+    /* 3️⃣ Calculate Live Duration */
+    let durationSeconds = 0;
+    let startedAt: string | null = null;
+
+    if (lastStart) {
+      const startIso =
+        (lastStart.meta as any)?.startedAt ?? lastStart.createdAt.toISOString();
+
+      const startDate = new Date(startIso);
+      if (!isNaN(startDate.getTime())) {
+        durationSeconds = Math.max(
+          0,
+          Math.floor((Date.now() - startDate.getTime()) / 1000),
+        );
+        startedAt = startDate.toISOString();
+      }
+    }
+
+    return sendSuccessResponse(res, 200, "Active work", {
+      leadId: lead.id,
+      customerName: lead.customerName,
+      productTitle: lead.productTitle,
+      status: lead.status,
+      isWorking: lead.isWorking,
+      totalWorkSeconds: lead.totalWorkSeconds,
+      currentSessionSeconds: durationSeconds,
+      startedAt,
+    });
+  } catch (err: any) {
+    console.error("getMyActiveWork error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch active work",
+    );
   }
-
-  return sendSuccessResponse(res, 200, "Active work", {
-    leadId: account?.activeLead,
-  });
 }

@@ -13,12 +13,14 @@ import {
   startLeadWork,
   stopLeadWork,
   getMyActiveWork,
+  createMyLead,
 } from "../../controller/user/lead.controller";
 
 const router = Router();
 
 /* ============== USER LEADS ============== */
 
+router.post("/leads/my", requireAuth, createMyLead);
 router.get("/leads/my", requireAuth, listMyLeads);
 router.get("/leads/my/dsu", requireAuth, listMyLeads);
 router.get("/leads/:id", requireAuth, getMyLeadById);

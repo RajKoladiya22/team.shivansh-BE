@@ -160,13 +160,6 @@ export async function triggerAssignmentNotification({
           }),
         );
       } catch (pushError) {
-        // console.log("Web push failed, deactivating subscription:", sub.id, "\nError:\n", pushError);
-
-        // deactivate invalid subscription
-        // await prisma.notificationSubscription.update({
-        //   where: { id: sub.id },
-        //   data: { isActive: false },
-        // });
         console.warn("⚠️ Web push failed", pushError);
       }
     }

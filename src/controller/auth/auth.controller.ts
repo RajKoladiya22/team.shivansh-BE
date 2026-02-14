@@ -14,14 +14,38 @@ export async function login(req: Request, res: Response) {
   try {
     const { identifier, password } = req.body;
     if (!identifier || !password) {
-      return sendErrorResponse(res, 400, "Email/Username and password requiredr");
-      // return res
-      //   .status(400)
-      //   .json({ message: "Email/Username and password required" });
+      return sendErrorResponse(
+        res,
+        400,
+        "Email/Username and password requiredr",
+      );
     }
     // console.log("\n\n\nreq.body:", req.body);
 
     // find user by username or email
+    // const user = await prisma.user.findFirst({
+    //   where: {
+    //     OR: [
+    //       { username: identifier },
+    //       { account: { contactEmail: identifier } },
+    //     ],
+    //   },
+    //   include: {
+    //     account: true,
+    //     roles: {
+    //       include: {
+    //         role: {
+    //           include: {
+    //             permissions: {
+    //               include: { permission: true },
+    //             },
+    //           },
+    //         },
+    //       },
+    //     },
+    //   },
+    // });
+
     const user = await prisma.user.findFirst({
       where: {
         OR: [
@@ -29,14 +53,30 @@ export async function login(req: Request, res: Response) {
           { account: { contactEmail: identifier } },
         ],
       },
-      include: {
-        account: true,
+      select: {
+        id: true,
+        passwordHash: true,
+        username: true,
+        accountId: true,
+        account: {
+          select: {
+            id: true,
+            contactEmail: true,
+            firstName: true,
+            lastName: true,
+            avatar: true,
+            isActive: true,
+          },
+        },
         roles: {
-          include: {
+          select: {
             role: {
-              include: {
+              select: {
+                name: true,
                 permissions: {
-                  include: { permission: true },
+                  select: {
+                    permission: { select: { key: true } },
+                  },
                 },
               },
             },
@@ -47,20 +87,17 @@ export async function login(req: Request, res: Response) {
 
     if (!user) {
       return sendErrorResponse(res, 401, "Invalid credentials");
-      // return res.status(401).json({ message: "Invalid credentials" });
     }
 
     // compare password
     const validPassword = await bcrypt.compare(password, user.passwordHash!);
     if (!validPassword) {
       return sendErrorResponse(res, 401, "Invalid Password");
-      // return res.status(401).json({ message: "Invalid credentials" });
     }
 
     // check admin approval
     if (!user.account?.isActive) {
       return sendErrorResponse(res, 403, "Account not approved yet");
-      // return res.status(403).json({ message: "Account not approved yet" });
     }
 
     // gather user roles & permission keys
@@ -72,6 +109,7 @@ export async function login(req: Request, res: Response) {
     // create token payload without sensitive ID
     const tokenPayload = {
       id: user.id,
+      accountId: user.accountId,
       email: user.account.contactEmail,
       roles,
       permissions,
@@ -95,6 +133,7 @@ export async function login(req: Request, res: Response) {
       message: "Login successful",
       user: {
         id: user.id,
+        accountId: user.accountId,
         username: user.username,
         firstName: user.account.firstName,
         lastName: user.account.lastName,

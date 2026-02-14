@@ -8,6 +8,7 @@ const JWT_EXPIRES_IN = env.JWT_ACCESS_EXPIRES_IN as `${number}${string}`;
 
 export interface AccessTokenPayload {
   id?: string;
+  accountId: string;
   email?: string;
   roles?: string[];
   permissions?: string[];
@@ -25,45 +26,9 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
 
   return {
     id: decoded.id as string,
+    accountId: decoded.accountId as string,
     email: decoded.email as string,
     roles: decoded.roles as string[],
     permissions: decoded.permissions as string[],
   };
 }
-
-// import ms from "ms";
-
-// // export function signJwtA(payload: Record<string, any>, expiresIn: ms.StringValue = JWT_EXPIRES_IN as ms.StringValue) {
-// //   return jwt.sign(payload, JWT_SECRET, { expiresIn });
-// // }
-
-// export function signJwt(payload: Omit<JWTPayload, 'iat' | 'exp'>): string {
-//   return jwt.sign(payload, JWT_SECRET, {
-//     expiresIn: JWT_EXPIRES_IN as ms.StringValue,
-//     issuer: 'shivansh-admin',
-//   });
-// }
-
-// export function verifyJwt(token: string): JWTPayload {
-//   try {
-
-//     if (!JWT_SECRET) {
-//       throw new Error("JWT_SECRET is required in env");
-//     }
-//     // console.log("\nToken-->",token);
-
-//     return jwt.verify(token, JWT_SECRET) as unknown as JWTPayload;
-//   } catch (error) {
-//     if (error instanceof jwt.TokenExpiredError) {
-//       throw new Error('Token expired');
-//     }
-//     if (error instanceof jwt.JsonWebTokenError) {
-//       throw new Error('Invalid token');
-//     }
-//     throw error;
-//   }
-// }
-
-// // export function verifyJwt<T = any>(token: string): T {
-// //   return jwt.verify(token, JWT_SECRET) as T;
-// // }

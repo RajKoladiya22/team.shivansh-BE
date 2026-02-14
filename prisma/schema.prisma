@@ -165,6 +165,7 @@ model Account {
 
   @@index([isActive])
   @@index([jobType])
+  @@index([contactEmail])
 }
 
 // ------------------------------------------------------------------
@@ -819,6 +820,18 @@ model Lead {
   status     LeadStatus @default(PENDING)
   statusMark Json?
 
+  demoScheduledAt DateTime?
+  demoDoneAt      DateTime?
+  demoCount       Int       @default(0)
+  demoMeta        Json?
+  // {
+  //   history: [
+  //     { type: "SCHEDULED", at: DateTime, by: accountId },
+  //     { type: "RESCHEDULED", at: DateTime, by: accountId },
+  //     { type: "DONE", at: DateTime, by: accountId }
+  //   ]
+  // }
+
   customerName String
   mobileNumber String
   product      Json? // { id, slug, link, title }
@@ -849,9 +862,11 @@ model Lead {
 
   @@index([isWorking])
   @@index([createdAt, status])
-  @@index([source])
+  @@index([status, demoScheduledAt])
   @@index([status])
   @@index([mobileNumber])
+  @@index([demoScheduledAt])
+  @@index([demoDoneAt])
 }
 
 model LeadAssignment {
@@ -867,8 +882,8 @@ model LeadAssignment {
   teamId String?
   team   Team?   @relation(fields: [teamId], references: [id])
 
-  remark Json?
-  WorkSeconds Int @default(0)
+  remark      Json?
+  WorkSeconds Int   @default(0)
 
   isActive Boolean @default(true)
 
