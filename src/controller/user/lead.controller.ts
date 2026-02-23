@@ -617,26 +617,31 @@ export async function getMyLeadById(req: Request, res: Response) {
 export async function updateMyLeadStatus(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { status, remark, cost, customerName } = req.body as {
-      status?:
-        | "PENDING"
-        | "IN_PROGRESS"
-        | "CLOSED"
-        | "CONVERTED"
-        | "DEMO_DONE"
-        | "INTERESTED";
-      remark?: string;
-      cost?: number;
-      customerName?: string;
-    };
-    if (
-      status === undefined &&
-      remark === undefined &&
-      cost === undefined &&
-      customerName === undefined
-    ) {
-      return sendErrorResponse(res, 400, "Nothing to update");
-    }
+    const { status, remark, cost, customerName, demoScheduledAt } =
+      req.body as {
+        status?:
+          | "PENDING"
+          | "IN_PROGRESS"
+          | "CLOSED"
+          | "CONVERTED"
+          | "DEMO_DONE"
+          | "INTERESTED";
+        remark?: string;
+        cost?: number;
+        customerName?: string;
+        demoScheduledAt?: string;
+      };
+    // console.log("\n\n\n\n\n\n\n\n\n\n req.body:\n", req.body);
+
+    // if (
+    //   status === undefined &&
+    //   remark === undefined &&
+    //   cost === undefined &&
+    //   customerName === undefined &&
+    //   demoScheduledAt === undefined
+    // ) {
+    //   return sendErrorResponse(res, 400, "Nothing to update");
+    // }
 
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
@@ -654,14 +659,14 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
 
     // console.log("\n\n\nisTerminalStatus\n", isTerminalStatus);
 
-    if (
-      typeof status === "undefined" &&
-      typeof remark === "undefined" &&
-      typeof cost === "undefined" &&
-      typeof customerName === "undefined"
-    ) {
-      return sendErrorResponse(res, 400, "Nothing to update");
-    }
+    // if (
+    //   typeof status === "undefined" &&
+    //   typeof remark === "undefined" &&
+    //   typeof cost === "undefined" &&
+    //   typeof customerName === "undefined"
+    // ) {
+    //   return sendErrorResponse(res, 400, "Nothing to update");
+    // }
 
     // verify access: ensure the lead is currently assigned to this user (directly or via team)
     const lead = await prisma.lead.findFirst({
@@ -725,6 +730,34 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
 
       if (isTerminalStatus) {
         await stopWorkIfActive(tx, accountId, id);
+      }
+
+      // ── demo scheduling / rescheduling ───────────────────────────────────
+      if (demoScheduledAt !== undefined) {
+        const newDate = new Date(demoScheduledAt);
+
+        const isNewDate =
+          !lead.demoScheduledAt ||
+          lead.demoScheduledAt.getTime() !== newDate.getTime();
+
+        if (isNewDate) {
+          data.demoScheduledAt = newDate;
+          data.demoCount = { increment: 1 };
+
+          // append to demoMeta.history
+          const existingMeta = lead.demoMeta as any;
+          const history: any[] = existingMeta?.history ?? [];
+          data.demoMeta = {
+            history: [
+              ...history,
+              {
+                type: lead.demoScheduledAt ? "RESCHEDULED" : "SCHEDULED",
+                at: newDate.toISOString(),
+                by: accountId,
+              },
+            ],
+          };
+        }
       }
 
       // perform update

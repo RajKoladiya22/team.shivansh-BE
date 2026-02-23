@@ -117,6 +117,8 @@ export async function createLeadAdmin(req: Request, res: Response) {
       demoDate,
     } = req.body as Record<string, any>;
 
+    // console.log("\n\n\n\ndemoDate:", demoDate);
+
     if (!source || !type)
       return sendErrorResponse(res, 400, "Lead source and type are required");
     if (!customerName || !mobileNumber)
@@ -444,6 +446,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         demoScheduledAt: true,
         demoDoneAt: true,
         demoCount: true,
+        demoMeta: true,
         assignments: {
           where: { isActive: true },
           select: { accountId: true, teamId: true },
@@ -475,6 +478,17 @@ export async function updateLeadAdmin(req: Request, res: Response) {
     // -------------------------
     // Demo Reschedule Handling
     // -------------------------
+    // if (data.demoScheduledAt) {
+    //   const newDate = new Date(data.demoScheduledAt);
+
+    //   if (
+    //     !existing.demoScheduledAt ||
+    //     existing.demoScheduledAt.getTime() !== newDate.getTime()
+    //   ) {
+    //     data.demoCount = { increment: 1 };
+    //     data.demoRescheduledAt = new Date();
+    //   }
+    // }
     if (data.demoScheduledAt) {
       const newDate = new Date(data.demoScheduledAt);
 
@@ -483,7 +497,24 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         existing.demoScheduledAt.getTime() !== newDate.getTime()
       ) {
         data.demoCount = { increment: 1 };
-        data.demoRescheduledAt = new Date();
+
+        // Append to demoMeta history
+        const existingMeta = (existing as any).demoMeta as any;
+        // console.log("\n\n\n\n\n\n\n\n\n\nExisting:\n", existing);
+        // console.log("\n\nExisting existingMeta:\n", existingMeta);
+        const history = existingMeta?.history ?? [];
+        // console.log("\n\nExisting demoMeta history:\n", history);
+        
+        data.demoMeta = {
+          history: [
+            ...history,
+            {
+              type: existing.demoScheduledAt ? "RESCHEDULED" : "SCHEDULED",
+              at: newDate.toISOString(),
+              by: performerAccountId,
+            },
+          ],
+        };
       }
     }
 
@@ -1317,10 +1348,8 @@ export async function removeLeadHelperAdmin(req: Request, res: Response) {
       console.warn("Socket emit skipped");
     }
 
-    return sendSuccessResponse(res, 200, "Helper removed", );
+    return sendSuccessResponse(res, 200, "Helper removed");
   } catch (err) {
     return sendErrorResponse(res, 500, "Failed to remove helper");
   }
 }
-
- 
