@@ -195,6 +195,188 @@ export async function getProfile(req: Request, res: Response) {
   }
 }
 
+
+export async function updateMyBusyStatus(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    let affectedLeadId: string | null = null;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { isBusy, reason } = req.body as {
+      isBusy: boolean;
+      reason?: string;
+    };
+
+    if (typeof isBusy !== "boolean") {
+      return sendErrorResponse(res, 400, "isBusy must be boolean");
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { accountId: true },
+    });
+
+    if (!user?.accountId) {
+      return sendErrorResponse(res, 400, "Invalid account");
+    }
+
+    const now = new Date();
+    let tag: boolean = false;
+
+    const result = await prisma.$transaction(async (tx) => {
+      const account = await tx.account.findUnique({
+        where: { id: user.accountId },
+        select: {
+          id: true,
+          isBusy: true,
+          activeLeadId: true,
+        },
+      });
+
+      if (!account) throw new Error("Account not found");
+
+      // ⛔ No-op protection
+      if (account.isBusy === isBusy && !account.activeLeadId) {
+        return { skipped: true, account };
+      }
+
+      /* =====================================================
+         🛑 AUTO-STOP LEAD WORK (CRITICAL FIX)
+      ===================================================== */
+      if (account.activeLeadId && isBusy === false) {
+        const leadId = account.activeLeadId;
+        tag = leadId ? true : false;
+        affectedLeadId = leadId;
+
+        const lastStart = await tx.leadActivityLog.findFirst({
+          where: {
+            leadId,
+            performedBy: account.id,
+            action: "WORK_STARTED",
+          },
+          orderBy: { createdAt: "desc" },
+        });
+
+        let durationSeconds = 0;
+        let startedAtIso: string | null = null;
+
+        if (lastStart?.meta && typeof lastStart.meta === "object") {
+          startedAtIso =
+            (lastStart.meta as any).startedAt ??
+            lastStart.createdAt.toISOString();
+        }
+
+        if (startedAtIso) {
+          const startedAt = new Date(startedAtIso);
+          if (!isNaN(startedAt.getTime())) {
+            durationSeconds = Math.max(
+              0,
+              Math.floor((now.getTime() - startedAt.getTime()) / 1000),
+            );
+          }
+        }
+
+        // 🔻 END WORK
+        await tx.leadActivityLog.create({
+          data: {
+            leadId,
+            action: "WORK_ENDED",
+            performedBy: account.id,
+            meta: {
+              startedAt: startedAtIso,
+              endedAt: now.toISOString(),
+              durationSeconds,
+              autoStopped: true,
+              reason: reason ?? "MANUAL_BUSY_CHANGE",
+            },
+          },
+        });
+
+        await tx.lead.update({
+          where: { id: leadId },
+          data: {
+            totalWorkSeconds: { increment: durationSeconds },
+            isWorking: false,
+          },
+        });
+
+        // clear active lead
+        await tx.account.update({
+          where: { id: account.id },
+          data: {
+            activeLeadId: null,
+          },
+        });
+      }
+
+      /* =====================================================
+         UPDATE BUSY STATE
+      ===================================================== */
+      const updatedAccount = await tx.account.update({
+        where: { id: account.id },
+        data: { isBusy },
+        select: { id: true, isBusy: true },
+      });
+
+      await tx.busyActivityLog.create({
+        data: {
+          accountId: account.id,
+          fromBusy: account.isBusy,
+          toBusy: isBusy,
+          reason: reason ?? "MANUAL",
+        },
+      });
+
+      return {
+        skipped: false,
+        account: updatedAccount,
+      };
+    });
+
+    /* =====================================================
+       SOCKET EVENT
+      ===================================================== */
+    if (!result.skipped) {
+      const io = getIo();
+      io.emit("busy:changed", {
+        accountId: result.account.id,
+        leadId: affectedLeadId,
+        isBusy: result.account.isBusy,
+        source: reason ?? "MANUAL",
+      });
+
+      if (affectedLeadId) {
+        io.to(`lead:${affectedLeadId}`).emit("lead:patch", {
+          id: affectedLeadId,
+          patch: {
+            isWorking: false,
+            updatedAt: new Date(),
+          },
+        });
+
+        io.to("leads:admin").emit("lead:patch", {
+          id: affectedLeadId,
+          patch: {
+            isWorking: false,
+            updatedAt: new Date(),
+          },
+        });
+      }
+    }
+
+    return sendSuccessResponse(
+      res,
+      200,
+      result.skipped ? "Busy status unchanged" : "Busy status updated",
+      result.account,
+    );
+  } catch (err: any) {
+    console.error("updateMyBusyStatus error:", err);
+    return sendErrorResponse(res, 500, err.message);
+  }
+}
+
+
 // /**
 //  * PATCH /user/account/busy
 //  * Body: { isBusy: boolean }
@@ -347,162 +529,3 @@ export async function getProfile(req: Request, res: Response) {
 //     );
 //   }
 // }
-
-export async function updateMyBusyStatus(req: Request, res: Response) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const { isBusy, reason } = req.body as {
-      isBusy: boolean;
-      reason?: string;
-    };
-
-    if (typeof isBusy !== "boolean") {
-      return sendErrorResponse(res, 400, "isBusy must be boolean");
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { accountId: true },
-    });
-
-    if (!user?.accountId) {
-      return sendErrorResponse(res, 400, "Invalid account");
-    }
-
-    const now = new Date();
-    let tag: boolean = false;
-
-    const result = await prisma.$transaction(async (tx) => {
-      const account = await tx.account.findUnique({
-        where: { id: user.accountId },
-        select: {
-          id: true,
-          isBusy: true,
-          activeLeadId: true,
-        },
-      });
-
-      if (!account) throw new Error("Account not found");
-
-      // ⛔ No-op protection
-      if (account.isBusy === isBusy && !account.activeLeadId) {
-        return { skipped: true, account };
-      }
-
-      /* =====================================================
-         🛑 AUTO-STOP LEAD WORK (CRITICAL FIX)
-      ===================================================== */
-      if (account.activeLeadId && isBusy === false) {
-        const leadId = account.activeLeadId;
-        tag = leadId ? true : false;
-
-        const lastStart = await tx.leadActivityLog.findFirst({
-          where: {
-            leadId,
-            performedBy: account.id,
-            action: "WORK_STARTED",
-          },
-          orderBy: { createdAt: "desc" },
-        });
-
-        let durationSeconds = 0;
-        let startedAtIso: string | null = null;
-
-        if (lastStart?.meta && typeof lastStart.meta === "object") {
-          startedAtIso =
-            (lastStart.meta as any).startedAt ??
-            lastStart.createdAt.toISOString();
-        }
-
-        if (startedAtIso) {
-          const startedAt = new Date(startedAtIso);
-          if (!isNaN(startedAt.getTime())) {
-            durationSeconds = Math.max(
-              0,
-              Math.floor((now.getTime() - startedAt.getTime()) / 1000),
-            );
-          }
-        }
-
-        // 🔻 END WORK
-        await tx.leadActivityLog.create({
-          data: {
-            leadId,
-            action: "WORK_ENDED",
-            performedBy: account.id,
-            meta: {
-              startedAt: startedAtIso,
-              endedAt: now.toISOString(),
-              durationSeconds,
-              autoStopped: true,
-              reason: reason ?? "MANUAL_BUSY_CHANGE",
-            },
-          },
-        });
-
-        await tx.lead.update({
-          where: { id: leadId },
-          data: {
-            totalWorkSeconds: { increment: durationSeconds },
-            isWorking: false,
-          },
-        });
-
-        // clear active lead
-        await tx.account.update({
-          where: { id: account.id },
-          data: {
-            activeLeadId: null,
-          },
-        });
-      }
-
-      /* =====================================================
-         UPDATE BUSY STATE
-      ===================================================== */
-      const updatedAccount = await tx.account.update({
-        where: { id: account.id },
-        data: { isBusy },
-        select: { id: true, isBusy: true },
-      });
-
-      await tx.busyActivityLog.create({
-        data: {
-          accountId: account.id,
-          fromBusy: account.isBusy,
-          toBusy: isBusy,
-          reason: reason ?? "MANUAL",
-        },
-      });
-
-      return {
-        skipped: false,
-        account: updatedAccount,
-      };
-    });
-
-    /* =====================================================
-       SOCKET EVENT
-      ===================================================== */
-    if (!result.skipped) {
-      getIo().emit("busy:changed", {
-        accountId: result.account.id,
-        leadId: tag,
-        isBusy: result.account.isBusy,
-        source: reason ?? "MANUAL",
-      });
-    }
-
-    return sendSuccessResponse(
-      res,
-      200,
-      result.skipped ? "Busy status unchanged" : "Busy status updated",
-      result.account,
-    );
-  } catch (err: any) {
-    console.error("updateMyBusyStatus error:", err);
-    return sendErrorResponse(res, 500, err.message);
-  }
-}

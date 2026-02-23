@@ -11,15 +11,6 @@ import { randomUUID } from "node:crypto";
 /**
  * Helpers (kept local so this file is self-contained)
  */
-// const getAccountIdFromReqUser = async (userId?: string | null) => {
-//   if (!userId) return null;
-//   const u = await prisma.user.findUnique({
-//     where: { id: userId },
-//     select: { accountId: true },
-//   });
-//   return u?.accountId ?? null;
-// };
-
 const normalizeMobile = (m: unknown) => String(m ?? "").replace(/\D/g, "");
 
 async function resolveAssigneeSnapshot(input: {
@@ -1442,6 +1433,20 @@ export async function startLeadWork(req: Request, res: Response) {
       const io = getIo();
 
       io.to(`leads:user:${accountId}`).emit("lead:patch", {
+        id: leadId,
+        patch: {
+          status: "IN_PROGRESS",
+          isWorking: true,
+        },
+      });
+      io.to(`lead:${leadId}`).emit("lead:patch", {
+        id: leadId,
+        patch: {
+          status: "IN_PROGRESS",
+          isWorking: true,
+        },
+      });
+      io.to("leads:admin").emit("lead:patch", {
         id: leadId,
         patch: {
           status: "IN_PROGRESS",
