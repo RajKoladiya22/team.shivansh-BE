@@ -267,7 +267,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
       });
 
       // optional admin dashboard room
-      io.to("leads:admin").emit("lead:created", socketPayload);
+      // io.to("leads:admin").emit("lead:created", socketPayload);
     } catch (e) {
       console.warn("Socket emit skipped");
     }
@@ -938,6 +938,9 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
   try {
     const { id } = req.params;
 
+    // console.log("\n\n\n\nLead ID param:", id);
+    
+
     if (!id) {
       return sendErrorResponse(res, 400, "Lead ID is required");
     }
@@ -1095,7 +1098,7 @@ export async function getLeadActivityTimelineAdmin(
  */
 export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
   try {
-    const { fromDate, toDate, source } = req.query as Record<string, string>;
+    const { fromDate, toDate, source, accountId } = req.query as Record<string, string>;
 
     const where: any = {};
 
@@ -1105,6 +1108,15 @@ export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
       where.createdAt = {};
       if (fromDate) where.createdAt.gte = new Date(fromDate);
       if (toDate) where.createdAt.lte = new Date(toDate);
+    }
+
+    if (accountId) {
+      where.assignments = {
+        some: {
+          accountId,
+          isActive: true,
+        },
+      };
     }
 
     /**

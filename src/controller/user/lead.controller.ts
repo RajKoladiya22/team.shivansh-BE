@@ -633,15 +633,6 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       };
     // console.log("\n\n\n\n\n\n\n\n\n\n req.body:\n", req.body);
 
-    // if (
-    //   status === undefined &&
-    //   remark === undefined &&
-    //   cost === undefined &&
-    //   customerName === undefined &&
-    //   demoScheduledAt === undefined
-    // ) {
-    //   return sendErrorResponse(res, 400, "Nothing to update");
-    // }
 
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
@@ -659,14 +650,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
 
     // console.log("\n\n\nisTerminalStatus\n", isTerminalStatus);
 
-    // if (
-    //   typeof status === "undefined" &&
-    //   typeof remark === "undefined" &&
-    //   typeof cost === "undefined" &&
-    //   typeof customerName === "undefined"
-    // ) {
-    //   return sendErrorResponse(res, 400, "Nothing to update");
-    // }
+
 
     // verify access: ensure the lead is currently assigned to this user (directly or via team)
     const lead = await prisma.lead.findFirst({
@@ -717,10 +701,12 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
 
       if (status === "DEMO_DONE") {
         statusMark.demo = true;
+        data.demoDoneAt = new Date();
       }
 
       if (status === "CONVERTED") {
         statusMark.converted = true;
+        data.closedAt = new Date();
       }
 
       // only assign if something changed
@@ -1005,9 +991,16 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
     );
 
     const data: Record<string, number> = {};
+    let total = 0;
+
     statuses.forEach((status, index) => {
       data[status] = counts[index];
+      total += counts[index];
     });
+
+    data.TOTAL = total;
+
+    // console.log("\n\n\n\nMy lead stats\n", data, "\n\n\n\n");
 
     return sendSuccessResponse(res, 200, "My lead counts fetched", data);
   } catch (err: any) {
