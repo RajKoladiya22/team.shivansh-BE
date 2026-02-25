@@ -945,23 +945,52 @@ model LeadActivityLog {
 
 model Customer {
   id               String  @id @default(uuid())
+
+  // Basic Info
   name             String
-  mobile           String // raw input or formatted
-  normalizedMobile String  @unique // used for dedupe/lookups
-  emails           Json? // e.g. [{ type, value }]
-  phones           Json? // extra numbers
-  addresses        Json? // structured addresses
+  customerCompanyName String?
+  contactPerson    String?
+
+  mobile           String
+  normalizedMobile String  @unique
+
+  email            String?   // primary email
+  emails           Json?     // additional emails
+  phones           Json?     // extra numbers
+
+  city             String?
+  state            String?
+
+  joiningDate      DateTime?
+
+  customerCategory String?   // e.g. GOLD / SILVER / REGULAR
+  businessCategory String?   // e.g. RETAIL / MANUFACTURING / CA / TRADER
+
+  // Tally Info
+  tallySerial      String?
+  tallyVersion     String?
+
+  // Multi Product + History
+  products         Json?     
+
   notes            String?
-  isActive         Boolean @default(true)
+  isActive         Boolean   @default(true)
 
   createdBy    String?
   createdByAcc Account? @relation(fields: [createdBy], references: [id])
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   leads Lead[]
 
   @@index([normalizedMobile])
+  @@index([customerCompanyName])
+  @@index([tallySerial])
+  @@index([city])
+  @@index([state])
+  @@index([customerCategory])
+  @@index([businessCategory])
   @@index([createdAt])
 }
 

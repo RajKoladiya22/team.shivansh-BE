@@ -159,19 +159,90 @@ export async function createLeadAdmin(req: Request, res: Response) {
 
     // Create lead + initial assignment + CREATED activity in single transaction
     const { lead, recipients } = await prisma.$transaction(async (tx) => {
-      const customer = await tx.customer.upsert({
+      // 1️⃣ find existing customer first
+      let customer = await tx.customer.findUnique({
         where: { normalizedMobile },
-        create: {
-          name: customerName,
-          mobile: mobileNumber,
-          normalizedMobile,
-          createdBy: creatorAccountId,
-        },
-        update: {
-          name: customerName || undefined,
-          updatedAt: new Date(),
-        },
       });
+
+      // 2️⃣ prepare product object
+      const newProduct =
+        resolvedProduct?.title || cost
+          ? {
+              id: randomUUID(),
+              name: resolvedProduct?.title ?? productTitle ?? "Unknown Product",
+              price: cost ?? null,
+              addedAt: new Date(),
+              status: "ACTIVE",
+            }
+          : null;
+
+      // 3️⃣ if customer exists → update products JSON
+      if (customer) {
+        let existingProducts: any = customer.products ?? {
+          active: [],
+          history: [],
+        };
+
+        // ensure structure
+        if (!existingProducts.active) existingProducts.active = [];
+        if (!existingProducts.history) existingProducts.history = [];
+
+        // if (newProduct) {
+        //   // set new active product
+        //   existingProducts.active = [newProduct];
+        // }
+        if (newProduct) {
+          if (!existingProducts.active) {
+            existingProducts.active = [];
+          }
+
+          const alreadyExists = existingProducts.active.some(
+            (p: any) => p.id === newProduct.id,
+          );
+
+          if (!alreadyExists) {
+            existingProducts.active.push(newProduct);
+          }
+        }
+
+        customer = await tx.customer.update({
+          where: { id: customer.id },
+          data: {
+            name: customerName || customer.name,
+            products: existingProducts,
+            updatedAt: new Date(),
+          },
+        });
+      } else {
+        // 4️⃣ create new customer
+        customer = await tx.customer.create({
+          data: {
+            name: customerName,
+            mobile: mobileNumber,
+            normalizedMobile,
+            createdBy: creatorAccountId,
+            products: newProduct
+              ? {
+                  active: [newProduct],
+                  history: [],
+                }
+              : undefined,
+          },
+        });
+      }
+      // const customer = await tx.customer.upsert({
+      //   where: { normalizedMobile },
+      //   create: {
+      //     name: customerName,
+      //     mobile: mobileNumber,
+      //     normalizedMobile,
+      //     createdBy: creatorAccountId,
+      //   },
+      //   update: {
+      //     name: customerName || undefined,
+      //     updatedAt: new Date(),
+      //   },
+      // });
 
       const created = await tx.lead.create({
         data: {
@@ -504,7 +575,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         // console.log("\n\nExisting existingMeta:\n", existingMeta);
         const history = existingMeta?.history ?? [];
         // console.log("\n\nExisting demoMeta history:\n", history);
-        
+
         data.demoMeta = {
           history: [
             ...history,
@@ -939,7 +1010,6 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
     const { id } = req.params;
 
     // console.log("\n\n\n\nLead ID param:", id);
-    
 
     if (!id) {
       return sendErrorResponse(res, 400, "Lead ID is required");
@@ -1098,7 +1168,10 @@ export async function getLeadActivityTimelineAdmin(
  */
 export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
   try {
-    const { fromDate, toDate, source, accountId } = req.query as Record<string, string>;
+    const { fromDate, toDate, source, accountId } = req.query as Record<
+      string,
+      string
+    >;
 
     const where: any = {};
 

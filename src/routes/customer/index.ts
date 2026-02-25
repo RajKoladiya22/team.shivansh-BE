@@ -1,21 +1,27 @@
 import { Router } from "express";
+import { requireAuth } from "../../core/middleware/auth";
 import {
-  requireAuth,
-  requireRole,
-} from "../../core/middleware/auth";
-import {
-  getCustomerListAdmin,
-  getCustomerDetailsAdmin,
+  getCustomerList,
+  getCustomerDetails,
+  createCustomer,
+  updateCustomer,
+  deleteCustomer,
+  addCustomerProduct,
+  expireCustomerProduct,
 } from "../../controller/customer/customer.controller";
 
 const router = Router();
 
-router.get(
-  "/",
+router.get("/", requireAuth, getCustomerList);
+router.get("/:id", requireAuth, getCustomerDetails);
+router.post("/", requireAuth, createCustomer);
+router.patch("/:id", requireAuth, updateCustomer);
+router.delete("/:id", requireAuth, deleteCustomer);
+router.post("/:id/products", requireAuth, addCustomerProduct);
+router.patch(
+  "/:id/products/:productId/expire",
   requireAuth,
-  requireRole("ADMIN"),
-  getCustomerListAdmin,
+  expireCustomerProduct,
 );
-router.get("/:id", requireAuth, getCustomerDetailsAdmin);
 
 export default router;
