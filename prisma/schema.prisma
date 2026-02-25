@@ -16,18 +16,6 @@ enum AttendanceStatus {
   HOLIDAY
 }
 
-enum LeaveType {
-  FULL_DAY
-  HALF_DAY
-  MULTI_DAY
-}
-
-enum LeaveStatus {
-  PENDING
-  APPROVED
-  REJECTED
-}
-
 enum SalaryMonthStatus {
   PENDING // not processed yet
   GENERATED // calculated
@@ -162,6 +150,7 @@ model Account {
   leadHelpers               LeadHelper[]               @relation("HelperAccount")
   addedHelpers              LeadHelper[]               @relation("HelperAddedBy")
   // employeeLeadWorks         EmployeeLeadWork[]
+  checkLogs                 CheckLog[]
 
   @@index([isActive])
   @@index([jobType])
@@ -344,54 +333,6 @@ model BankDetail {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-}
-
-// ------------------------------------------------------------------
-// Attendan & Leave
-// ------------------------------------------------------------------
-
-model AttendanceLog {
-  id String @id @default(uuid())
-
-  accountId String
-  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  date     DateTime // normalized to 00:00
-  day      String // Monday, Tuesday...
-  checkIn  DateTime?
-  checkOut DateTime?
-
-  status   AttendanceStatus @default(PRESENT)
-  isSunday Boolean          @default(false)
-
-  createdAt DateTime @default(now())
-
-  @@unique([accountId, date])
-  @@index([date])
-}
-
-model LeaveRequest {
-  id String @id @default(uuid())
-
-  accountId String
-  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  type      LeaveType
-  startDate DateTime
-  endDate   DateTime?
-
-  reason String
-
-  status LeaveStatus @default(PENDING)
-
-  decidedBy      String? // admin accountId
-  decisionReason String?
-  decidedAt      DateTime?
-
-  createdAt DateTime @default(now())
-
-  @@index([accountId])
-  @@index([status])
 }
 
 // ------------------------------------------------------------------
@@ -944,43 +885,43 @@ model LeadActivityLog {
 // ------------------------------------------------------------------
 
 model Customer {
-  id               String  @id @default(uuid())
+  id String @id @default(uuid())
 
   // Basic Info
-  name             String
+  name                String
   customerCompanyName String?
-  contactPerson    String?
+  contactPerson       String?
 
   mobile           String
-  normalizedMobile String  @unique
+  normalizedMobile String @unique
 
-  email            String?   // primary email
-  emails           Json?     // additional emails
-  phones           Json?     // extra numbers
+  email  String? // primary email
+  emails Json? // additional emails
+  phones Json? // extra numbers
 
-  city             String?
-  state            String?
+  city  String?
+  state String?
 
-  joiningDate      DateTime?
+  joiningDate DateTime?
 
-  customerCategory String?   // e.g. GOLD / SILVER / REGULAR
-  businessCategory String?   // e.g. RETAIL / MANUFACTURING / CA / TRADER
+  customerCategory String? // e.g. GOLD / SILVER / REGULAR
+  businessCategory String? // e.g. RETAIL / MANUFACTURING / CA / TRADER
 
   // Tally Info
-  tallySerial      String?
-  tallyVersion     String?
+  tallySerial  String?
+  tallyVersion String?
 
   // Multi Product + History
-  products         Json?     
+  products Json?
 
-  notes            String?
-  isActive         Boolean   @default(true)
+  notes    String?
+  isActive Boolean @default(true)
 
   createdBy    String?
   createdByAcc Account? @relation(fields: [createdBy], references: [id])
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   leads Lead[]
 
@@ -992,7 +933,7 @@ model Customer {
   @@index([customerCategory])
   @@index([businessCategory])
   @@index([createdAt])
-  @@index([isActive, createdAt]) 
+  @@index([isActive, createdAt])
 }
 
 // ------------------------------------------------------------------
@@ -1231,6 +1172,159 @@ model DsuEntry {
   @@index([teamId])
   @@index([date])
   @@index([submittedAt])
+}
+
+// ------------------------------------------------------------------
+// Attendance Check-In / Check-Out Event Log
+// ------------------------------------------------------------------
+
+enum CheckType {
+  CHECK_IN
+  CHECK_OUT
+  BREAK_START
+  BREAK_END 
+}
+enum BreakType {       
+  LUNCH
+  TEA
+  PERSONAL
+  OTHER
+}
+
+enum CheckSource {
+  MANUAL // self-submitted by employee
+  AUTO // system auto check-out (e.g. end of day)
+  ADMIN // corrected / added by admin
+}
+
+enum LeaveType {
+  FULL_DAY
+  HALF_DAY
+  MULTI_DAY
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model CheckLog {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  // The attendance day this check belongs to (normalized to 00:00 UTC)
+  date DateTime
+
+  // Actual timestamp of the check event
+  checkedAt DateTime
+
+  type   CheckType // CHECK_IN or CHECK_OUT
+  source CheckSource @default(MANUAL)
+  breakType BreakType?
+
+  // Session pairing — each CHECK_IN gets paired with its CHECK_OUT
+  // Both the IN and OUT row reference the same sessionId (UUID generated on check-in)
+  sessionId String?
+
+  // Location / device metadata (optional)
+  ipAddress  String?
+  deviceMeta Json? // { userAgent, platform, location: { lat, lng } }
+
+  // Admin override tracking
+  note     String? // reason if ADMIN source
+  editedBy String? // accountId of admin who added/edited
+
+  createdAt DateTime @default(now())
+
+  // Link back to the summarized attendance log
+  attendanceLog   AttendanceLog? @relation(fields: [attendanceLogId], references: [id])
+  attendanceLogId String?
+
+  @@index([accountId, date])
+  @@index([sessionId])
+  @@index([checkedAt])
+  @@index([type])
+}
+
+// ------------------------------------------------------------------
+// Updated AttendanceLog — now the daily SUMMARY
+// (aggregated from CheckLog, recomputed on each check event)
+// ------------------------------------------------------------------
+
+// REPLACE existing AttendanceLog with this:
+model AttendanceLog {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  // Normalized date (midnight 00:00, server timezone)
+  date DateTime
+  day  String // "Monday", "Tuesday" …
+
+  // Convenience: first check-in and last check-out of the day
+  firstCheckIn DateTime?
+  lastCheckOut DateTime?
+
+  // Total worked minutes derived from all paired sessions
+  // App recomputes this after every check event
+  totalWorkMinutes Int @default(0)
+
+  // Whether the day has an open/unpaired CHECK_IN (employee forgot to check out)
+  hasOpenSession Boolean @default(false)
+
+  status   AttendanceStatus @default(PRESENT)
+  isSunday Boolean          @default(false)
+
+  // Admin override note (e.g. "Marked HALF_DAY by HR")
+  overrideNote String?
+  overrideBy   String? // accountId
+
+  totalBreakMinutes  Int     @default(0)   
+  hasOpenBreak       Boolean @default(false) 
+  isWFH              Boolean @default(false)  
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // All individual check events for this day
+  checkLogs CheckLog[]
+
+  @@unique([accountId, date])
+  @@index([date])
+  @@index([accountId])
+  @@index([status])
+}
+
+// ------------------------------------------------------------------
+// Attendan & Leave
+// ------------------------------------------------------------------
+
+model LeaveRequest {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  type      LeaveType
+  startDate DateTime
+  endDate   DateTime?
+
+  reason String
+
+  status LeaveStatus @default(PENDING)
+
+  decidedBy      String? // admin accountId
+  decisionReason String?
+  decidedAt      DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+  @@index([status])
 }
 
 // enum DailyStatusSection {
