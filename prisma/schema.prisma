@@ -992,6 +992,7 @@ model Customer {
   @@index([customerCategory])
   @@index([businessCategory])
   @@index([createdAt])
+  @@index([isActive, createdAt]) 
 }
 
 // ------------------------------------------------------------------
