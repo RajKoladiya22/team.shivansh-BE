@@ -234,6 +234,7 @@ export async function createCustomer(req: Request, res: Response) {
       tallySerial,
       tallyVersion,
       notes,
+      product,
     } = req.body;
 
     if (!name || !mobile)
@@ -246,6 +247,21 @@ export async function createCustomer(req: Request, res: Response) {
     });
 
     if (existing) return sendErrorResponse(res, 400, "Customer already exists");
+
+    /* ─────────────
+       Build Product JSON
+    ───────────── */
+    let productsJson: any = { active: [], history: [] };
+
+    if (product?.title) {
+      productsJson.active.push({
+        id: product.id || crypto.randomUUID(),
+        name: product.title,
+        price: product.price ?? 0,
+        status: "ACTIVE",
+        addedAt: new Date(),
+      });
+    }
 
     const customer = await prisma.customer.create({
       data: {
@@ -263,7 +279,7 @@ export async function createCustomer(req: Request, res: Response) {
         tallySerial,
         tallyVersion,
         notes,
-        products: { active: [], history: [] },
+        products: productsJson,
         createdBy: req.user.accountId,
       },
     });
@@ -373,21 +389,20 @@ export async function expireCustomerProduct(req: Request, res: Response) {
     const { id, productId } = req.params;
 
     const customer = await prisma.customer.findUnique({ where: { id } });
-    if (!customer)
-      return sendErrorResponse(res, 404, "Customer not found");
+    if (!customer) return sendErrorResponse(res, 404, "Customer not found");
 
     // Prisma returns JSON as JsonValue (string | number | boolean | JsonObject | JsonArray)
     // so ensure we treat it as an object with active/history arrays before accessing .active
     const productsRaw = customer.products;
-    const products = (typeof productsRaw === "object" && productsRaw !== null)
-      ? (productsRaw as any)
-      : { active: [], history: [] };
+    const products =
+      typeof productsRaw === "object" && productsRaw !== null
+        ? (productsRaw as any)
+        : { active: [], history: [] };
 
     if (!Array.isArray(products.active)) products.active = [];
 
     const index = products.active.findIndex((p: any) => p.id === productId);
-    if (index === -1)
-      return sendErrorResponse(res, 404, "Product not found");
+    if (index === -1) return sendErrorResponse(res, 404, "Product not found");
 
     const [product] = products.active.splice(index, 1);
 
