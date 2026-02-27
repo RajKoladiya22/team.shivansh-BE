@@ -25,24 +25,24 @@
 
 // src/routes/admin/pipelineTemplate.routes.ts
 
-import { Router } from "express";
-import {
-  createPipelineTemplate,
-  getPipelineTemplates,
-  getPipelineTemplateById,
-  updatePipelineTemplate,
-  deletePipelineTemplate,
-} from "../../controller/pipeline/pipelineTemplate.controller"
-import { requireAuth, requireRole } from "../../core/middleware/auth";
+// import { Router } from "express";
+// import {
+//   createPipelineTemplate,
+//   getPipelineTemplates,
+//   getPipelineTemplateById,
+//   updatePipelineTemplate,
+//   deletePipelineTemplate,
+// } from "../../controller/pipeline/pipelineTemplate.controller"
+// import { requireAuth, requireRole } from "../../core/middleware/auth";
 
-const router = Router();
+// const router = Router();
 
-router.use(requireAuth, requireRole("ADMIN"));
+// router.use(requireAuth, requireRole("ADMIN"));
 
-router.post("/", createPipelineTemplate);
-router.get("/", getPipelineTemplates);
-router.get("/:id", getPipelineTemplateById);
-router.put("/:id", updatePipelineTemplate);
-router.delete("/:id", deletePipelineTemplate);
+// router.post("/", createPipelineTemplate);
+// router.get("/", getPipelineTemplates);
+// router.get("/:id", getPipelineTemplateById);
+// router.put("/:id", updatePipelineTemplate);
+// router.delete("/:id", deletePipelineTemplate);
 
-export default router;
+// export default router;

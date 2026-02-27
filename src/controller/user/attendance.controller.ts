@@ -169,7 +169,7 @@ export async function userCheckIn(req: Request, res: Response) {
             status: AttendanceStatus.PRESENT,
             firstCheckIn: now,
             hasOpenSession: false, // will be set to true below
-            isWFH: (req.body?.isWFH === true)
+            isWFH: req.body?.isWFH === true,
           },
         });
       }
@@ -204,6 +204,11 @@ export async function userCheckIn(req: Request, res: Response) {
           hasOpenSession: true,
           firstCheckIn: log.firstCheckIn ?? now,
         },
+      });
+
+      await tx.account.update({
+        where: { id: accountId },
+        data: { isAvailable: true },
       });
 
       return { log: updatedLog, checkLog };
@@ -306,6 +311,11 @@ export async function userCheckOut(req: Request, res: Response) {
           totalWorkMinutes: newTotal,
           status: deriveStatus(newTotal),
         },
+      });
+
+      await tx.account.update({
+        where: { id: accountId },
+        data: { isAvailable: false },
       });
 
       return { log: updatedLog, checkOut, sessionMinutes };

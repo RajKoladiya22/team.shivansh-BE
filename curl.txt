@@ -1,260 +1,502 @@
-// by id
-curl --location 'http://localhost:9090/api/v1/admin/employees/d28af868-7e8a-41e3-9328-c3371f3460a7/busy-logs?startDate=2026-01-01&endDate=2026-01-31&lastDays=10' \
---header 'x-api-key: Qr@gZ@da7KjGQ/GRj@D9KSCX#L2Yr' \
---header 'Cookie: access_token=eyJhbGciOiJIUzUxMiIsInR5'
-//response
-{
-    "status": 200,
-    "success": true,
-    "message": "Busy logs fetched",
-    "data": {
-        "data": [
-            {
-                "id": "89dce465-53ae-4227-ab6a-66f575b35289",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_STARTED",
-                "createdAt": "2026-02-06T10:57:03.391Z",
-                "employee": {
-                    "id": "d28af868-7e8a-41e3-9328-c3371f3460a7",
-                    "name": "Jahnvi Koladiya",
-                    "designation": "TDL Developer",
-                    "contactPhone": "9988112233"
-                }
-            },
-            {
-                "id": "7613d990-f74c-44ff-a5a6-355e65d55784",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "MANUAL",
-                "createdAt": "2026-02-05T09:25:47.366Z",
-                "employee": {
-                    "id": "d28af868-7e8a-41e3-9328-c3371f3460a7",
-                    "name": "Jahnvi Koladiya",
-                    "designation": "TDL Developer",
-                    "contactPhone": "9988112233"
-                }
-            },
-            {
-                "id": "70156565-135a-4d61-8229-8536920f069d",
-                "fromBusy": false,
-                "toBusy": true,
-                "reason": "MANUAL",
-                "createdAt": "2026-02-05T09:25:46.043Z",
-                "employee": {
-                    "id": "d28af868-7e8a-41e3-9328-c3371f3460a7",
-                    "name": "Jahnvi Koladiya",
-                    "designation": "TDL Developer",
-                    "contactPhone": "9988112233"
-                }
-            },
-            {
-                "id": "25315997-818b-4e87-b03f-735d59917c23",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "MANUAL",
-                "createdAt": "2026-02-05T09:25:20.089Z",
-                "employee": {
-                    "id": "d28af868-7e8a-41e3-9328-c3371f3460a7",
-                    "name": "Jahnvi Koladiya",
-                    "designation": "TDL Developer",
-                    "contactPhone": "9988112233"
-                }
-            },
-            {
-                "id": "bad2d734-6a04-44e2-8a78-97b7139f7e9c",
-                "fromBusy": false,
-                "toBusy": true,
-                "reason": "MANUAL",
-                "createdAt": "2026-02-05T09:24:41.643Z",
-                "employee": {
-                    "id": "d28af868-7e8a-41e3-9328-c3371f3460a7",
-                    "name": "Jahnvi Koladiya",
-                    "designation": "TDL Developer",
-                    "contactPhone": "9988112233"
-                }
-            },
-            {
-                "id": "62e86ad3-bdf3-480e-bde5-d410c4a9f2a1",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "MANUAL",
-                "createdAt": "2026-02-05T09:24:40.124Z",
-                "employee": {
-                    "id": "d28af868-7e8a-41e3-9328-c3371f3460a7",
-                    "name": "Jahnvi Koladiya",
-                    "designation": "TDL Developer",
-                    "contactPhone": "9988112233"
-                }
-            }
-        ],
-        "meta": {
-            "page": 1,
-            "limit": 20,
-            "total": 6,
-            "totalPages": 1
-        }
-    }
+// =============================================================================
+// DSU (Daily Status Update) — Full Production Schema
+// =============================================================================
+//
+// Design philosophy:
+//   1. "Confirm + Add" — system auto-pulls known work (tasks/leads), user just
+//      reacts with a single tap. Free items cover anything outside the system.
+//   2. Team-aware — Sales, Support, Developer, Marketing all share one schema
+//      but get different pre-fill logic and category presets at the app layer.
+//   3. Append-only safety — no hard deletes on submitted entries (only admins
+//      can archive). Drafts can be freely deleted.
+//   4. Notification-ready — reminder & escalation hooks built into the model.
+//   5. Audit-complete — every state change is timestamped and actor-tracked.
+// =============================================================================
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The type of system entity this linked item refers to.
+enum DsuLinkedItemType {
+  TASK          // from Task table
+  LEAD          // from Lead table (sales / support)
+  PROJECT_STEP  // from PipelineStep table
 }
 
-
-// own logs
-curl --location 'http://localhost:9090/api/v1/admin/my/busy-logs?startDate=2026-01-01&endDate=2026-01-31&lastDays=10' \
---header 'x-api-key: Qr@gZ@da7KjGQ/GRj@D9KSCX#L2Yr' \
---header 'Cookie: access_token=eyJhbGciOiJIUzUxMiIsInR5cCI'
-//response
-{
-    "status": 200,
-    "success": true,
-    "message": "My busy logs fetched",
-    "data": {
-        "data": [
-            {
-                "id": "cada9d24-2a04-4bb4-a4ea-8ca72fc3869c",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_ENDED",
-                "createdAt": "2026-02-07T10:17:06.915Z"
-            },
-            {
-                "id": "f83b7c5f-80a0-44c8-abc1-36853c9573f1",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_STARTED",
-                "createdAt": "2026-02-07T10:15:32.091Z"
-            },
-            {
-                "id": "a62ab810-01cb-4e8f-ab8f-d218b45d38b7",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_ENDED",
-                "createdAt": "2026-02-07T10:13:42.129Z"
-            },
-            {
-                "id": "a6323dfc-4645-49c4-bba8-82717a43056f",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_STARTED",
-                "createdAt": "2026-02-07T10:13:20.937Z"
-            },
-            {
-                "id": "f102d59c-9fa2-41fd-b397-b14b9506736c",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_ENDED",
-                "createdAt": "2026-02-07T10:10:13.837Z"
-            },
-            {
-                "id": "9888cf9b-8859-43b9-9ee6-0def0f1a15b8",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_STARTED",
-                "createdAt": "2026-02-07T10:05:21.757Z"
-            },
-            {
-                "id": "d062ef7a-24cf-451c-8b73-3d3ff46a325c",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_ENDED",
-                "createdAt": "2026-02-07T09:59:58.498Z"
-            },
-            {
-                "id": "a3b7217d-e24e-4f7e-8008-024c3fe9d806",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_STARTED",
-                "createdAt": "2026-02-07T09:51:26.318Z"
-            },
-            {
-                "id": "47b0ee44-0a54-44a0-93a8-19334f3884c5",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_ENDED",
-                "createdAt": "2026-02-07T09:46:52.494Z"
-            },
-            {
-                "id": "60551a76-ebe3-4ea3-afe0-6f63953d0e43",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_STARTED",
-                "createdAt": "2026-02-07T09:46:46.392Z"
-            },
-            {
-                "id": "1f0fdac7-9020-49fd-8dd2-b17462cfae50",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_ENDED",
-                "createdAt": "2026-02-07T09:03:57.346Z"
-            },
-            {
-                "id": "5ba58972-2c17-4832-94ac-b2e7374c431c",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_STARTED",
-                "createdAt": "2026-02-07T09:02:24.765Z"
-            },
-            {
-                "id": "9c72bdea-c41c-4924-b384-2efae8cad08e",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_ENDED",
-                "createdAt": "2026-02-07T09:02:07.470Z"
-            },
-            {
-                "id": "30102f13-f252-4572-b1d8-4b835a779933",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_STARTED",
-                "createdAt": "2026-02-07T08:57:13.147Z"
-            },
-            {
-                "id": "ff38355d-0e46-479c-9c18-dfdb833a32b1",
-                "fromBusy": false,
-                "toBusy": true,
-                "reason": "WORK_ENDED",
-                "createdAt": "2026-02-07T08:56:14.499Z"
-            },
-            {
-                "id": "88af89d2-c072-4779-8dd2-93cedc885728",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "MANUAL",
-                "createdAt": "2026-02-07T08:56:10.879Z"
-            },
-            {
-                "id": "df626fbd-2288-436b-99f8-44ed3e8f5ecf",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_ENDED",
-                "createdAt": "2026-02-07T08:19:24.388Z"
-            },
-            {
-                "id": "1f3fb3cc-4432-49b0-ac80-6ca99d1eacf5",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_STARTED",
-                "createdAt": "2026-02-07T08:17:49.492Z"
-            },
-            {
-                "id": "56520abe-4a9a-4ef3-af90-8c1a24f081b9",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_ENDED",
-                "createdAt": "2026-02-07T08:15:22.549Z"
-            },
-            {
-                "id": "f2141aff-9996-4a76-a4a2-bb7d02a95447",
-                "fromBusy": true,
-                "toBusy": false,
-                "reason": "WORK_STARTED",
-                "createdAt": "2026-02-07T08:15:14.288Z"
-            }
-        ],
-        "meta": {
-            "page": 1,
-            "limit": 20,
-            "total": 168,
-            "totalPages": 9
-        }
-    }
+/// How the employee marked this item at end of day.
+enum DsuItemStatus {
+  DONE        // finished today
+  IN_PROGRESS // still ongoing, will continue tomorrow
+  BLOCKED     // stuck — needs someone's action
+  SKIPPED     // item exists but not touched today (auto-added, user dismissed)
 }
+
+/// Categories for work not tracked in any system entity.
+/// Kept as enum so the admin dashboard can group & chart free items.
+enum DsuFreeItemCategory {
+  // Developer
+  BUG_FIX
+  FEATURE
+  CODE_REVIEW
+  DEPLOYMENT
+  RESEARCH
+  DOCUMENTATION
+
+  // Sales
+  COLD_CALL
+  FOLLOW_UP
+  DEMO
+  PROPOSAL
+
+  // Support
+  CUSTOMER_CALL
+  ESCALATION
+  TRAINING
+
+  // Marketing
+  CONTENT
+  CAMPAIGN
+  AD
+  DESIGN
+  SOCIAL_MEDIA
+
+  // Universal
+  MEETING
+  INTERNAL
+  OTHER
+}
+
+/// Optional end-of-day mood — useful for HR / manager pulse checks.
+enum DsuMood {
+  GREAT
+  GOOD
+  NEUTRAL
+  TIRED
+  STRESSED
+}
+
+/// Lifecycle state of the DSU entry itself.
+enum DsuEntryStatus {
+  DRAFT         // employee started but hasn't submitted
+  SUBMITTED     // submitted, pending manager review (if review enabled for team)
+  REVIEWED      // manager has seen it
+  FLAGGED       // manager flagged it (has blocker / needs follow-up)
+  ARCHIVED      // soft-deleted by admin
+}
+
+/// Whether the prefill item was confirmed, dismissed, or carried forward.
+enum DsuPrefillAction {
+  CONFIRMED   // user explicitly acted on this item in the DSU
+  DISMISSED   // user said "not relevant today" — hidden next time unless active again
+  AUTO_ADDED  // system added it, user never touched it (shouldn't happen on submit)
+}
+
+/// Notification types for DSU reminder pipeline.
+enum DsuReminderType {
+  FIRST_REMINDER   // e.g. 5 PM "don't forget to submit"
+  FINAL_REMINDER   // e.g. 7 PM "last chance"
+  OVERDUE_ALERT    // e.g. 9 PM "you missed DSU today" — goes to manager too
+  MANAGER_ESCALATE // manager gets notified if team member missing for N days
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CORE ENTRY
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One DSU entry per employee per day (unique on accountId + date).
+/// A draft can be updated freely. Once SUBMITTED, only admins / managers
+/// can archive or flag it — no edits to linked/free items after submission
+/// (this preserves historical accuracy).
+model DsuEntry {
+  id        String @id @default(uuid())
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  /// The calendar day this DSU is for (normalized to 00:00 UTC/server-tz).
+  date    DateTime
+  /// Convenience: "Monday", "Tuesday" etc. — filled at creation.
+  dayName String?
+
+  /// Team snapshot at time of submission (denormalized so reports stay accurate
+  /// even if employee changes team later).
+  teamId   String?
+  teamName String?
+  team     Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  status DsuEntryStatus @default(DRAFT)
+
+  // ── Core linked work ──────────────────────────────────────────────────────
+  /// Work items auto-pulled from Task / Lead / PipelineStep.
+  linkedItems DsuLinkedItem[]
+
+  /// Work not tracked anywhere in the system.
+  freeItems DsuFreeItem[]
+
+  // ── Universal end-of-day signals ─────────────────────────────────────────
+  /// Does the employee have any blockers or queries today?
+  hasBlocker  Boolean @default(false)
+  /// Description of the blocker / query (shown prominently in admin dashboard).
+  blockerText String?
+  /// Who is this blocker aimed at? (accountId of manager / colleague)
+  blockerTargetId String?
+
+  /// Optional: tomorrow's plan in 1–3 lines (helps manager prepare).
+  tomorrowPlan String?
+
+  /// How was the employee's day? (optional, HR / wellness signal)
+  mood DsuMood?
+
+  /// One-line summary auto-generated by app layer (or typed by employee).
+  /// Used in list views without needing to expand the full entry.
+  summary String?
+
+  // ── Submission audit ─────────────────────────────────────────────────────
+  isDraft     Boolean   @default(true)
+  submittedAt DateTime?
+
+  /// How many minutes after day-start (00:00) the employee submitted.
+  /// Filled by app on submit: useful for "submitted at 6 PM" analytics.
+  submissionDelayMinutes Int?
+
+  // ── Review / approval ────────────────────────────────────────────────────
+  reviewedBy   String?   // accountId
+  reviewedAt   DateTime?
+  reviewNote   String?
+
+  flaggedBy    String?
+  flaggedAt    DateTime?
+  flagReason   String?
+
+  // ── Soft delete ──────────────────────────────────────────────────────────
+  archivedBy String?
+  archivedAt DateTime?
+
+  // ── Device / meta ────────────────────────────────────────────────────────
+  /// IP, userAgent, platform — for audit trail.
+  meta Json?
+
+  // ── Denormalized search ──────────────────────────────────────────────────
+  /// Flat text of all item titles + notes + blockerText. Updated by app on save.
+  textSearch String?
+
+  // ── Reminder tracking ────────────────────────────────────────────────────
+  reminders DsuReminder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String   // accountId (usually same as accountId; admin override possible)
+
+  @@unique([accountId, date])
+  @@index([accountId])
+  @@index([teamId])
+  @@index([date])
+  @@index([status])
+  @@index([isDraft])
+  @@index([submittedAt])
+  @@index([hasBlocker])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LINKED ITEMS (work already in the system)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Represents a Task, Lead, or PipelineStep the employee worked on today.
+/// Auto-populated by the /dsu/me/prefill API; employee confirms or dismisses.
+///
+/// Immutable after DsuEntry is SUBMITTED — take a snapshot of critical fields
+/// at that point (itemTitle, itemCurrentStatus) so history stays accurate
+/// even if the task/lead changes later.
+model DsuLinkedItem {
+  id         String   @id @default(uuid())
+  dsuEntryId String
+  dsuEntry   DsuEntry @relation(fields: [dsuEntryId], references: [id], onDelete: Cascade)
+
+  // ── What entity? ─────────────────────────────────────────────────────────
+  itemType DsuLinkedItemType
+  itemId   String // FK to Task.id / Lead.id / PipelineStep.id (no DB FK intentionally
+                  // — avoids cascade issues if those records get deleted)
+
+  /// Snapshot of the item title at time of DSU creation (for historical display).
+  itemTitle String
+
+  /// Snapshot of the item's status in the source system at DSU creation time.
+  /// e.g. Task.status, Lead.status — stored as string so it works across entity types.
+  itemSystemStatus String?
+
+  /// Optional: parent context for display (e.g. project name, customer name).
+  contextLabel String? // "CRM v2 / Sprint 4" or "Ravi Sharma — Tally Prime"
+
+  // ── Employee's report ────────────────────────────────────────────────────
+  /// How the employee marked this item today.
+  status DsuItemStatus @default(IN_PROGRESS)
+
+  /// Optional 1-liner note. Keep short — this is a status update, not a novel.
+  note String?
+
+  /// Estimated hours spent on this item today (optional).
+  hoursSpent Decimal? @db.Decimal(4, 2)
+
+  // ── Prefill metadata ─────────────────────────────────────────────────────
+  /// Was this item auto-suggested by the system or manually added by employee?
+  autoAdded  Boolean          @default(true)
+  /// Did the employee confirm, dismiss, or leave this item untouched?
+  prefillAction DsuPrefillAction @default(CONFIRMED)
+
+  // ── Order ─────────────────────────────────────────────────────────────────
+  /// Display order within the DSU form (prefill sorts by last activity time).
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([dsuEntryId])
+  @@index([itemType, itemId])   // for "show all DSU entries mentioning this task"
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FREE ITEMS (work NOT in the system)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Work done today that has no corresponding Task / Lead / Project record.
+/// e.g. "Attended stand-up", "Researched new payment gateway", "Cold call to XYZ"
+model DsuFreeItem {
+  id         String   @id @default(uuid())
+  dsuEntryId String
+  dsuEntry   DsuEntry @relation(fields: [dsuEntryId], references: [id], onDelete: Cascade)
+
+  /// Short title — the employee types this. Keep it 1 line.
+  title    String
+  category DsuFreeItemCategory @default(OTHER)
+  status   DsuItemStatus       @default(DONE)
+
+  /// Optional detail. Encourage employees to keep this brief.
+  note String?
+
+  /// Estimated hours (optional).
+  hoursSpent Decimal? @db.Decimal(4, 2)
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([dsuEntryId])
+  @@index([category])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREFILL SNAPSHOT (cache for /dsu/me/prefill)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Caches the prefill suggestions generated for a given employee on a given day.
+/// Avoids re-running expensive queries on every page refresh.
+/// TTL: invalidated when linked items change (via app-layer cache busting) or
+/// after the DSU is submitted.
+///
+/// This is optional infrastructure — skip if you don't need prefill caching.
+model DsuPrefillCache {
+  id        String  @id @default(uuid())
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  date DateTime // the calendar day for which suggestions were generated
+
+  /// Array of prefill suggestion objects (same shape as GET /dsu/me/prefill response).
+  suggestions Json
+
+  generatedAt DateTime @default(now())
+  /// Mark stale when a task/lead is updated — app checks this before serving.
+  isStale     Boolean  @default(false)
+
+  @@unique([accountId, date])
+  @@index([accountId])
+  @@index([date])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEAM DSU CONFIG (per-team settings)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-team configuration for DSU behaviour.
+/// One row per team — if missing, system uses global defaults.
+model DsuTeamConfig {
+  id     String @id @default(uuid())
+  teamId String @unique
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  // ── Deadlines ────────────────────────────────────────────────────────────
+  /// Time of day (24h, "18:00") by which DSU must be submitted.
+  submissionDeadline String @default("18:00")
+
+  /// First reminder time (e.g. "17:00").
+  firstReminderAt String @default("17:00")
+  /// Final reminder time (e.g. "17:45").
+  finalReminderAt String @default("17:45")
+  /// Overdue alert time — sent to employee + manager (e.g. "19:00").
+  overdueAlertAt  String @default("19:00")
+
+  // ── Review ───────────────────────────────────────────────────────────────
+  /// Does this team require a manager to review/acknowledge DSUs?
+  requiresManagerReview Boolean @default(false)
+  /// AccountId(s) of managers who review — stored as JSON array.
+  managerIds            Json?
+
+  // ── Prefill behaviour ────────────────────────────────────────────────────
+  /// Which item types to auto-prefill for this team.
+  prefillTasks        Boolean @default(true)
+  prefillLeads        Boolean @default(false)
+  prefillProjectSteps Boolean @default(false)
+
+  /// Max number of items to prefill (prevents overwhelming the form).
+  maxPrefillItems Int @default(10)
+
+  // ── Category presets ─────────────────────────────────────────────────────
+  /// Which DsuFreeItemCategory values to show in the "add item" dropdown
+  /// for this team. JSON array of DsuFreeItemCategory enum strings.
+  categoryPresets Json?
+  // e.g. ["BUG_FIX","FEATURE","CODE_REVIEW","MEETING","RESEARCH","OTHER"]
+
+  // ── Mood ─────────────────────────────────────────────────────────────────
+  /// Show mood selector for this team's DSU form?
+  showMoodSelector Boolean @default(false)
+
+  // ── Tomorrow plan ────────────────────────────────────────────────────────
+  showTomorrowPlan Boolean @default(true)
+
+  // ── Weekend / Holiday ────────────────────────────────────────────────────
+  /// Skip DSU reminders on Sundays for this team?
+  skipSunday Boolean @default(true)
+  /// Additional blackout dates (public holidays etc.) — JSON array of "YYYY-MM-DD".
+  blackoutDates Json?
+
+  // ── Escalation ───────────────────────────────────────────────────────────
+  /// After how many consecutive missed DSUs should manager be escalated to?
+  escalateAfterMissedDays Int @default(2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REMINDER LOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tracks every reminder / alert sent for a given employee on a given day.
+/// Prevents duplicate sends and gives admin visibility into notification history.
+model DsuReminder {
+  id        String @id @default(uuid())
+
+  dsuEntryId String?  // null if reminder sent before entry was created (employee hasn't opened form yet)
+  dsuEntry   DsuEntry? @relation(fields: [dsuEntryId], references: [id], onDelete: SetNull)
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  date DateTime // calendar day this reminder is for
+
+  type DsuReminderType
+
+  sentAt     DateTime  @default(now())
+  deliveredAt DateTime? // webhook/push confirmation
+  failedAt    DateTime?
+  failReason  String?
+
+  /// Channel used: "push", "email", "in_app", "whatsapp"
+  channel String?
+
+  @@index([accountId, date])
+  @@index([type])
+  @@index([sentAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MISSED DSU LOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One row per employee per working day they missed (no submitted DSU).
+/// Created by a nightly cron job. Used for compliance reports and escalation.
+model DsuMissedLog {
+  id        String @id @default(uuid())
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  date    DateTime // the missed day
+  teamId  String?
+  team    Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  /// Was this miss escalated to the manager?
+  escalated   Boolean   @default(false)
+  escalatedAt DateTime?
+
+  /// Admin / manager can mark this as excused (leave, holiday, etc.)
+  isExcused   Boolean   @default(false)
+  excusedBy   String?
+  excuseNote  String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([accountId, date])
+  @@index([accountId])
+  @@index([teamId])
+  @@index([date])
+  @@index([escalated])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BLOCKER THREAD
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// When an employee marks hasBlocker = true, a thread is opened.
+/// Manager / admin can reply, resolve, or re-open it.
+/// Lightweight — not a full ticket system, just enough to close the loop.
+model DsuBlockerThread {
+  id         String   @id @default(uuid())
+  dsuEntryId String
+  dsuEntry   DsuEntry @relation(fields: [dsuEntryId], references: [id], onDelete: Cascade)
+
+  /// Copy of the original blocker text for quick display.
+  blockerText String
+
+  isResolved   Boolean   @default(false)
+  resolvedBy   String?   // accountId
+  resolvedAt   DateTime?
+  resolutionNote String?
+
+  replies DsuBlockerReply[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([dsuEntryId])
+  @@index([isResolved])
+}
+
+model DsuBlockerReply {
+  id       String           @id @default(uuid())
+  threadId String
+  thread   DsuBlockerThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  authorId String  // accountId
+  message  String
+
+  createdAt DateTime @default(now())
+
+  @@index([threadId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RELATIONS TO ADD ON EXISTING MODELS
+// (Add these relation fields to your existing models)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// On Account model — add:
+//   dsuEntries       DsuEntry[]
+//   dsuPrefillCaches DsuPrefillCache[]
+//   dsuReminders     DsuReminder[]
+//   dsuMissedLogs    DsuMissedLog[]
+
+// On Team model — add:
+//   dsuConfig    DsuTeamConfig?
+//   dsuEntries   DsuEntry[]
+//   dsuMissedLogs DsuMissedLog[]

@@ -1,33 +1,64 @@
+// src/routes/task.routes.ts
 import { Router } from "express";
-import { requireAuth } from "../../core/middleware/auth";
 
 import {
-  createSelfTask,
-  getMyTasks,
-  updateTaskStatus,
-  getKanbanTasks,
-  getTaskHistory,
-  getTaskDetails,
+  // Admin
+  createTaskAdmin,
+  assignTaskAdmin,
+  updateTaskAdmin,
+  deleteTaskAdmin,
+  listTasksAdmin,
+  getTaskByIdAdmin,
+  getTaskActivityAdmin,
+  getTaskStatsAdmin,
+  // User
+  getMyTasksUser,
+  getTaskByIdUser,
+  updateTaskStatusUser,
+  completeTaskUser,
+  getTaskActivityUser,
+  addCommentUser,
+  getTaskCommentsUser,
 } from "../../controller/user/task.controller";
+import { requireAuth, requireRole } from "../../core/middleware/auth";
 
 const router = Router();
 
-// Create self-task (employee personal task)
-router.post("/self", requireAuth, createSelfTask);
+// All routes require a valid session
+router.use(requireAuth);
 
-// Get tasks assigned to logged-in user (team + individual)
-router.get("/my", requireAuth, getMyTasks);
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN ROUTES  —  /admin/tasks/*
+   Require ADMIN role (checked again inside each handler for safety)
+═══════════════════════════════════════════════════════════════ */
 
-// Update task status (employee or admin)
-router.patch("/update-status", requireAuth, updateTaskStatus);
+// Stats must be registered before /:id to avoid route shadowing
+router.get(  "/admin/tasks/stats",        requireRole("ADMIN"), getTaskStatsAdmin);
 
-// Kanban board (admin = all tasks, user = only their tasks)
-router.get("/kanban", requireAuth, getKanbanTasks);
+router.post( "/admin/tasks",              requireRole("ADMIN"), createTaskAdmin);
+router.get(  "/admin/tasks",              requireRole("ADMIN"), listTasksAdmin);
+router.get(  "/admin/tasks/:id",          requireRole("ADMIN"), getTaskByIdAdmin);
+router.patch("/admin/tasks/:id",          requireRole("ADMIN"), updateTaskAdmin);
+router.delete("/admin/tasks/:id",         requireRole("ADMIN"), deleteTaskAdmin);
 
-// Task history logs
-router.get("/history/:id", requireAuth, getTaskHistory);
+router.post( "/admin/tasks/:id/assign",   requireRole("ADMIN"), assignTaskAdmin);
+router.get(  "/admin/tasks/:id/activity", requireRole("ADMIN"), getTaskActivityAdmin);
 
-// Complete task data (assignments, subtasks, project, team mapping)
-router.get("/details/:id", requireAuth, getTaskDetails);
+/* ═══════════════════════════════════════════════════════════════
+   USER ROUTES  —  /user/tasks/*
+   Accessible to any authenticated user.
+   Each handler enforces isAssignedToTask() internally.
+═══════════════════════════════════════════════════════════════ */
+
+router.get( "/user/tasks",                 getMyTasksUser);
+router.get( "/user/tasks/:id",             getTaskByIdUser);
+
+router.patch("/user/tasks/:id/status",     updateTaskStatusUser);
+router.post( "/user/tasks/:id/complete",   completeTaskUser);
+
+router.get(  "/user/tasks/:id/activity",   getTaskActivityUser);
+
+router.post( "/user/tasks/:id/comments",   addCommentUser);
+router.get(  "/user/tasks/:id/comments",   getTaskCommentsUser);
 
 export default router;

@@ -44,54 +44,6 @@ enum JobType {
   TEMPORARY
 }
 
-enum ProjectStatus {
-  DRAFT
-  ACTIVE
-  ON_HOLD
-  COMPLETED
-  ARCHIVED
-}
-
-enum PipelineSource {
-  TEMPLATE
-  CUSTOM
-}
-
-enum TaskStatus {
-  PENDING
-  IN_PROGRESS
-  BLOCKED
-  COMPLETED
-  CANCELLED
-}
-
-enum AssignmentType {
-  ACCOUNT
-  TEAM
-}
-
-enum ActivityEntity {
-  PROJECT
-  PIPELINE
-  STEP
-  TASK
-}
-
-enum TaskRecurrenceType {
-  ONE_TIME
-  DAILY
-  WEEKLY
-  MONTHLY
-  YEARLY
-  CUSTOM
-}
-
-enum TemplateAssignmentStrategy {
-  SPECIFIC_USER // e.g. Always assign to the Project Manager
-  PROJECT_ROLE // e.g. Assign to whoever is the "Lead Dev" on the project
-  POOL // e.g. Assign to the "Design Team"
-}
-
 // ------------------------------------------------------------------
 // Account Profile (Personal + Contact + Admin Approval Metadata)
 // ------------------------------------------------------------------
@@ -115,6 +67,7 @@ model Account {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   isBusy         Boolean   @default(false)
+  isAvailable    Boolean   @default(false)
 
   activeLeadId String?
   activeLead   Lead?   @relation(fields: [activeLeadId], references: [id])
@@ -151,6 +104,11 @@ model Account {
   addedHelpers              LeadHelper[]               @relation("HelperAddedBy")
   // employeeLeadWorks         EmployeeLeadWork[]
   checkLogs                 CheckLog[]
+  projectMembers            ProjectMember[]
+  taskComments              TaskComment[]
+  commentMentions           CommentMention[]
+  taskWatchers              TaskWatcher[]
+  taskTimeEntries           TaskTimeEntry[]
 
   @@index([isActive])
   @@index([jobType])
@@ -494,29 +452,275 @@ model TeamMember {
 // Project Store
 // ------------------------------------------------------------------
 
+enum ProjectStatus {
+  DRAFT
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+  ARCHIVED
+}
+
+enum ProjectVisibility {
+  PRIVATE // Only assigned members
+  TEAM // All members of the linked team(s)
+  PUBLIC // All workspace users
+}
+
+enum PipelineSource {
+  BLANK // Built from scratch
+  TEMPLATE // Cloned from a PipelineTemplate
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  IN_REVIEW
+  BLOCKED
+  COMPLETED
+  CANCELLED
+}
+
+enum AssignmentType {
+  ACCOUNT
+  TEAM
+}
+
+enum ActivityEntity {
+  PROJECT
+  PIPELINE
+  PIPELINE_STEP
+  TASK
+  COMMENT
+  ATTACHMENT
+  LABEL
+}
+
+enum TaskRecurrenceType {
+  ONE_TIME
+  DAILY
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  QUARTERLY
+  CUSTOM
+}
+
+enum TemplateAssignmentStrategy {
+  PROJECT_ROLE // Assign to whoever holds a project role
+  CREATOR // Auto-assign to the project creator
+  UNASSIGNED // Leave unassigned until manually set
+}
+
+enum TaskPriority {
+  NONE // No priority set
+  LOW
+  MEDIUM
+  HIGH
+  URGENT // Requires immediate attention
+}
+
+enum ProjectRoleType {
+  OWNER // Full control — usually the creator
+  MANAGER // Can edit project, assign tasks, manage pipeline
+  MEMBER // Can update their assigned tasks
+  VIEWER // Read-only
+  REVIEWER // Can approve/review tasks and leave comments
+}
+
+enum ActivityAction {
+  CREATED
+  UPDATED
+  DELETED
+  ASSIGNED
+  UNASSIGNED
+  STATUS_CHANGED
+  PRIORITY_CHANGED
+  DUE_DATE_CHANGED
+  MOVED // Task moved between steps/columns
+  COMMENTED
+  ATTACHMENT_ADDED
+  ATTACHMENT_REMOVED
+  COMPLETED
+  REOPENED
+  BLOCKED
+  UNBLOCKED
+  ARCHIVED
+  RESTORED
+}
+
+enum ChecklistItemStatus {
+  PENDING
+  COMPLETED
+}
+
+enum CommentVisibility {
+  ALL // Everyone with project access
+  MANAGERS // Only project managers + owner
+}
+
+enum AttachmentSource {
+  UPLOAD // Direct file upload
+  URL // External link
+  GDRIVE // Google Drive
+  NOTION
+  FIGMA
+  GITHUB_PR
+}
+
+// ────────────────────────────────────────────────────────────
+//  LABELS  (workspace-level, reusable across projects)
+// ────────────────────────────────────────────────────────────
+
+model Label {
+  id       String  @id @default(uuid())
+  name     String
+  color    String // hex e.g. "#F59E0B"
+  isActive Boolean @default(true)
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  taskLabels TaskLabel[]
+
+  @@unique([name])
+  @@index([isActive])
+}
+
+model TaskLabel {
+  id      String @id @default(uuid())
+  taskId  String
+  task    Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  labelId String
+  label   Label  @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  addedBy String?
+  addedAt DateTime @default(now())
+
+  @@unique([taskId, labelId])
+  @@index([taskId])
+  @@index([labelId])
+}
+
 model Project {
-  id          String        @id @default(uuid())
+  id          String            @id @default(uuid())
   name        String
   description String?
-  status      ProjectStatus @default(DRAFT)
+  status      ProjectStatus     @default(DRAFT)
+  visibility  ProjectVisibility @default(TEAM)
 
-  startDate DateTime?
-  endDate   DateTime?
-
+  // Dates
+  startDate   DateTime?
+  endDate     DateTime?
   startedAt   DateTime?
   completedAt DateTime?
   cancelledAt DateTime?
 
-  createdBy String? // accountId
+  // Cover / branding
+  color    String? // hex colour for the project card
+  icon     String? // emoji or icon identifier
+  coverUrl String? // banner image
+
+  // Soft delete
+  deletedAt DateTime?
+  deletedBy String?
+
+  createdBy String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
-  pipeline ProjectPipeline?
-  tasks    Task[]
-  activity ActivityLog[]
+  pipeline     ProjectPipeline?
+  tasks        Task[]
+  members      ProjectMember[]
+  activity     ActivityLog[]
+  attachments  ProjectAttachment[]
+  customFields ProjectCustomField[]
 
   @@index([status])
+  @@index([deletedAt])
+  @@index([createdBy])
+  @@index([visibility])
+}
+
+model ProjectMember {
+  id String @id @default(uuid())
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  role ProjectRoleType @default(MEMBER)
+
+  joinedAt DateTime @default(now())
+  addedBy  String? // accountId of whoever added them
+
+  @@unique([projectId, accountId])
+  @@index([projectId])
+  @@index([accountId])
+  @@index([role])
+}
+
+model ProjectAttachment {
+  id String @id @default(uuid())
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+
+  name      String
+  source    AttachmentSource @default(UPLOAD)
+  url       String
+  mimeType  String?
+  sizeBytes Int?
+  meta      Json? // thumbnail, previewUrl, etc.
+
+  uploadedBy String?
+  createdAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  @@index([projectId])
+  @@index([deletedAt])
+}
+
+model ProjectCustomField {
+  id String @id @default(uuid())
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+
+  name      String
+  fieldType String // "TEXT" | "NUMBER" | "DATE" | "SELECT" | "MULTI_SELECT" | "BOOLEAN" | "URL"
+  options   Json? // Array of options for SELECT / MULTI_SELECT
+  order     Int     @default(0)
+  required  Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  values TaskCustomFieldValue[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
+}
+
+model TaskCustomFieldValue {
+  id String @id @default(uuid())
+
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId String
+
+  field   ProjectCustomField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  fieldId String
+
+  value     String? // JSON-serialised for complex types
+  updatedAt DateTime @updatedAt
+
+  @@unique([taskId, fieldId])
+  @@index([taskId])
+  @@index([fieldId])
 }
 
 model PipelineTemplate {
@@ -544,6 +748,7 @@ model PipelineTemplateStep {
   name        String
   order       Int
   description String?
+  color       String?
 
   defaultTasks PipelineTemplateTask[] // [{ title, description, role, assignees }]
 
@@ -558,6 +763,7 @@ model PipelineTemplateTask {
 
   title       String
   description String?
+  priority    TaskPriority @default(NONE)
 
   // Logic for due dates relative to project start
   offsetDays Int? @default(0) // e.g. Due 2 days after step starts
@@ -579,7 +785,7 @@ model ProjectPipeline {
   projectId String  @unique
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  source           PipelineSource
+  source           PipelineSource @default(BLANK)
   sourceTemplateId String?
 
   settings Json?
@@ -596,9 +802,13 @@ model PipelineStep {
   pipeline   ProjectPipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   pipelineId String
 
-  name   String
-  order  Int
-  status TaskStatus @default(PENDING)
+  name        String
+  description String?
+  color       String?
+  order       Int
+  isTerminal  Boolean @default(false)
+
+  wipLimit Int @default(0)
 
   templateStepId String?
 
@@ -611,49 +821,88 @@ model PipelineStep {
 model Task {
   id String @id @default(uuid())
 
+  // Project / pipeline placement
   project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
   projectId String?
 
-  step   PipelineStep? @relation(fields: [stepId], references: [id])
+  step   PipelineStep? @relation(fields: [stepId], references: [id], onDelete: SetNull)
   stepId String?
 
+  // Core fields
   title       String
-  description String?
-  status      TaskStatus @default(PENDING)
-  priority    Int?       @default(1)
-  isSelfTask  Boolean?
+  description String? // Rich text / markdown
+  status      TaskStatus   @default(PENDING)
+  priority    TaskPriority @default(NONE)
 
-  startDate DateTime?
-  dueDate   DateTime?
-
+  // Date tracking
+  startDate   DateTime?
+  dueDate     DateTime?
   startedAt   DateTime?
   completedAt DateTime?
   cancelledAt DateTime?
 
-  // Recurrence (Unified here instead of a separate table)
+  // Time tracking (in minutes)
+  estimatedMinutes Int?
+  loggedMinutes    Int  @default(0)
+
+  // Personal / standalone task (no project)
+  isSelfTask Boolean @default(false)
+
+  // Sort order within its column (fractional indexing friendly)
+  sortOrder Float @default(0)
+
+  // Recurrence
   isRecurring    Boolean            @default(false)
   recurrenceType TaskRecurrenceType @default(ONE_TIME)
-  recurrenceRule Json? // Cron config or custom rule
+  recurrenceRule Json?
+
+  // Recurrence chain: links recurring instances to their parent definition
+  recurrenceParentId String?
+  recurrenceParent   Task?   @relation("RecurringInstances", fields: [recurrenceParentId], references: [id], onDelete: SetNull)
+  recurrenceChildren Task[]  @relation("RecurringInstances")
+
+  // Subtask hierarchy
+  parentTaskId String?
+  parentTask   Task?   @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  subTasks     Task[]  @relation("SubTasks")
 
   templateTaskId String?
 
-  createdBy String? // accountId
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  // Soft delete
   deletedAt DateTime?
+  deletedBy String?
 
-  assignments TaskAssignment[]
-  activity    ActivityLog[]
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  // Self-referencing for Subtasks
-  parentTaskId String?
-  parentTask   Task?   @relation("SubTasks", fields: [parentTaskId], references: [id])
-  subTasks     Task[]  @relation("SubTasks")
+  // Relations
+  assignments  TaskAssignment[]
+  activity     ActivityLog[]
+  comments     TaskComment[]
+  attachments  TaskAttachment[]
+  labels       TaskLabel[]
+  checklist    ChecklistItem[]
+  dependencies TaskDependency[]       @relation("DependentTask")
+  dependents   TaskDependency[]       @relation("BlockingTask")
+  watchers     TaskWatcher[]
+  timeEntries  TaskTimeEntry[]
+  customValues TaskCustomFieldValue[]
 
   @@index([projectId])
   @@index([stepId])
   @@index([status])
+  @@index([priority])
+  @@index([dueDate])
   @@index([deletedAt])
+  @@index([parentTaskId])
+  @@index([recurrenceParentId])
+  @@index([isSelfTask])
+  @@index([sortOrder])
+  @@index([createdBy])
+  @@index([projectId, status]) // filter tasks by project + status (kanban column query)
+  @@index([projectId, dueDate]) // filter by project + due date (calendar view)
+  @@index([stepId, sortOrder]) // ordered column fetch
 }
 
 model TaskAssignment {
@@ -681,29 +930,179 @@ model TaskAssignment {
   @@index([teamId])
 }
 
+model TaskDependency {
+  id String @id @default(uuid())
+
+  dependentTaskId String
+  dependentTask   Task   @relation("DependentTask", fields: [dependentTaskId], references: [id], onDelete: Cascade)
+
+  blockingTaskId String
+  blockingTask   Task   @relation("BlockingTask", fields: [blockingTaskId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  createdBy String?
+
+  @@unique([dependentTaskId, blockingTaskId])
+  @@index([dependentTaskId])
+  @@index([blockingTaskId])
+}
+
+model ChecklistItem {
+  id     String @id @default(uuid())
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId String
+
+  title  String
+  status ChecklistItemStatus @default(PENDING)
+  order  Int                 @default(0)
+
+  assignedTo String? // accountId
+  dueDate    DateTime?
+
+  completedAt DateTime?
+  completedBy String?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([taskId])
+  @@index([order])
+}
+
+model TaskComment {
+  id     String @id @default(uuid())
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId String
+
+  content    String // Markdown / rich text
+  visibility CommentVisibility @default(ALL)
+
+  // Thread support: null = top-level, set = reply
+  parentCommentId String?
+  parentComment   TaskComment?  @relation("CommentReplies", fields: [parentCommentId], references: [id], onDelete: SetNull)
+  replies         TaskComment[] @relation("CommentReplies")
+
+  mentions CommentMention[]
+
+  // Reactions stored as JSON for simplicity: { "👍": ["accountId1"], "🔥": ["accountId2"] }
+  reactions Json?
+
+  editedAt  DateTime?
+  deletedAt DateTime?
+  deletedBy String?
+
+  authorId  String
+  author    Account  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([taskId])
+  @@index([authorId])
+  @@index([parentCommentId])
+  @@index([deletedAt])
+}
+
+model CommentMention {
+  id        String      @id @default(uuid())
+  comment   TaskComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  commentId String
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  notified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@unique([commentId, accountId])
+  @@index([accountId])
+}
+
+model TaskAttachment {
+  id     String @id @default(uuid())
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId String
+
+  name      String
+  source    AttachmentSource @default(UPLOAD)
+  url       String
+  mimeType  String?
+  sizeBytes Int?
+  meta      Json? // thumbnailUrl, dimensions, previewUrl, integrationId
+
+  uploadedBy String?
+  createdAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  @@index([taskId])
+  @@index([deletedAt])
+}
+
+model TaskWatcher {
+  id     String @id @default(uuid())
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId String
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  watchedAt DateTime @default(now())
+
+  @@unique([taskId, accountId])
+  @@index([taskId])
+  @@index([accountId])
+}
+
+model TaskTimeEntry {
+  id     String @id @default(uuid())
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId String
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  startedAt       DateTime
+  endedAt         DateTime?
+  durationMinutes Int? // Set on stop; null = still running
+
+  description String? // What was worked on
+  isBillable  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([taskId])
+  @@index([accountId])
+  @@index([startedAt])
+}
+
 model ActivityLog {
   id String @id @default(uuid())
 
   entityType ActivityEntity
   entityId   String
 
-  action String // CREATED, UPDATED, ASSIGNED, COMPLETED, MOVED
-  meta   Json?
+  action ActivityAction
+  meta   Json? // Context-specific payload (e.g. { "from": "TODO", "to": "IN_PROGRESS" })
 
-  performedBy String? // accountId
-  createdAt   DateTime @default(now())
-
-  project   Project? @relation(fields: [projectId], references: [id])
-  projectId String?
-
-  task   Task?   @relation(fields: [taskId], references: [id])
-  taskId String?
-
+  // Snapshot of the entity before/after (for rollback / diffing)
   fromState Json?
   toState   Json?
-  snapshot  Json?
+
+  performedBy String? // accountId; null = system
+  createdAt   DateTime @default(now())
+
+  // Denormalised FKs for fast queries
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  projectId String?
+
+  task   Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  taskId String?
 
   @@index([entityType, entityId])
+  @@index([projectId])
+  @@index([taskId])
+  @@index([performedBy])
   @@index([createdAt])
 }
 
@@ -1096,6 +1495,160 @@ model TemplatePreference {
 }
 
 // ------------------------------------------------------------------
+// Attendance Check-In / Check-Out Event Log
+// ------------------------------------------------------------------
+
+enum CheckType {
+  CHECK_IN
+  CHECK_OUT
+  BREAK_START
+  BREAK_END
+}
+
+enum BreakType {
+  LUNCH
+  TEA
+  PERSONAL
+  OTHER
+}
+
+enum CheckSource {
+  MANUAL // self-submitted by employee
+  AUTO // system auto check-out (e.g. end of day)
+  ADMIN // corrected / added by admin
+}
+
+enum LeaveType {
+  FULL_DAY
+  HALF_DAY
+  MULTI_DAY
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model CheckLog {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  // The attendance day this check belongs to (normalized to 00:00 UTC)
+  date DateTime
+
+  // Actual timestamp of the check event
+  checkedAt DateTime
+
+  type      CheckType // CHECK_IN or CHECK_OUT
+  source    CheckSource @default(MANUAL)
+  breakType BreakType?
+
+  // Session pairing — each CHECK_IN gets paired with its CHECK_OUT
+  // Both the IN and OUT row reference the same sessionId (UUID generated on check-in)
+  sessionId String?
+
+  // Location / device metadata (optional)
+  ipAddress  String?
+  deviceMeta Json? // { userAgent, platform, location: { lat, lng } }
+
+  // Admin override tracking
+  note     String? // reason if ADMIN source
+  editedBy String? // accountId of admin who added/edited
+
+  createdAt DateTime @default(now())
+
+  // Link back to the summarized attendance log
+  attendanceLog   AttendanceLog? @relation(fields: [attendanceLogId], references: [id])
+  attendanceLogId String?
+
+  @@index([accountId, date])
+  @@index([sessionId])
+  @@index([checkedAt])
+  @@index([type])
+}
+
+// ------------------------------------------------------------------
+// Updated AttendanceLog — now the daily SUMMARY
+// (aggregated from CheckLog, recomputed on each check event)
+// ------------------------------------------------------------------
+
+// REPLACE existing AttendanceLog with this:
+model AttendanceLog {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  // Normalized date (midnight 00:00, server timezone)
+  date DateTime
+  day  String // "Monday", "Tuesday" …
+
+  // Convenience: first check-in and last check-out of the day
+  firstCheckIn DateTime?
+  lastCheckOut DateTime?
+
+  // Total worked minutes derived from all paired sessions
+  // App recomputes this after every check event
+  totalWorkMinutes Int @default(0)
+
+  // Whether the day has an open/unpaired CHECK_IN (employee forgot to check out)
+  hasOpenSession Boolean @default(false)
+
+  status   AttendanceStatus @default(PRESENT)
+  isSunday Boolean          @default(false)
+
+  // Admin override note (e.g. "Marked HALF_DAY by HR")
+  overrideNote String?
+  overrideBy   String? // accountId
+
+  totalBreakMinutes Int     @default(0)
+  hasOpenBreak      Boolean @default(false)
+  isWFH             Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // All individual check events for this day
+  checkLogs CheckLog[]
+
+  @@unique([accountId, date])
+  @@index([date])
+  @@index([accountId])
+  @@index([status])
+}
+
+// ------------------------------------------------------------------
+// Attendan & Leave
+// ------------------------------------------------------------------
+
+model LeaveRequest {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  type      LeaveType
+  startDate DateTime
+  endDate   DateTime?
+
+  reason String
+
+  status LeaveStatus @default(PENDING)
+
+  decidedBy      String? // admin accountId
+  decisionReason String?
+  decidedAt      DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+  @@index([status])
+}
+
+// ------------------------------------------------------------------
 // DSU Store (Daily Status Updates)
 // ------------------------------------------------------------------
 
@@ -1172,159 +1725,6 @@ model DsuEntry {
   @@index([teamId])
   @@index([date])
   @@index([submittedAt])
-}
-
-// ------------------------------------------------------------------
-// Attendance Check-In / Check-Out Event Log
-// ------------------------------------------------------------------
-
-enum CheckType {
-  CHECK_IN
-  CHECK_OUT
-  BREAK_START
-  BREAK_END 
-}
-enum BreakType {       
-  LUNCH
-  TEA
-  PERSONAL
-  OTHER
-}
-
-enum CheckSource {
-  MANUAL // self-submitted by employee
-  AUTO // system auto check-out (e.g. end of day)
-  ADMIN // corrected / added by admin
-}
-
-enum LeaveType {
-  FULL_DAY
-  HALF_DAY
-  MULTI_DAY
-}
-
-enum LeaveStatus {
-  PENDING
-  APPROVED
-  REJECTED
-}
-
-model CheckLog {
-  id String @id @default(uuid())
-
-  accountId String
-  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  // The attendance day this check belongs to (normalized to 00:00 UTC)
-  date DateTime
-
-  // Actual timestamp of the check event
-  checkedAt DateTime
-
-  type   CheckType // CHECK_IN or CHECK_OUT
-  source CheckSource @default(MANUAL)
-  breakType BreakType?
-
-  // Session pairing — each CHECK_IN gets paired with its CHECK_OUT
-  // Both the IN and OUT row reference the same sessionId (UUID generated on check-in)
-  sessionId String?
-
-  // Location / device metadata (optional)
-  ipAddress  String?
-  deviceMeta Json? // { userAgent, platform, location: { lat, lng } }
-
-  // Admin override tracking
-  note     String? // reason if ADMIN source
-  editedBy String? // accountId of admin who added/edited
-
-  createdAt DateTime @default(now())
-
-  // Link back to the summarized attendance log
-  attendanceLog   AttendanceLog? @relation(fields: [attendanceLogId], references: [id])
-  attendanceLogId String?
-
-  @@index([accountId, date])
-  @@index([sessionId])
-  @@index([checkedAt])
-  @@index([type])
-}
-
-// ------------------------------------------------------------------
-// Updated AttendanceLog — now the daily SUMMARY
-// (aggregated from CheckLog, recomputed on each check event)
-// ------------------------------------------------------------------
-
-// REPLACE existing AttendanceLog with this:
-model AttendanceLog {
-  id String @id @default(uuid())
-
-  accountId String
-  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  // Normalized date (midnight 00:00, server timezone)
-  date DateTime
-  day  String // "Monday", "Tuesday" …
-
-  // Convenience: first check-in and last check-out of the day
-  firstCheckIn DateTime?
-  lastCheckOut DateTime?
-
-  // Total worked minutes derived from all paired sessions
-  // App recomputes this after every check event
-  totalWorkMinutes Int @default(0)
-
-  // Whether the day has an open/unpaired CHECK_IN (employee forgot to check out)
-  hasOpenSession Boolean @default(false)
-
-  status   AttendanceStatus @default(PRESENT)
-  isSunday Boolean          @default(false)
-
-  // Admin override note (e.g. "Marked HALF_DAY by HR")
-  overrideNote String?
-  overrideBy   String? // accountId
-
-  totalBreakMinutes  Int     @default(0)   
-  hasOpenBreak       Boolean @default(false) 
-  isWFH              Boolean @default(false)  
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // All individual check events for this day
-  checkLogs CheckLog[]
-
-  @@unique([accountId, date])
-  @@index([date])
-  @@index([accountId])
-  @@index([status])
-}
-
-// ------------------------------------------------------------------
-// Attendan & Leave
-// ------------------------------------------------------------------
-
-model LeaveRequest {
-  id String @id @default(uuid())
-
-  accountId String
-  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  type      LeaveType
-  startDate DateTime
-  endDate   DateTime?
-
-  reason String
-
-  status LeaveStatus @default(PENDING)
-
-  decidedBy      String? // admin accountId
-  decisionReason String?
-  decidedAt      DateTime?
-
-  createdAt DateTime @default(now())
-
-  @@index([accountId])
-  @@index([status])
 }
 
 // enum DailyStatusSection {
