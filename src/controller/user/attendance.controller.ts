@@ -222,6 +222,17 @@ export async function userCheckIn(req: Request, res: Response) {
       log: result.log,
     });
 
+    try {
+      getIo().emit("busy:changed", {
+        accountId,
+        isBusy: false, // checked in but not busy yet
+        isAvailable: true,
+        source: "CHECK-IN",
+      });
+    } catch (e) {
+      console.warn("[checkIn] busy:changed emit skipped:", e);
+    }
+
     return sendSuccessResponse(res, 200, "Checked in successfully", {
       sessionId,
       checkedInAt: result.checkLog.checkedAt,
@@ -315,7 +326,7 @@ export async function userCheckOut(req: Request, res: Response) {
 
       await tx.account.update({
         where: { id: accountId },
-        data: { isAvailable: false },
+        data: { isAvailable: false, isBusy: false },
       });
 
       return { log: updatedLog, checkOut, sessionMinutes };
@@ -329,6 +340,17 @@ export async function userCheckOut(req: Request, res: Response) {
       totalWorkMinutes: result.log.totalWorkMinutes,
       log: result.log,
     });
+
+    try {
+      getIo().emit("busy:changed", {
+        accountId: accountId,
+        isBusy: false,
+        isAvailable: false,
+        source: "CHECK-OUT",
+      });
+    } catch (e) {
+      console.warn("[checkIn] busy:changed emit skipped:", e);
+    }
 
     return sendSuccessResponse(res, 200, "Checked out successfully", {
       checkedOutAt: result.checkOut.checkedAt,
@@ -727,6 +749,18 @@ export async function userBreakStart(req: Request, res: Response) {
       breakType,
       startedAt: result.breakLog.checkedAt,
     });
+    try {
+      // console.log("\n\n\n[break-start] Emitting busy:changed — accountId:", accountId);
+
+      getIo().emit("busy:changed", {
+        accountId: accountId,
+        isBusy: false,
+        isAvailable: false,
+        source: "BREAK-START",
+      });
+    } catch (e) {
+      console.warn("[break-start] busy:changed emit skipped:", e);
+    }
 
     return sendSuccessResponse(res, 200, "Break started", {
       breakSessionId: result.breakSessionId,
@@ -819,6 +853,19 @@ export async function userBreakEnd(req: Request, res: Response) {
       breakMinutes: result.breakMinutes,
       totalBreakMinutes: (result.log as any).totalBreakMinutes,
     });
+
+    try {
+      console.log("\n\n\n[break-end] Emitting busy:changed — accountId:", accountId);
+      
+      getIo().emit("busy:changed", {
+        accountId: accountId,
+        isBusy: false,
+        isAvailable: true,
+        source: "BREAK-END",
+      });
+    } catch (e) {
+      console.warn("[break] busy:changed emit skipped:", e);
+    }
 
     return sendSuccessResponse(res, 200, "Break ended", {
       breakMinutes: result.breakMinutes,

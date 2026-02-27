@@ -93,6 +93,7 @@ export async function listEmployees(req: Request, res: Response) {
           contactEmail: true,
           avatar: true,
           isBusy: true,
+          isAvailable: true,
           //   user: {
           //     select: { roles: true },
           //   },
@@ -117,6 +118,7 @@ export async function listEmployees(req: Request, res: Response) {
       contactEmail: a.contactEmail,
       avatar: a.avatar,
       isBusy: a.isBusy,
+      isAvailable: a.isAvailable,
       //   roles: a.user?.roles ?? [],
       teams: a.teams.map((t) => t.team),
     }));

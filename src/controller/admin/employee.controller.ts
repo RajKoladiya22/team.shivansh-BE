@@ -110,6 +110,7 @@ export async function listEmployees(req: Request, res: Response) {
           contactPhone: true,
           designation: true,
           isBusy: true,
+          isAvailable: true,
           avatar: true,
           jobType: true,
           isActive: true,
