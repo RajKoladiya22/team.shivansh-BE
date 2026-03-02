@@ -581,7 +581,7 @@ export async function adminManualCheckOut(req: Request, res: Response) {
       await tx.account.update({
         where: { id: accountId },
         data: {
-          isAvailable: false, // in case they were marked unavailable due to absence
+          isAvailable: false, 
         },
       });
 

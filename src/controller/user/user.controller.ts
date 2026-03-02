@@ -136,6 +136,8 @@ export async function updateProfile(req: Request, res: Response) {
       }
     }
 
+    const avatarUrl = docs["avatar"]?.url ?? null;
+
     /* ---------- UPDATE ---------- */
     const updated = await prisma.account.update({
       where: { id: account.id },
@@ -146,7 +148,8 @@ export async function updateProfile(req: Request, res: Response) {
         ...(contactPhone && { contactPhone }),
         ...(bioData && { bio: bioData }),
         ...(addressData && { address: addressData }),
-        ...(docs["avatar"]?.filename && { avatar: docs["avatar"].url }),
+        // ...(docs["avatar"]?.filename && { avatar: docs["avatar"].url }),
+        avatar: avatarUrl,
         documents: docs,
       },
     });
@@ -194,7 +197,6 @@ export async function getProfile(req: Request, res: Response) {
     return sendErrorResponse(res, 500, "Failed to fetch profile");
   }
 }
-
 
 export async function updateMyBusyStatus(req: Request, res: Response) {
   try {
@@ -375,7 +377,6 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
     return sendErrorResponse(res, 500, err.message);
   }
 }
-
 
 // /**
 //  * PATCH /user/account/busy
