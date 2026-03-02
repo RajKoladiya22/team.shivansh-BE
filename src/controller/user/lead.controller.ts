@@ -835,7 +835,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
         });
       }
 
-      // 3) CLOSED (if lead became CLOSED) — separate explicit log
+      // 3) CLOSED (if lead became CLOSED) — separate explicit log because frontend may want to trigger specific flows on this
       const becameClosed =
         changedFields.status && changedFields.status.to === "CLOSED";
       if (becameClosed) {
