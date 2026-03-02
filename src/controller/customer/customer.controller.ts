@@ -595,3 +595,71 @@ export async function expireCustomerProduct(req: Request, res: Response) {
     return sendErrorResponse(res, 500, err.message);
   }
 }
+
+/**
+ * DELETE /admin/customers/:id/permanent
+ * Hard delete customer with all related leads
+ */
+export async function deleteCustomerPermanentAdmin(
+  req: Request,
+  res: Response
+) {
+  try {
+    if (!req.user?.roles?.includes?.("ADMIN")) {
+      return sendErrorResponse(res, 403, "Admin access required");
+    }
+
+    const { id } = req.params;
+
+    const existing = await prisma.customer.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        leads: { select: { id: true } },
+      },
+    });
+
+    if (!existing) {
+      return sendErrorResponse(res, 404, "Customer not found");
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const leadIds = existing.leads.map((l) => l.id);
+
+      if (leadIds.length > 0) {
+        await tx.leadActivityLog.deleteMany({
+          where: { leadId: { in: leadIds } },
+        });
+
+        await tx.leadAssignment.deleteMany({
+          where: { leadId: { in: leadIds } },
+        });
+
+        await tx.leadHelper.deleteMany({
+          where: { leadId: { in: leadIds } },
+        });
+
+        await tx.lead.deleteMany({
+          where: { id: { in: leadIds } },
+        });
+      }
+
+      await tx.customer.delete({
+        where: { id },
+      });
+    });
+
+    return sendSuccessResponse(
+      res,
+      200,
+      "Customer permanently deleted with related leads"
+    );
+  } catch (err: any) {
+    console.error("Delete customer error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to delete customer"
+    );
+  }
+}
