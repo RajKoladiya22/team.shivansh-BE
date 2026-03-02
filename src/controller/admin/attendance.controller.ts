@@ -582,6 +582,7 @@ export async function adminManualCheckOut(req: Request, res: Response) {
         where: { id: accountId },
         data: {
           isAvailable: false, 
+          isBusy: false,
         },
       });
 

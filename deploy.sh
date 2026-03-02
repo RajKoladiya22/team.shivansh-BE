@@ -1,4 +1,4 @@
-#!/bin/bash
+#! deploy.sh
 
 echo "🚀 Pulling latest code..."
 git pull origin main
