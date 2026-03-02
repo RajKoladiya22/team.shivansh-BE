@@ -2,6 +2,8 @@
 import cron from "node-cron";
 import { autoFinalizeAttendance } from "./attendance/attendance.auto";
 
+console.log("Job scheduler initialized.");
+
 
 cron.schedule("15 19 * * 1-6", async () => {
   // 19:15 = 7:15 PM
