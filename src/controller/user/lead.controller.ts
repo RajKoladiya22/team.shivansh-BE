@@ -633,7 +633,6 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       };
     // console.log("\n\n\n\n\n\n\n\n\n\n req.body:\n", req.body);
 
-
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
@@ -649,8 +648,6 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       TERMINAL_STATUSES.includes(status as (typeof TERMINAL_STATUSES)[number]);
 
     // console.log("\n\n\nisTerminalStatus\n", isTerminalStatus);
-
-
 
     // verify access: ensure the lead is currently assigned to this user (directly or via team)
     const lead = await prisma.lead.findFirst({
@@ -838,6 +835,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       // 3) CLOSED (if lead became CLOSED) — separate explicit log because frontend may want to trigger specific flows on this
       const becameClosed =
         changedFields.status && changedFields.status.to === "CLOSED";
+
       if (becameClosed) {
         await tx.leadActivityLog.create({
           data: {
