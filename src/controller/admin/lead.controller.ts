@@ -794,6 +794,103 @@ export async function closeLeadAdmin(req: Request, res: Response) {
 }
 
 /**
+ * DELETE /admin/leads/:id/permanent
+ * Hard delete lead with all related records
+ */
+export async function deleteLeadPermanentAdmin(
+  req: Request,
+  res: Response
+) {
+  try {
+    if (!req.user?.roles?.includes?.("ADMIN")) {
+      return sendErrorResponse(res, 403, "Admin access required");
+    }
+
+    const performerAccountId = req.user?.accountId;
+    if (!performerAccountId) {
+      return sendErrorResponse(res, 401, "Invalid session user");
+    }
+
+    const { id } = req.params;
+
+    const existing = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        isWorking: true,
+      },
+    });
+
+    if (!existing) {
+      return sendErrorResponse(res, 404, "Lead not found");
+    }
+
+    if (existing.isWorking) {
+      return sendErrorResponse(
+        res,
+        400,
+        "Cannot delete lead while work is active"
+      );
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // 1️⃣ Delete activity logs
+      await tx.leadActivityLog.deleteMany({
+        where: { leadId: id },
+      });
+
+      // 2️⃣ Delete assignments
+      await tx.leadAssignment.deleteMany({
+        where: { leadId: id },
+      });
+
+      // 3️⃣ Delete helpers
+      await tx.leadHelper.deleteMany({
+        where: { leadId: id },
+      });
+
+      // 4️⃣ Disconnect M2M accounts (if any)
+      await tx.lead.update({
+        where: { id },
+        data: {
+          accounts: {
+            set: [],
+          },
+        },
+      });
+
+      // 5️⃣ Finally delete lead
+      await tx.lead.delete({
+        where: { id },
+      });
+    });
+
+    // Socket patch → remove from UI
+    try {
+      const io = getIo();
+
+      io.to("leads:admin").emit("lead:deleted", { id });
+      io.emit("lead:deleted", { id });
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(
+      res,
+      200,
+      "Lead permanently deleted successfully"
+    );
+  } catch (err: any) {
+    console.error("Permanent delete lead error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to permanently delete lead"
+    );
+  }
+}
+
+/**
  * GET /admin/leads
  * Fully optimized (DB-first ordering, minimal payload, no JS sorting)
  */

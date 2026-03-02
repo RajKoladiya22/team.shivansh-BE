@@ -65,7 +65,7 @@ async function main() {
     update: {},
     create: {
       accountId: adminAccount.id,
-      username: "admin",
+      username: "raj@22",
       passwordHash,
     },
   });

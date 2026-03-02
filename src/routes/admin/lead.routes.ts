@@ -18,6 +18,7 @@ import {
   addLeadHelperAdmin,
   removeLeadHelperAdmin,
   getLeadByIdAdmin,
+  deleteLeadPermanentAdmin,
 } from "../../controller/admin/lead.controller";
 
 const router = Router();
@@ -94,6 +95,13 @@ router.delete(
   requireRole("ADMIN"),
   requirePermission("ALL"),
   closeLeadAdmin,
+);
+router.delete(
+  "/leads/:id/permanent",
+  requireAuth,
+  requireRole("ADMIN"),
+  requirePermission("ALL"),
+  deleteLeadPermanentAdmin,
 );
 
 router.get(
