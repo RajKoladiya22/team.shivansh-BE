@@ -417,6 +417,12 @@ export async function adminManualCheckIn(req: Request, res: Response) {
             hasOpenSession: false,
           },
         });
+        await tx.account.update({
+          where: { id: accountId },
+          data: {
+            isAvailable: true, // in case they were marked unavailable due to absence
+          },
+        });
       }
 
       /* Don't allow admin check-in if session already open */
@@ -569,6 +575,13 @@ export async function adminManualCheckOut(req: Request, res: Response) {
           note: note ?? "Admin manual check-out",
           editedBy: adminAccountId,
           attendanceLogId: log.id,
+        },
+      });
+
+      await tx.account.update({
+        where: { id: accountId },
+        data: {
+          isAvailable: false, // in case they were marked unavailable due to absence
         },
       });
 
