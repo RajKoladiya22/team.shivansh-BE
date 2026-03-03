@@ -44,7 +44,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 export function requireRole(...allowedRoles: string[]) {
   return (req: any, res: Response, next: NextFunction) => {
     let roles = req.user?.roles ?? [];
-
+    console.log("\n\nROLES →", roles);
+    console.log("allowedRoles from params→", allowedRoles);
     // Normalize to string[]
     if (!Array.isArray(roles)) {
       roles = [roles];
@@ -58,8 +59,6 @@ export function requireRole(...allowedRoles: string[]) {
 
     const hasRole = roles.some((role) => normalizedAllowed.includes(role));
 
-    console.log("\n\nROLES →", roles);
-    console.log("allowedRoles from perams→", allowedRoles);
     console.log("ALLOWED →", normalizedAllowed);
     console.log("HAS ROLE →", hasRole);
 

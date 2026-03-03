@@ -1,4 +1,144 @@
-// src/routes/admin/lead.routes.ts
+// // src/routes/admin/lead.routes.ts
+
+// import { Router } from "express";
+// import {
+//   requireAuth,
+//   requireRole,
+//   requirePermission,
+// } from "../../core/middleware/auth";
+
+// import {
+//   createLeadAdmin,
+//   assignLeadAdmin,
+//   updateLeadAdmin,
+//   closeLeadAdmin,
+//   listLeadsAdmin,
+//   getLeadActivityTimelineAdmin,
+//   getLeadCountByStatusAdmin,
+//   addLeadHelperAdmin,
+//   removeLeadHelperAdmin,
+//   getLeadByIdAdmin,
+//   deleteLeadPermanentAdmin,
+// } from "../../controller/admin/lead.controller";
+
+// const router = Router();
+
+// /* ================= LEADS / SUPPORT ================= */
+
+// /**
+//  * Create Lead / Support
+//  * POST /admin/leads
+//  */
+// router.post(
+//   "/leads",
+//   requireAuth,
+//   requireRole("ADMIN"),
+//   requirePermission("ALL"),
+//   createLeadAdmin,
+// );
+
+// /**
+//  * List Leads (filters: status, source, pagination)
+//  * GET /admin/leads
+//  */
+// router.get(
+//   "/leads",
+//   requireAuth,
+//   requireRole("ADMIN", "SALES"),
+//   requirePermission("ALL", "VIEW_LEADS"),
+//   listLeadsAdmin,
+// );
+
+// /**
+//  * List Details
+//  * GET /admin/leads/:id
+//  */
+// router.get(
+//   "/leads/:id",
+//   requireAuth,
+//   requireRole("ADMIN", "SALES"),
+//   requirePermission("ALL", "VIEW_LEADS"),
+//   getLeadByIdAdmin,
+// );
+
+// /**
+//  * Update Lead (status, remark, product, cost, etc.)
+//  * PATCH /admin/leads/:id
+//  */
+// router.patch(
+//   "/leads/:id",
+//   requireAuth,
+//   requireRole("ADMIN"),
+//   requirePermission("ALL"),
+//   updateLeadAdmin,
+// );
+
+// /**
+//  * Assign / Reassign Lead
+//  * POST /admin/leads/:id/assign
+//  */
+// router.post(
+//   "/leads/:id/assign",
+//   requireAuth,
+//   requireRole("ADMIN"),
+//   requirePermission("ALL"),
+//   assignLeadAdmin,
+// );
+
+// /**
+//  * Close Lead (soft close)
+//  * DELETE /admin/leads/:id
+//  */
+// router.delete(
+//   "/leads/:id",
+//   requireAuth,
+//   requireRole("ADMIN"),
+//   requirePermission("ALL"),
+//   closeLeadAdmin,
+// );
+// router.delete(
+//   "/leads/:id/permanent",
+//   requireAuth,
+//   requireRole("ADMIN"),
+//   requirePermission("ALL"),
+//   deleteLeadPermanentAdmin,
+// );
+
+// router.get(
+//   "/leads/:id/activity",
+//   requireAuth,
+//   requireRole("ADMIN", "SALES"),
+//   requirePermission("ALL", "VIEW_LEADS"),
+//   getLeadActivityTimelineAdmin,
+// );
+
+// router.get(
+//   "/leads/stats/status",
+//   requireAuth,
+//   requireRole("ADMIN", "SALES"),
+//   requirePermission("ALL", "VIEW_LEADS"),
+//   getLeadCountByStatusAdmin,
+// );
+
+
+// router.post(
+//   "/leads/:id/helpers",
+//   requireAuth,
+//   requireRole("ADMIN"),
+//   requirePermission("ALL"),
+//   addLeadHelperAdmin,
+// );
+// router.delete(
+//   "/leads/:id/helpers/:accountId",
+//   requireAuth,
+//   requireRole("ADMIN"),
+//   requirePermission("ALL"),
+//   removeLeadHelperAdmin,
+// );
+
+// export default router;
+
+
 
 import { Router } from "express";
 import {
@@ -38,7 +178,7 @@ router.post(
 );
 
 /**
- * List Leads (filters: status, source, pagination)
+ * List Leads
  * GET /admin/leads
  */
 router.get(
@@ -49,8 +189,36 @@ router.get(
   listLeadsAdmin,
 );
 
+/* ================= STATIC ROUTES (MUST COME FIRST) ================= */
+
 /**
- * List Details
+ * Lead Status Stats
+ * GET /admin/leads/stats/status
+ */
+router.get(
+  "/leads/stats/status",
+  requireAuth,
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
+  getLeadCountByStatusAdmin,
+);
+
+/**
+ * Lead Activity Timeline
+ * GET /admin/leads/:id/activity
+ */
+router.get(
+  "/leads/:id/activity",
+  requireAuth,
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
+  getLeadActivityTimelineAdmin,
+);
+
+/* ================= DYNAMIC :id ROUTES ================= */
+
+/**
+ * Get Lead Details
  * GET /admin/leads/:id
  */
 router.get(
@@ -62,7 +230,7 @@ router.get(
 );
 
 /**
- * Update Lead (status, remark, product, cost, etc.)
+ * Update Lead
  * PATCH /admin/leads/:id
  */
 router.patch(
@@ -86,7 +254,7 @@ router.post(
 );
 
 /**
- * Close Lead (soft close)
+ * Close Lead (soft delete)
  * DELETE /admin/leads/:id
  */
 router.delete(
@@ -96,6 +264,11 @@ router.delete(
   requirePermission("ALL"),
   closeLeadAdmin,
 );
+
+/**
+ * Permanent Delete
+ * DELETE /admin/leads/:id/permanent
+ */
 router.delete(
   "/leads/:id/permanent",
   requireAuth,
@@ -104,23 +277,10 @@ router.delete(
   deleteLeadPermanentAdmin,
 );
 
-router.get(
-  "/leads/:id/activity",
-  requireAuth,
-  requireRole("ADMIN", "SALES"),
-  requirePermission("ALL", "VIEW_LEADS"),
-  getLeadActivityTimelineAdmin,
-);
-
-router.get(
-  "/leads/stats/status",
-  requireAuth,
-  requireRole("ADMIN", "SALES"),
-  requirePermission("ALL", "VIEW_LEADS"),
-  getLeadCountByStatusAdmin,
-);
-
-
+/**
+ * Add Helper
+ * POST /admin/leads/:id/helpers
+ */
 router.post(
   "/leads/:id/helpers",
   requireAuth,
@@ -128,6 +288,11 @@ router.post(
   requirePermission("ALL"),
   addLeadHelperAdmin,
 );
+
+/**
+ * Remove Helper
+ * DELETE /admin/leads/:id/helpers/:accountId
+ */
 router.delete(
   "/leads/:id/helpers/:accountId",
   requireAuth,
