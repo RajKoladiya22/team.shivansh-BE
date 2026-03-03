@@ -81,7 +81,7 @@ router.get(
  * GET /admin/leads/:id
  */
 router.get(
-  "/leads/:id([0-9a-fA-F-]{36})",
+  "/leads/:id",
   requireAuth,
   requireRole("ADMIN", "SALES"),
   requirePermission("ALL", "VIEW_LEADS"),
@@ -93,7 +93,7 @@ router.get(
  * PATCH /admin/leads/:id
  */
 router.patch(
-  "/leads/:id([0-9a-fA-F-]{36})",
+  "/leads/:id",
   requireAuth,
   requireRole("ADMIN"),
   requirePermission("ALL"),
