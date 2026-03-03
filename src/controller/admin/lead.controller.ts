@@ -1218,8 +1218,8 @@ export async function getLeadActivityTimelineAdmin(
   try {
     const adminUserId = req.user?.id;
     if (!adminUserId) return sendErrorResponse(res, 401, "Unauthorized");
-    if (!req.user?.roles?.includes?.("ADMIN"))
-      return sendErrorResponse(res, 403, "Admin access required");
+    // if (!req.user?.roles?.includes?.("ADMIN"))
+    //   return sendErrorResponse(res, 403, "Admin access required");
 
     const { id } = req.params;
     const leadExists = await prisma.lead.findUnique({

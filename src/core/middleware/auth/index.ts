@@ -51,6 +51,10 @@ export function requireRole(...allowedRoles: string[]) {
 
     const hasRole = roles.some((r: string) => allowedRoles.includes(r));
 
+    console.log("\n[ROLES]---------------->\N", roles);
+    console.log("\n[allowedRoles]---------------->\N", allowedRoles);
+    console.log("\n[hasRole]---------------->\N", hasRole);
+
     if (!hasRole) {
       return res.status(403).json({ message: "Forbidden: role denied" });
     }
@@ -63,11 +67,13 @@ export function requirePermission(...requiredPermissions: string[]) {
     const userPermissions: string[] = req.user?.permissions ?? [];
 
     if (!userPermissions.length) {
-      return res.status(403).json({ message: "Forbidden: no permissions assigned" });
+      return res
+        .status(403)
+        .json({ message: "Forbidden: no permissions assigned" });
     }
 
     const hasPermission = requiredPermissions.some((permission) =>
-      userPermissions.includes(permission)
+      userPermissions.includes(permission),
     );
 
     if (!hasPermission) {
