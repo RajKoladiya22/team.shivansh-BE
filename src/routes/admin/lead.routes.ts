@@ -184,7 +184,7 @@ router.post(
 router.get(
   "/leads",
   requireAuth,
-  requireRole("ADMIN", "SALES"),
+  requireRole("SALES", "ADMIN"),
   requirePermission("ALL", "VIEW_LEADS"),
   listLeadsAdmin,
 );
