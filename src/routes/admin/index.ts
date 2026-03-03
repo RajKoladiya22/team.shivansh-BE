@@ -13,11 +13,11 @@ import attendanceRoutes from "./attendance.routes";
 // import tasksRoutes from "./task.routes"
 
 // base path for each module
+router.use("/", leadRoutes);
 router.use("/", employeesRouter);
 router.use("/", registerRouter);
 router.use("/", teamRouter);
 router.use("/salary", salaryRoutes);
-router.use("/", leadRoutes);
 router.use("/", busyLogsRoutes);
 router.use("/attendance", attendanceRoutes);
 // router.use("/pipeline-templates", pipelineRouter);
