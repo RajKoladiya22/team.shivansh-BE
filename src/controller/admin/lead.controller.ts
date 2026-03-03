@@ -797,10 +797,7 @@ export async function closeLeadAdmin(req: Request, res: Response) {
  * DELETE /admin/leads/:id/permanent
  * Hard delete lead with all related records
  */
-export async function deleteLeadPermanentAdmin(
-  req: Request,
-  res: Response
-) {
+export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
   try {
     if (!req.user?.roles?.includes?.("ADMIN")) {
       return sendErrorResponse(res, 403, "Admin access required");
@@ -829,7 +826,7 @@ export async function deleteLeadPermanentAdmin(
       return sendErrorResponse(
         res,
         400,
-        "Cannot delete lead while work is active"
+        "Cannot delete lead while work is active",
       );
     }
 
@@ -878,14 +875,14 @@ export async function deleteLeadPermanentAdmin(
     return sendSuccessResponse(
       res,
       200,
-      "Lead permanently deleted successfully"
+      "Lead permanently deleted successfully",
     );
   } catch (err: any) {
     console.error("Permanent delete lead error:", err);
     return sendErrorResponse(
       res,
       500,
-      err?.message ?? "Failed to permanently delete lead"
+      err?.message ?? "Failed to permanently delete lead",
     );
   }
 }
@@ -924,12 +921,34 @@ export async function listLeadsAdmin(req: Request, res: Response) {
 
     if (status) where.status = status;
     if (source) where.source = source;
+    console.log("fromDate:", fromDate);
+    console.log("toDate:", toDate);
+
+    // if (fromDate || toDate) {
+    //   where.createdAt = {};
+    //   if (fromDate) where.createdAt.gte = new Date(fromDate);
+    //   if (toDate) where.createdAt.lte = new Date(toDate);
+    // }
 
     if (fromDate || toDate) {
       where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate) where.createdAt.lte = new Date(toDate);
+
+      if (fromDate) {
+        where.createdAt.gte = new Date(fromDate);
+      }
+
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setDate(end.getDate() + 1);
+        where.createdAt.lt = end;
+      }
     }
+
+    console.log("Constructed where clause:", JSON.stringify(where, null, 2));
+    console.log(
+      "\nConstructed where clause:",
+      JSON.stringify(where.createdAt, null, 2),
+    );
 
     /* -------------------------
        DEMO DATE FILTER (INDEXED)

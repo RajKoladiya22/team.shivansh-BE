@@ -48,9 +48,20 @@ const router = Router();
 //   listLeadsAdmin,
 // );
 
-router.route("/leads")
-  .post(requireAuth, requireRole("ADMIN"), requirePermission("ALL"), createLeadAdmin)
-  .get(requireAuth, requireRole("SALES","ADMIN"), requirePermission("ALL","VIEW_LEADS"), listLeadsAdmin);
+router
+  .route("/leads")
+  .post(
+    requireAuth,
+    requireRole("ADMIN"),
+    requirePermission("ALL"),
+    createLeadAdmin,
+  )
+  .get(
+    requireAuth,
+    requireRole("SALES", "ADMIN"),
+    requirePermission("ALL", "VIEW_LEADS"),
+    listLeadsAdmin,
+  );
 
 /* ================= STATIC ROUTES (MUST COME FIRST) ================= */
 

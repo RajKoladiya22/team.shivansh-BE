@@ -45,11 +45,6 @@ export function requireRole(...allowedRoles: string[]) {
   const normalizedAllowed = allowedRoles.map((r) => r.toUpperCase());
 
   return (req: any, res: Response, next: NextFunction) => {
-    console.log("\n\nPATH HIT →", req.route?.path);
-    console.log("BaseUrl →", req.baseUrl);
-    console.log("OriginalUrl →", req.originalUrl);
-    // console.log("\n\n1. ALLOWED ROLES (RAW) →", allowedRoles);
-    // console.log("\n2. ALLOWED ROLES (RAW) →", ...allowedRoles);
     let roles = req.user?.roles ?? [];
 
     if (!Array.isArray(roles)) {
@@ -57,9 +52,7 @@ export function requireRole(...allowedRoles: string[]) {
     }
 
     const normalizedUserRoles = roles.map((r: any) => String(r).toUpperCase());
-    console.log("\n\n1. ALLOWED ROLES (RAW) →", allowedRoles);
-    console.log("2. USER ROLES →", normalizedUserRoles);
-    console.log("3. ALLOWED ROLES →", normalizedAllowed, "\n\n\n");
+
 
     const hasRole = normalizedUserRoles.some((role) =>
       normalizedAllowed.includes(role),
