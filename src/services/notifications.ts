@@ -184,8 +184,8 @@ export async function triggerAssignmentNotification({
     const subscriptions = await prisma.notificationSubscription.findMany({
       where: {
         accountId: { in: recipientAccountIds },
-        isActive: true,
-        platform: { in: ["web", "chrome"] },
+        // isActive: true,
+        // platform: { in: ["web", "chrome"] },
       },
     });
     const subscription = await prisma.notificationSubscription.findMany({})
