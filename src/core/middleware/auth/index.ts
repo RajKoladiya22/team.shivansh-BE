@@ -41,23 +41,37 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
 }
 
+
+
 export function requireRole(...allowedRoles: string[]) {
   return (req: any, res: Response, next: NextFunction) => {
-    const roles = req.user?.roles || [];
+    let roles = req.user?.roles ?? [];
 
-    if (!roles.length) {
-      return res.status(403).json({ message: "Forbidden: no roles assigned" });
+    // Normalize to string[]
+    if (!Array.isArray(roles)) {
+      roles = [roles];
     }
 
-    const hasRole = roles.some((r: string) => allowedRoles.includes(r));
+    roles = roles.map((r: any) =>
+      typeof r === "string" ? r.toUpperCase() : String(r).toUpperCase()
+    );
 
-    console.log("\n[ROLES]---------------->\N", roles);
-    console.log("\n[allowedRoles]---------------->\N", allowedRoles);
-    console.log("\n[hasRole]---------------->\N", hasRole);
+    const normalizedAllowed = allowedRoles.map(r => r.toUpperCase());
+
+    const hasRole = roles.some(role =>
+      normalizedAllowed.includes(role)
+    );
+
+    // console.log("ROLES →", roles);
+    // console.log("ALLOWED →", normalizedAllowed);
+    // console.log("HAS ROLE →", hasRole);
 
     if (!hasRole) {
-      return res.status(403).json({ message: "Forbidden: role denied" });
+      return res.status(403).json({
+        message: "Forbidden: role denied",
+      });
     }
+
     next();
   };
 }
@@ -83,6 +97,28 @@ export function requirePermission(...requiredPermissions: string[]) {
     next();
   };
 }
+
+
+// export function requireRole(...allowedRoles: string[]) {
+//   return (req: any, res: Response, next: NextFunction) => {
+//     const roles = req.user?.roles || [];
+
+//     if (!roles.length) {
+//       return res.status(403).json({ message: "Forbidden: no roles assigned" });
+//     }
+
+//     const hasRole = roles.some((r: string) => allowedRoles.includes(r));
+
+//     console.log("\n[ROLES]---------------->\N", roles);
+//     console.log("\n[allowedRoles]---------------->\N", allowedRoles);
+//     console.log("\n[hasRole]---------------->\N", hasRole);
+
+//     if (!hasRole) {
+//       return res.status(403).json({ message: "Forbidden: role denied" });
+//     }
+//     next();
+//   };
+// }
 
 // export function requirePermission(permission: string) {
 //   return async (req: any, res: Response, next: NextFunction) => {
