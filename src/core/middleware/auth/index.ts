@@ -46,6 +46,8 @@ export function requireRole(...allowedRoles: string[]) {
 
   return (req: any, res: Response, next: NextFunction) => {
     console.log("\n\nPATH HIT →", req.route?.path);
+    console.log("BaseUrl →", req.baseUrl);
+    console.log("OriginalUrl →", req.originalUrl);
     // console.log("\n\n1. ALLOWED ROLES (RAW) →", allowedRoles);
     // console.log("\n2. ALLOWED ROLES (RAW) →", ...allowedRoles);
     let roles = req.user?.roles ?? [];
@@ -55,7 +57,7 @@ export function requireRole(...allowedRoles: string[]) {
     }
 
     const normalizedUserRoles = roles.map((r: any) => String(r).toUpperCase());
-     console.log("\n\n1. ALLOWED ROLES (RAW) →", allowedRoles);
+    console.log("\n\n1. ALLOWED ROLES (RAW) →", allowedRoles);
     console.log("2. USER ROLES →", normalizedUserRoles);
     console.log("3. ALLOWED ROLES →", normalizedAllowed, "\n\n\n");
 
