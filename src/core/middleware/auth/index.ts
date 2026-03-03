@@ -41,8 +41,6 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
 }
 
-
-
 export function requireRole(...allowedRoles: string[]) {
   return (req: any, res: Response, next: NextFunction) => {
     let roles = req.user?.roles ?? [];
@@ -53,16 +51,15 @@ export function requireRole(...allowedRoles: string[]) {
     }
 
     roles = roles.map((r: any) =>
-      typeof r === "string" ? r.toUpperCase() : String(r).toUpperCase()
+      typeof r === "string" ? r.toUpperCase() : String(r).toUpperCase(),
     );
 
-    const normalizedAllowed = allowedRoles.map(r => r.toUpperCase());
+    const normalizedAllowed = allowedRoles.map((r) => r.toUpperCase());
 
-    const hasRole = roles.some(role =>
-      normalizedAllowed.includes(role)
-    );
+    const hasRole = roles.some((role) => normalizedAllowed.includes(role));
 
-    console.log("ROLES →", roles);
+    console.log("\n\nROLES →", roles);
+    console.log("allowedRoles from perams→", allowedRoles);
     console.log("ALLOWED →", normalizedAllowed);
     console.log("HAS ROLE →", hasRole);
 
@@ -97,7 +94,6 @@ export function requirePermission(...requiredPermissions: string[]) {
     next();
   };
 }
-
 
 // export function requireRole(...allowedRoles: string[]) {
 //   return (req: any, res: Response, next: NextFunction) => {
