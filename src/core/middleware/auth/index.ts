@@ -62,9 +62,9 @@ export function requireRole(...allowedRoles: string[]) {
       normalizedAllowed.includes(role)
     );
 
-    // console.log("ROLES →", roles);
-    // console.log("ALLOWED →", normalizedAllowed);
-    // console.log("HAS ROLE →", hasRole);
+    console.log("ROLES →", roles);
+    console.log("ALLOWED →", normalizedAllowed);
+    console.log("HAS ROLE →", hasRole);
 
     if (!hasRole) {
       return res.status(403).json({
