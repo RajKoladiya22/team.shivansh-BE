@@ -3,6 +3,7 @@
 import { getIo } from "../core/utils/socket";
 import { prisma } from "../config/database.config";
 import * as webpush from "web-push";
+import { sendWhatsAppNotification } from "./whatsapp";
 
 type TriggerArgs = {
   leadId: string;
@@ -73,6 +74,24 @@ export async function triggerAssignmentNotification({
     }
 
     if (recipientAccountIds.length === 0) return;
+
+    if (recipientAccountIds.length > 0) {
+      const assignee = await prisma.account.findUnique({
+        where: { id: recipientAccountIds[0] },
+        select: { contactPhone: true, firstName: true },
+      });
+
+      if (assignee?.contactPhone) {
+        await sendWhatsAppNotification({
+          phoneNumber: assignee.contactPhone,
+          message: `New Lead Assigned:
+Customer: ${lead.customerName}
+Product: ${lead.productTitle ?? "-"}
+Status: ${lead.status}
+Assigned By: ${assignedBy}`,
+        });
+      }
+    }
 
     // Step 3 — find existing by dedupeKey and update or create per recipient (dedupeKey is not a unique field in Prisma schema)
     const notifications = await Promise.all(
