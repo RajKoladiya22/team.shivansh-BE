@@ -75,23 +75,24 @@ export async function triggerAssignmentNotification({
 
     if (recipientAccountIds.length === 0) return;
 
-    if (recipientAccountIds.length > 0) {
-      const assignee = await prisma.account.findUnique({
-        where: { id: recipientAccountIds[0] },
-        select: { contactPhone: true, firstName: true },
-      });
+    // WhatsApp notification to first recipient (best effort, outside transaction)
+    //     if (recipientAccountIds.length > 0) {
+    //       const assignee = await prisma.account.findUnique({
+    //         where: { id: recipientAccountIds[0] },
+    //         select: { contactPhone: true, firstName: true },
+    //       });
 
-      if (assignee?.contactPhone) {
-        await sendWhatsAppNotification({
-          phoneNumber: assignee.contactPhone,
-          message: `New Lead Assigned:
-Customer: ${lead.customerName}
-Product: ${lead.productTitle ?? "-"}
-Status: ${lead.status}
-Assigned By: ${assignedBy}`,
-        });
-      }
-    }
+    //       if (assignee?.contactPhone) {
+    //         await sendWhatsAppNotification({
+    //           phoneNumber: assignee.contactPhone,
+    //           message: `New Lead Assigned:
+    // Customer: ${lead.customerName}
+    // Product: ${lead.productTitle ?? "-"}
+    // Status: ${lead.status}
+    // Assigned By: ${assignedBy}`,
+    //         });
+    //       }
+    //     }
 
     // Step 3 — find existing by dedupeKey and update or create per recipient (dedupeKey is not a unique field in Prisma schema)
     const notifications = await Promise.all(
@@ -228,8 +229,6 @@ Assigned By: ${assignedBy}`,
     console.error("triggerAssignmentNotification failed:", error);
   }
 }
-
-// src/services/notifications.ts
 
 export async function triggerAdminRegistrationNotification({
   requestId,
