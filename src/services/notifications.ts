@@ -178,7 +178,8 @@ export async function triggerAssignmentNotification({
         }
       });
     }
-
+    console.log("assigneeAccountId:", assigneeAccountId);
+    
     // 5. Push delivery
     const subscriptions = await prisma.notificationSubscription.findMany({
       where: {
@@ -187,6 +188,9 @@ export async function triggerAssignmentNotification({
         platform: { in: ["web", "chrome"] },
       },
     });
+
+    console.log("\n\nSubscriptions:", subscriptions);
+    
 
     // for (const sub of subscriptions) {
     //   try {
