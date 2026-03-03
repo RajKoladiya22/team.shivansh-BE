@@ -73,9 +73,61 @@ export async function triggerAssignmentNotification({
     if (recipientAccountIds.length === 0) return;
 
     // 3. Persist notifications
-    const notifications = await prisma.$transaction(
-      recipientAccountIds.map((accountId) =>
-        prisma.notification.create({
+    // const notifications = await prisma.$transaction(
+    //   recipientAccountIds.map((accountId) =>
+    //     prisma.notification.create({
+    //       data: {
+    //         accountId,
+    //         category: "LEAD",
+    //         level: "INFO",
+    //         title: "New Lead Assigned",
+    //         body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
+    //         actionUrl: `/user/leads/${lead.id}`,
+    //         dedupeKey: `lead:${lead.id}:assigned:${accountId}`,
+    //         deliveryChannels: ["web", "chrome"],
+    //         payload: {
+    //           leadId: lead.id,
+    //           customerName: lead.customerName,
+    //           productTitle: lead.productTitle ?? null,
+    //           status: lead.status,
+    //           assignedBy,
+    //           assignedAt: new Date().toISOString(),
+    //         },
+    //       },
+    //     }),
+    //   ),
+    // );
+
+    // Step 3 — find existing by dedupeKey and update or create per recipient (dedupeKey is not a unique field in Prisma schema)
+    const notifications = await Promise.all(
+      recipientAccountIds.map(async (accountId) => {
+        const dedupeKey = `lead:${lead.id}:assigned:${accountId}`;
+
+        const existing = await prisma.notification.findFirst({
+          where: { dedupeKey },
+          select: { id: true },
+        });
+
+        if (existing) {
+          return prisma.notification.update({
+            where: { id: existing.id },
+            data: {
+              // Refresh the notification on re-assignment
+              sentAt: null,
+              createdAt: new Date(),
+              payload: {
+                leadId: lead.id,
+                customerName: lead.customerName,
+                productTitle: lead.productTitle ?? null,
+                status: lead.status,
+                assignedBy,
+                assignedAt: new Date().toISOString(),
+              },
+            },
+          });
+        }
+
+        return prisma.notification.create({
           data: {
             accountId,
             category: "LEAD",
@@ -83,7 +135,7 @@ export async function triggerAssignmentNotification({
             title: "New Lead Assigned",
             body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
             actionUrl: `/user/leads/${lead.id}`,
-            dedupeKey: `lead:${lead.id}:assigned:${accountId}`,
+            dedupeKey,
             deliveryChannels: ["web", "chrome"],
             payload: {
               leadId: lead.id,
@@ -94,8 +146,8 @@ export async function triggerAssignmentNotification({
               assignedAt: new Date().toISOString(),
             },
           },
-        }),
-      ),
+        });
+      }),
     );
 
     // 4. Socket (best effort)
