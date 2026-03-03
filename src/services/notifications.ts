@@ -188,8 +188,10 @@ export async function triggerAssignmentNotification({
         platform: { in: ["web", "chrome"] },
       },
     });
+    const subscription = await prisma.notificationSubscription.findMany({})
 
-    console.log("\n\nSubscriptions:", subscriptions);
+    console.log("\n\nSubscriptions:", subscription);
+    console.log("\n\nSubscriptions by ID:", subscriptions);
     
 
     // for (const sub of subscriptions) {
