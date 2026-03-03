@@ -921,8 +921,8 @@ export async function listLeadsAdmin(req: Request, res: Response) {
 
     if (status) where.status = status;
     if (source) where.source = source;
-    console.log("fromDate:", fromDate);
-    console.log("toDate:", toDate);
+    // console.log("fromDate:", fromDate);
+    // console.log("toDate:", toDate);
 
     // if (fromDate || toDate) {
     //   where.createdAt = {};
@@ -944,11 +944,11 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       }
     }
 
-    console.log("Constructed where clause:", JSON.stringify(where, null, 2));
-    console.log(
-      "\nConstructed where clause:",
-      JSON.stringify(where.createdAt, null, 2),
-    );
+    // console.log("Constructed where clause:", JSON.stringify(where, null, 2));
+    // console.log(
+    //   "\nConstructed where clause:",
+    //   JSON.stringify(where.createdAt, null, 2),
+    // );
 
     /* -------------------------
        DEMO DATE FILTER (INDEXED)
