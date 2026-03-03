@@ -6,13 +6,13 @@ import paswordRouter from "./auth/password.route";
 import jdRouter from "./jd";
 import rbacRouter from "./rbac"
 import adminRouter from "./admin"
-// import projectsRouter from "./project"
-// import tasksRouter from "./task"
 import customersRouter from "./customer"
 import notificationsRouter from "./notifications";
 import templatesRouter from "./template";
 import dsuRouter from "./dsu";
 import commonRouter from "./common"
+// import projectsRouter from "./project"
+// import tasksRouter from "./task"
 
 
 const router = Router();

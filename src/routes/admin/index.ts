@@ -1,16 +1,16 @@
-// src/routes/index.ts
+// src/routes/admin/index.ts
 import { Router } from "express";
 
 const router = Router();
 import employeesRouter from "./employees.routes";
 import registerRouter from "./register.routes";
 import teamRouter from "./team.routes";
-// import pipelineRouter from "./pipelineTemplate.routes"
 import salaryRoutes from "./salary.routes";
-// import tasksRoutes from "./task.routes"
 import leadRoutes from "./lead.routes";
 import busyLogsRoutes from "./employeeBusyLog.routes";
 import attendanceRoutes from "./attendance.routes";
+// import pipelineRouter from "./pipelineTemplate.routes"
+// import tasksRoutes from "./task.routes"
 
 // base path for each module
 router.use("/", employeesRouter);
