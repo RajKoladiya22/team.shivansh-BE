@@ -186,35 +186,76 @@ export async function triggerAssignmentNotification({
       },
     });
 
+    // for (const sub of subscriptions) {
+    //   try {
+    //     await webpush.sendNotification(
+    //       {
+    //         endpoint: sub.endpoint,
+    //         keys: {
+    //           p256dh: sub.p256dh,
+    //           auth: sub.auth,
+    //         },
+    //       },
+    //       JSON.stringify({
+    //         title: "New Lead Assigned",
+    //         body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
+    //         data: {
+    //           actionUrl: `/user/leads/${lead.id}`,
+    //           payload: {
+    //             leadId: lead.id,
+    //             customerName: lead.customerName,
+    //             productTitle: lead.productTitle ?? null,
+    //             status: lead.status,
+    //             assignedBy,
+    //           },
+    //         },
+    //       }),
+    //     );
+    //   } catch (pushError) {
+    //     console.warn("⚠️ Web push failed", pushError);
+    //   }
+    // }
     for (const sub of subscriptions) {
-      try {
-        await webpush.sendNotification(
-          {
-            endpoint: sub.endpoint,
-            keys: {
-              p256dh: sub.p256dh,
-              auth: sub.auth,
-            },
+  try {
+    const response = await webpush.sendNotification(
+      {
+        endpoint: sub.endpoint,
+        keys: {
+          p256dh: sub.p256dh,
+          auth: sub.auth,
+        },
+      },
+      JSON.stringify({
+        title: "New Lead Assigned",
+        body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
+        data: {
+          actionUrl: `/user/leads/${lead.id}`,
+          payload: {
+            leadId: lead.id,
+            customerName: lead.customerName,
+            productTitle: lead.productTitle ?? null,
+            status: lead.status,
+            assignedBy,
           },
-          JSON.stringify({
-            title: "New Lead Assigned",
-            body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
-            data: {
-              actionUrl: `/user/leads/${lead.id}`,
-              payload: {
-                leadId: lead.id,
-                customerName: lead.customerName,
-                productTitle: lead.productTitle ?? null,
-                status: lead.status,
-                assignedBy,
-              },
-            },
-          }),
-        );
-      } catch (pushError) {
-        console.warn("⚠️ Web push failed", pushError);
-      }
+        },
+      }),
+    );
+
+    console.log("✅ Push sent to:", sub.endpoint);
+    console.log("Status:", response.statusCode);
+
+  } catch (pushError: any) {
+    console.warn("❌ Web push failed:", sub.endpoint);
+    console.warn("Status:", pushError?.statusCode);
+    console.warn("Body:", pushError?.body);
+
+    // Optional: auto-remove invalid subscription
+    if (pushError?.statusCode === 404 || pushError?.statusCode === 410) {
+      console.warn("🗑 Removing expired subscription:", sub.endpoint);
+      // delete subscription from DB here
     }
+  }
+}
 
     // 6. Mark notifications as sent
     await prisma.notification.updateMany({
