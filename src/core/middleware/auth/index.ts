@@ -44,6 +44,11 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 export function requireRole(...allowedRoles: string[]) {
   return (req: any, res: Response, next: NextFunction) => {
     const roles = req.user?.roles || [];
+
+    if (!roles.length) {
+      return res.status(403).json({ message: "Forbidden: no roles assigned" });
+    }
+
     const hasRole = roles.some((r: string) => allowedRoles.includes(r));
 
     if (!hasRole) {
@@ -53,12 +58,32 @@ export function requireRole(...allowedRoles: string[]) {
   };
 }
 
-export function requirePermission(permission: string) {
-  return async (req: any, res: Response, next: NextFunction) => {
-    const permissions = req.user?.permissions || [];
-    if (!permissions.includes(permission)) {
+export function requirePermission(...requiredPermissions: string[]) {
+  return (req: any, res: Response, next: NextFunction) => {
+    const userPermissions: string[] = req.user?.permissions ?? [];
+
+    if (!userPermissions.length) {
+      return res.status(403).json({ message: "Forbidden: no permissions assigned" });
+    }
+
+    const hasPermission = requiredPermissions.some((permission) =>
+      userPermissions.includes(permission)
+    );
+
+    if (!hasPermission) {
       return res.status(403).json({ message: "Forbidden: permission denied" });
     }
+
     next();
   };
 }
+
+// export function requirePermission(permission: string) {
+//   return async (req: any, res: Response, next: NextFunction) => {
+//     const permissions = req.user?.permissions || [];
+//     if (!permissions.includes(permission)) {
+//       return res.status(403).json({ message: "Forbidden: permission denied" });
+//     }
+//     next();
+//   };
+// }

@@ -44,8 +44,8 @@ router.post(
 router.get(
   "/leads",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("ALL"),
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
   listLeadsAdmin,
 );
 
@@ -56,8 +56,8 @@ router.get(
 router.get(
   "/leads/:id",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("ALL"),
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
   getLeadByIdAdmin,
 );
 
@@ -107,16 +107,16 @@ router.delete(
 router.get(
   "/leads/:id/activity",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("ALL"),
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
   getLeadActivityTimelineAdmin,
 );
 
 router.get(
   "/leads/stats/status",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("ALL"),
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
   getLeadCountByStatusAdmin,
 );
 
