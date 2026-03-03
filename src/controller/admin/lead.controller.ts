@@ -313,7 +313,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
 
       return { lead: created, recipients: recipientAccountIds };
     });
-
+    console.log("\n\nRecipients for notification:", recipients);
     void triggerAssignmentNotification({
       leadId: lead.id,
       assigneeAccountId: assigneeAccountId ?? null,

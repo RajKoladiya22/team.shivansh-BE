@@ -37,6 +37,8 @@ export async function triggerAssignmentNotification({
   assigneeTeamId = null,
 }: TriggerArgs) {
   try {
+    console.log("\n\nTriggering assignment notification for leadId:", leadId);
+    
     // 1. Fetch lead
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
@@ -215,47 +217,48 @@ export async function triggerAssignmentNotification({
     //     console.warn("⚠️ Web push failed", pushError);
     //   }
     // }
+    console.log("\n\nSending push notifications to subscriptions:", subscriptions.map((s) => s.endpoint));
+    
     for (const sub of subscriptions) {
-  try {
-    const response = await webpush.sendNotification(
-      {
-        endpoint: sub.endpoint,
-        keys: {
-          p256dh: sub.p256dh,
-          auth: sub.auth,
-        },
-      },
-      JSON.stringify({
-        title: "New Lead Assigned",
-        body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
-        data: {
-          actionUrl: `/user/leads/${lead.id}`,
-          payload: {
-            leadId: lead.id,
-            customerName: lead.customerName,
-            productTitle: lead.productTitle ?? null,
-            status: lead.status,
-            assignedBy,
+      try {
+        const response = await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: {
+              p256dh: sub.p256dh,
+              auth: sub.auth,
+            },
           },
-        },
-      }),
-    );
+          JSON.stringify({
+            title: "New Lead Assigned",
+            body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
+            data: {
+              actionUrl: `/user/leads/${lead.id}`,
+              payload: {
+                leadId: lead.id,
+                customerName: lead.customerName,
+                productTitle: lead.productTitle ?? null,
+                status: lead.status,
+                assignedBy,
+              },
+            },
+          }),
+        );
 
-    console.log("✅ Push sent to:", sub.endpoint);
-    console.log("Status:", response.statusCode);
+        console.log("✅ Push sent to:", sub.endpoint);
+        console.log("Status:", response.statusCode);
+      } catch (pushError: any) {
+        console.log("❌ Web push failed:", sub.endpoint);
+        console.log("Status:", pushError?.statusCode);
+        console.log("Body:", pushError?.body);
 
-  } catch (pushError: any) {
-    console.warn("❌ Web push failed:", sub.endpoint);
-    console.warn("Status:", pushError?.statusCode);
-    console.warn("Body:", pushError?.body);
-
-    // Optional: auto-remove invalid subscription
-    if (pushError?.statusCode === 404 || pushError?.statusCode === 410) {
-      console.warn("🗑 Removing expired subscription:", sub.endpoint);
-      // delete subscription from DB here
+        // Optional: auto-remove invalid subscription
+        if (pushError?.statusCode === 404 || pushError?.statusCode === 410) {
+          console.warn("🗑 Removing expired subscription:", sub.endpoint);
+          // delete subscription from DB here
+        }
+      }
     }
-  }
-}
 
     // 6. Mark notifications as sent
     await prisma.notification.updateMany({
