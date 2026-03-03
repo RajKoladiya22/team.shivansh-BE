@@ -24,14 +24,13 @@ router.use("/user", userRouter);
 router.use("/admin", adminRouter);
 router.use("/jd", jdRouter);
 router.use("/rbac", rbacRouter);
-// router.use("/projects", projectsRouter);
-// router.use("/tasks", tasksRouter);
 router.use("/customers", customersRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/templates", templatesRouter);
 router.use("/common", commonRouter);
-
 router.use("/dsu", dsuRouter);
+// router.use("/projects", projectsRouter);
+// router.use("/tasks", tasksRouter);
 
 
 // export main
