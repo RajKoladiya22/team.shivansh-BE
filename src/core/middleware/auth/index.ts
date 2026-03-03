@@ -42,25 +42,25 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 export function requireRole(...allowedRoles: string[]) {
+  const normalizedAllowed = allowedRoles.map(r => r.toUpperCase());
+
   return (req: any, res: Response, next: NextFunction) => {
     let roles = req.user?.roles ?? [];
-    console.log("\n\nROLES →", roles);
-    console.log("allowedRoles from params→", allowedRoles);
-    // Normalize to string[]
+
     if (!Array.isArray(roles)) {
       roles = [roles];
     }
 
-    roles = roles.map((r: any) =>
-      typeof r === "string" ? r.toUpperCase() : String(r).toUpperCase(),
+    const normalizedUserRoles = roles.map((r: any) =>
+      String(r).toUpperCase()
     );
 
-    const normalizedAllowed = allowedRoles.map((r) => r.toUpperCase());
+    console.log("USER ROLES →", normalizedUserRoles);
+    console.log("ALLOWED ROLES →", normalizedAllowed);
 
-    const hasRole = roles.some((role) => normalizedAllowed.includes(role));
-
-    console.log("ALLOWED →", normalizedAllowed);
-    console.log("HAS ROLE →", hasRole);
+    const hasRole = normalizedUserRoles.some(role =>
+      normalizedAllowed.includes(role)
+    );
 
     if (!hasRole) {
       return res.status(403).json({
