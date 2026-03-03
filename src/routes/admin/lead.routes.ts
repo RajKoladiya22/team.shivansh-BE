@@ -28,29 +28,29 @@ const router = Router();
  * Create Lead / Support
  * POST /admin/leads
  */
-router.post(
-  "/leads",
-  requireAuth,
-  requireRole("SALES", "ADMIN"),
-  requirePermission("ALL", "VIEW_LEADS"),
-  createLeadAdmin,
-);
+// router.post(
+//   "/leads",
+//   requireAuth,
+//   requireRole("SALES", "ADMIN"),
+//   requirePermission("ALL", "VIEW_LEADS"),
+//   createLeadAdmin,
+// );
 
-/**
- * List Leads
- * GET /admin/leads
- */
-router.get(
-  "/leads",
-  requireAuth,
-  requireRole("SALES", "ADMIN"),
-  requirePermission("ALL", "VIEW_LEADS"),
-  listLeadsAdmin,
-);
+// /**
+//  * List Leads
+//  * GET /admin/leads
+//  */
+// router.get(
+//   "/leads",
+//   requireAuth,
+//   requireRole("SALES", "ADMIN"),
+//   requirePermission("ALL", "VIEW_LEADS"),
+//   listLeadsAdmin,
+// );
 
-// router.route("/leads")
-//   .post(requireAuth, requireRole("ADMIN"), requirePermission("ALL"), createLeadAdmin)
-//   .get(requireAuth, requireRole("SALES","ADMIN"), requirePermission("ALL","VIEW_LEADS"), listLeadsAdmin);
+router.route("/leads")
+  .post(requireAuth, requireRole("ADMIN"), requirePermission("ALL"), createLeadAdmin)
+  .get(requireAuth, requireRole("SALES","ADMIN"), requirePermission("ALL","VIEW_LEADS"), listLeadsAdmin);
 
 /* ================= STATIC ROUTES (MUST COME FIRST) ================= */
 
