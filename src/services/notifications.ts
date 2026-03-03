@@ -38,7 +38,7 @@ export async function triggerAssignmentNotification({
 }: TriggerArgs) {
   try {
     console.log("\n\nTriggering assignment notification for leadId:", leadId);
-    
+
     // 1. Fetch lead
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
@@ -73,32 +73,6 @@ export async function triggerAssignmentNotification({
     }
 
     if (recipientAccountIds.length === 0) return;
-
-    // 3. Persist notifications
-    // const notifications = await prisma.$transaction(
-    //   recipientAccountIds.map((accountId) =>
-    //     prisma.notification.create({
-    //       data: {
-    //         accountId,
-    //         category: "LEAD",
-    //         level: "INFO",
-    //         title: "New Lead Assigned",
-    //         body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
-    //         actionUrl: `/user/leads/${lead.id}`,
-    //         dedupeKey: `lead:${lead.id}:assigned:${accountId}`,
-    //         deliveryChannels: ["web", "chrome"],
-    //         payload: {
-    //           leadId: lead.id,
-    //           customerName: lead.customerName,
-    //           productTitle: lead.productTitle ?? null,
-    //           status: lead.status,
-    //           assignedBy,
-    //           assignedAt: new Date().toISOString(),
-    //         },
-    //       },
-    //     }),
-    //   ),
-    // );
 
     // Step 3 — find existing by dedupeKey and update or create per recipient (dedupeKey is not a unique field in Prisma schema)
     const notifications = await Promise.all(
@@ -178,8 +152,7 @@ export async function triggerAssignmentNotification({
         }
       });
     }
-    console.log("assigneeAccountId:", assigneeAccountId);
-    
+
     // 5. Push delivery
     const subscriptions = await prisma.notificationSubscription.findMany({
       where: {
@@ -188,43 +161,7 @@ export async function triggerAssignmentNotification({
         // platform: { in: ["web", "chrome"] },
       },
     });
-    const subscription = await prisma.notificationSubscription.findMany({})
 
-    console.log("\n\nSubscriptions:-> ", subscription);
-    console.log("\n\nSubscriptions by ID:-> ", subscriptions);
-    
-
-    // for (const sub of subscriptions) {
-    //   try {
-    //     await webpush.sendNotification(
-    //       {
-    //         endpoint: sub.endpoint,
-    //         keys: {
-    //           p256dh: sub.p256dh,
-    //           auth: sub.auth,
-    //         },
-    //       },
-    //       JSON.stringify({
-    //         title: "New Lead Assigned",
-    //         body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
-    //         data: {
-    //           actionUrl: `/user/leads/${lead.id}`,
-    //           payload: {
-    //             leadId: lead.id,
-    //             customerName: lead.customerName,
-    //             productTitle: lead.productTitle ?? null,
-    //             status: lead.status,
-    //             assignedBy,
-    //           },
-    //         },
-    //       }),
-    //     );
-    //   } catch (pushError) {
-    //     console.warn("⚠️ Web push failed", pushError);
-    //   }
-    // }
-    console.log("\n\nSending push notifications to subscriptions:", subscriptions.map((s) => s.endpoint));
-    
     for (const sub of subscriptions) {
       try {
         const response = await webpush.sendNotification(
@@ -250,9 +187,6 @@ export async function triggerAssignmentNotification({
             },
           }),
         );
-
-        console.log("✅ Push sent to:", sub.endpoint);
-        console.log("Status:", response.statusCode);
       } catch (pushError: any) {
         console.log("❌ Web push failed:", sub.endpoint);
         console.log("Status:", pushError?.statusCode);

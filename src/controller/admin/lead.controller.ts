@@ -313,8 +313,6 @@ export async function createLeadAdmin(req: Request, res: Response) {
 
       return { lead: created, recipients: recipientAccountIds };
     });
-    console.log("\n\nRecipients for notification:", recipients);
-    console.log("\n\nrecipientAccountIds:", assigneeAccountId ? [assigneeAccountId] : []);
 
     void triggerAssignmentNotification({
       leadId: lead.id,
@@ -463,6 +461,12 @@ export async function assignLeadAdmin(req: Request, res: Response) {
     } catch (e) {
       console.warn("Socket emit skipped");
     }
+
+    void triggerAssignmentNotification({
+      leadId: id,
+      assigneeAccountId: accountId ?? null,
+      assigneeTeamId: accountId ?? null,
+    });
 
     return sendSuccessResponse(res, 200, "Lead reassigned");
   } catch (err) {
