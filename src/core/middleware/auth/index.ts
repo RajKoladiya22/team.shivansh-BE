@@ -42,6 +42,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 export function requireRole(...allowedRoles: string[]) {
+    console.log("\n\n1. ALLOWED ROLES (RAW) →", allowedRoles);
+  console.log("\n2. ALLOWED ROLES (RAW) →", ...allowedRoles);
   const normalizedAllowed = allowedRoles.map(r => r.toUpperCase());
 
   return (req: any, res: Response, next: NextFunction) => {
