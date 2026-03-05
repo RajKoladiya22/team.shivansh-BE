@@ -390,8 +390,6 @@ export async function getCustomerDetails(req: Request, res: Response) {
 export async function createCustomer(req: Request, res: Response) {
   try {
     if (!req.user?.id) return sendErrorResponse(res, 401, "Unauthorized");
-    if (!req.user?.roles?.includes?.("ADMIN"))
-      return sendErrorResponse(res, 403, "Admin access required");
 
     const {
       name,
@@ -466,8 +464,7 @@ export async function createCustomer(req: Request, res: Response) {
 export async function updateCustomer(req: Request, res: Response) {
   try {
     if (!req.user?.id) return sendErrorResponse(res, 401, "Unauthorized");
-    if (!req.user?.roles?.includes?.("ADMIN"))
-      return sendErrorResponse(res, 403, "Admin access required");
+
 
     const { id } = req.params;
 
@@ -493,8 +490,6 @@ export async function updateCustomer(req: Request, res: Response) {
 export async function deleteCustomer(req: Request, res: Response) {
   try {
     if (!req.user?.id) return sendErrorResponse(res, 401, "Unauthorized");
-    if (!req.user?.roles?.includes?.("ADMIN"))
-      return sendErrorResponse(res, 403, "Admin access required");
 
     const { id } = req.params;
 
@@ -514,8 +509,6 @@ export async function deleteCustomer(req: Request, res: Response) {
 
 export async function addCustomerProduct(req: Request, res: Response) {
   try {
-    if (!req.user?.roles?.includes?.("ADMIN"))
-      return sendErrorResponse(res, 403, "Admin access required");
 
     const { id } = req.params;
     const { name, price } = req.body;
@@ -556,8 +549,6 @@ export async function addCustomerProduct(req: Request, res: Response) {
 
 export async function expireCustomerProduct(req: Request, res: Response) {
   try {
-    if (!req.user?.roles?.includes?.("ADMIN"))
-      return sendErrorResponse(res, 403, "Admin access required");
 
     const { id, productId } = req.params;
 
@@ -605,9 +596,6 @@ export async function deleteCustomerPermanentAdmin(
   res: Response
 ) {
   try {
-    if (!req.user?.roles?.includes?.("ADMIN")) {
-      return sendErrorResponse(res, 403, "Admin access required");
-    }
 
     const { id } = req.params;
 
