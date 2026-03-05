@@ -95,10 +95,6 @@ export async function createLeadAdmin(req: Request, res: Response) {
   try {
     const creatorAccountId = req.user?.accountId;
 
-    // guard: admin
-    // if (!req.user?.roles?.includes?.("ADMIN"))
-    //   return sendErrorResponse(res, 403, "Admin access required");
-
     // const creatorAccountId = await getAccountIdFromReqUser(adminUserId);
     if (!creatorAccountId)
       return sendErrorResponse(res, 401, "Invalid session user");
