@@ -206,7 +206,8 @@ export async function createLeadAdmin(req: Request, res: Response) {
           where: { id: customer.id },
           data: {
             name: customerName || customer.name,
-            customerCompanyName: customerCompanyName || customer.customerCompanyName,
+            customerCompanyName:
+              customerCompanyName || customer.customerCompanyName,
             products: existingProducts,
             updatedAt: new Date(),
           },
@@ -559,7 +560,6 @@ export async function updateLeadAdmin(req: Request, res: Response) {
   }
 }
 
-
 /**
  * POST /admin/leads/:id/assign
  */
@@ -680,7 +680,6 @@ export async function assignLeadAdmin(req: Request, res: Response) {
     return sendErrorResponse(res, 500, "Failed to reassign lead");
   }
 }
-
 
 /**
  * DELETE /admin/leads/:id   (soft close)
@@ -1096,6 +1095,16 @@ export async function listLeadsAdmin(req: Request, res: Response) {
                   contactPhone: true,
                 },
               },
+            },
+          },
+
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              mobile: true,
+              customerCompanyName: true,
+              products: true,
             },
           },
         },
