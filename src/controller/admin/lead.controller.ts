@@ -686,8 +686,7 @@ export async function assignLeadAdmin(req: Request, res: Response) {
  */
 export async function closeLeadAdmin(req: Request, res: Response) {
   try {
-    if (!req.user?.roles?.includes?.("ADMIN"))
-      return sendErrorResponse(res, 403, "Admin access required");
+
 
     const performerAccountId = req.user?.accountId;
     if (!performerAccountId)
@@ -803,9 +802,7 @@ export async function closeLeadAdmin(req: Request, res: Response) {
  */
 export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
   try {
-    if (!req.user?.roles?.includes?.("ADMIN")) {
-      return sendErrorResponse(res, 403, "Admin access required");
-    }
+
 
     const performerAccountId = req.user?.accountId;
     if (!performerAccountId) {
