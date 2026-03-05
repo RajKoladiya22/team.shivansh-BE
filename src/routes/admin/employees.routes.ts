@@ -14,7 +14,7 @@ import {
 
 const router = Router();
 
-router.use(requireAuth, requireRole("ADMIN"));
+router.use(requireAuth,   requireRole("ADMIN", "SALES"));
 
 router.get("/employees", listEmployees);
 router.get("/employees/:accountId", getEmployeeDetails);

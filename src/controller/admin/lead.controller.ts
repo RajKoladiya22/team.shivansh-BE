@@ -1218,6 +1218,16 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
             },
           },
         },
+
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            mobile: true,
+            customerCompanyName: true,
+            products: true,
+          },
+        },
       },
     });
 
