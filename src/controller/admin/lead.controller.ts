@@ -96,8 +96,8 @@ export async function createLeadAdmin(req: Request, res: Response) {
     const creatorAccountId = req.user?.accountId;
 
     // guard: admin
-    if (!req.user?.roles?.includes?.("ADMIN"))
-      return sendErrorResponse(res, 403, "Admin access required");
+    // if (!req.user?.roles?.includes?.("ADMIN"))
+    //   return sendErrorResponse(res, 403, "Admin access required");
 
     // const creatorAccountId = await getAccountIdFromReqUser(adminUserId);
     if (!creatorAccountId)
@@ -109,6 +109,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
       type,
       customerName,
       mobileNumber,
+      customerCompanyName,
       product,
       cost,
       remark,
@@ -209,6 +210,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
           where: { id: customer.id },
           data: {
             name: customerName || customer.name,
+            customerCompanyName: customerCompanyName || customer.customerCompanyName,
             products: existingProducts,
             updatedAt: new Date(),
           },
@@ -250,6 +252,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
           type,
           customerId: customer.id,
           customerName: customer.name,
+          customerCompanyName: customer.customerCompanyName,
           mobileNumber: normalizedMobile,
           product: resolvedProduct,
           productTitle,
@@ -355,135 +358,12 @@ export async function createLeadAdmin(req: Request, res: Response) {
 }
 
 /**
- * POST /admin/leads/:id/assign
- */
-export async function assignLeadAdmin(req: Request, res: Response) {
-  try {
-    const performerAccountId = req.user?.accountId;
-    if (!performerAccountId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const { id } = req.params;
-    const { accountId, teamId, remark } = req.body;
-
-    const previousAssignment = await prisma.leadAssignment.findFirst({
-      where: { leadId: id, isActive: true },
-      include: {
-        account: { select: { id: true, firstName: true, lastName: true } },
-        team: { select: { id: true, name: true } },
-      },
-    });
-
-    const fromSnapshot = previousAssignment
-      ? previousAssignment.account
-        ? {
-            type: "ACCOUNT",
-            id: previousAssignment.account.id,
-            name: `${previousAssignment.account.firstName} ${previousAssignment.account.lastName}`,
-          }
-        : {
-            type: "TEAM",
-            id: previousAssignment.team!.id,
-            name: previousAssignment.team!.name,
-          }
-      : null;
-
-    const toSnapshot = await resolveAssigneeSnapshot({ accountId, teamId });
-
-    const { recipients } = await prisma.$transaction(async (tx) => {
-      await tx.leadAssignment.updateMany({
-        where: { leadId: id, isActive: true },
-        data: { isActive: false, unassignedAt: new Date() },
-      });
-
-      await tx.leadAssignment.create({
-        data: {
-          leadId: id,
-          type: accountId ? "ACCOUNT" : "TEAM",
-          accountId: accountId ?? null,
-          teamId: teamId ?? null,
-          remark,
-          isActive: true,
-          assignedBy: performerAccountId,
-        },
-      });
-
-      await tx.leadActivityLog.create({
-        data: {
-          leadId: id,
-          action: "ASSIGN_CHANGED",
-          performedBy: performerAccountId,
-          meta: {
-            from: fromSnapshot,
-            to: toSnapshot,
-            remark: remark ?? null,
-          },
-        },
-      });
-
-      let newRecipients: string[] = [];
-
-      if (accountId) {
-        newRecipients = [accountId];
-      } else if (teamId) {
-        const members = await tx.teamMember.findMany({
-          where: { teamId, isActive: true },
-          select: { accountId: true },
-        });
-        newRecipients = members.map((m) => m.accountId);
-      }
-
-      // include old account if existed
-      const oldRecipients = previousAssignment?.accountId
-        ? [previousAssignment.accountId]
-        : [];
-
-      return {
-        recipients: [...new Set([...newRecipients, ...oldRecipients])],
-      };
-    });
-
-    try {
-      const io = getIo();
-
-      const patchPayload = {
-        id,
-        patch: {
-          assignment: toSnapshot,
-          updatedAt: new Date(),
-        },
-      };
-
-      recipients.forEach((accId) => {
-        io.to(`leads:user:${accId}`).emit("lead:patch", patchPayload);
-      });
-
-      io.to("leads:admin").emit("lead:patch", patchPayload);
-    } catch (e) {
-      console.warn("Socket emit skipped");
-    }
-
-    void triggerAssignmentNotification({
-      leadId: id,
-      assigneeAccountId: accountId ?? null,
-      assigneeTeamId: accountId ?? null,
-    });
-
-    return sendSuccessResponse(res, 200, "Lead reassigned");
-  } catch (err) {
-    console.error(err);
-    return sendErrorResponse(res, 500, "Failed to reassign lead");
-  }
-}
-
-/**
  * PATCH /admin/leads/:id
  */
 export async function updateLeadAdmin(req: Request, res: Response) {
   try {
     const adminUserId = req.user?.id;
     if (!adminUserId) return sendErrorResponse(res, 401, "Unauthorized");
-    if (!req.user?.roles?.includes?.("ADMIN"))
-      return sendErrorResponse(res, 403, "Admin access required");
 
     const performerAccountId = req.user?.accountId;
     if (!performerAccountId)
@@ -682,6 +562,129 @@ export async function updateLeadAdmin(req: Request, res: Response) {
     return sendErrorResponse(res, 500, err?.message ?? "Failed to update lead");
   }
 }
+
+
+/**
+ * POST /admin/leads/:id/assign
+ */
+export async function assignLeadAdmin(req: Request, res: Response) {
+  try {
+    const performerAccountId = req.user?.accountId;
+    if (!performerAccountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { id } = req.params;
+    const { accountId, teamId, remark } = req.body;
+
+    const previousAssignment = await prisma.leadAssignment.findFirst({
+      where: { leadId: id, isActive: true },
+      include: {
+        account: { select: { id: true, firstName: true, lastName: true } },
+        team: { select: { id: true, name: true } },
+      },
+    });
+
+    const fromSnapshot = previousAssignment
+      ? previousAssignment.account
+        ? {
+            type: "ACCOUNT",
+            id: previousAssignment.account.id,
+            name: `${previousAssignment.account.firstName} ${previousAssignment.account.lastName}`,
+          }
+        : {
+            type: "TEAM",
+            id: previousAssignment.team!.id,
+            name: previousAssignment.team!.name,
+          }
+      : null;
+
+    const toSnapshot = await resolveAssigneeSnapshot({ accountId, teamId });
+
+    const { recipients } = await prisma.$transaction(async (tx) => {
+      await tx.leadAssignment.updateMany({
+        where: { leadId: id, isActive: true },
+        data: { isActive: false, unassignedAt: new Date() },
+      });
+
+      await tx.leadAssignment.create({
+        data: {
+          leadId: id,
+          type: accountId ? "ACCOUNT" : "TEAM",
+          accountId: accountId ?? null,
+          teamId: teamId ?? null,
+          remark,
+          isActive: true,
+          assignedBy: performerAccountId,
+        },
+      });
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId: id,
+          action: "ASSIGN_CHANGED",
+          performedBy: performerAccountId,
+          meta: {
+            from: fromSnapshot,
+            to: toSnapshot,
+            remark: remark ?? null,
+          },
+        },
+      });
+
+      let newRecipients: string[] = [];
+
+      if (accountId) {
+        newRecipients = [accountId];
+      } else if (teamId) {
+        const members = await tx.teamMember.findMany({
+          where: { teamId, isActive: true },
+          select: { accountId: true },
+        });
+        newRecipients = members.map((m) => m.accountId);
+      }
+
+      // include old account if existed
+      const oldRecipients = previousAssignment?.accountId
+        ? [previousAssignment.accountId]
+        : [];
+
+      return {
+        recipients: [...new Set([...newRecipients, ...oldRecipients])],
+      };
+    });
+
+    try {
+      const io = getIo();
+
+      const patchPayload = {
+        id,
+        patch: {
+          assignment: toSnapshot,
+          updatedAt: new Date(),
+        },
+      };
+
+      recipients.forEach((accId) => {
+        io.to(`leads:user:${accId}`).emit("lead:patch", patchPayload);
+      });
+
+      io.to("leads:admin").emit("lead:patch", patchPayload);
+    } catch (e) {
+      console.warn("Socket emit skipped");
+    }
+
+    void triggerAssignmentNotification({
+      leadId: id,
+      assigneeAccountId: accountId ?? null,
+      assigneeTeamId: accountId ?? null,
+    });
+
+    return sendSuccessResponse(res, 200, "Lead reassigned");
+  } catch (err) {
+    console.error(err);
+    return sendErrorResponse(res, 500, "Failed to reassign lead");
+  }
+}
+
 
 /**
  * DELETE /admin/leads/:id   (soft close)

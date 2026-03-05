@@ -1174,6 +1174,7 @@ model Lead {
 
   customerName String
   mobileNumber String
+  customerCompanyName String?
   product      Json? // { id, slug, link, title }
   productTitle String? // denormalized for fast search/filter
   cost         Decimal? @db.Decimal(12, 2)

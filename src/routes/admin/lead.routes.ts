@@ -52,8 +52,8 @@ router
   .route("/leads")
   .post(
     requireAuth,
-    requireRole("ADMIN"),
-    requirePermission("ALL"),
+    requireRole("SALES", "ADMIN"),
+    requirePermission("ALL", "VIEW_LEADS"),
     createLeadAdmin,
   )
   .get(
@@ -110,8 +110,8 @@ router.get(
 router.patch(
   "/leads/:id",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("ALL"),
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
   updateLeadAdmin,
 );
 
@@ -122,8 +122,8 @@ router.patch(
 router.post(
   "/leads/:id/assign",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("ALL"),
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
   assignLeadAdmin,
 );
 
@@ -134,8 +134,8 @@ router.post(
 router.delete(
   "/leads/:id",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("ALL"),
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
   closeLeadAdmin,
 );
 
@@ -146,8 +146,8 @@ router.delete(
 router.delete(
   "/leads/:id/permanent",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("ALL"),
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
   deleteLeadPermanentAdmin,
 );
 
@@ -158,8 +158,8 @@ router.delete(
 router.post(
   "/leads/:id/helpers",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("ALL"),
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
   addLeadHelperAdmin,
 );
 
@@ -170,8 +170,8 @@ router.post(
 router.delete(
   "/leads/:id/helpers/:accountId",
   requireAuth,
-  requireRole("ADMIN"),
-  requirePermission("ALL"),
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
   removeLeadHelperAdmin,
 );
 
