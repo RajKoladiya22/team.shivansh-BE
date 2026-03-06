@@ -10,10 +10,10 @@ import attendanceRoutes from "./attendance.routes";
 // import statusRouter from "./dailyStatus.routes";
 
 // base path for each module
+router.use("/", leadRouter);
 router.use("/", profileRouter);
 router.use("/bank", bankRouter);
 // router.use("/tasks", tasksRouter);
-router.use("/", leadRouter);
 router.use("/attendance", attendanceRoutes);
 // router.use("/ds", statusRouter);
 

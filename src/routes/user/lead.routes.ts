@@ -14,6 +14,7 @@ import {
   stopLeadWork,
   getMyActiveWork,
   createMyLead,
+  getLeadValueStatsUser,
 } from "../../controller/user/lead.controller";
 
 const router = Router();
@@ -32,5 +33,6 @@ router.delete("/leads/:id/helpers/:accountId", requireAuth, removeLeadHelper);
 router.post("/leads/:id/work/start", requireAuth, startLeadWork);
 router.post("/leads/work/stop", requireAuth, stopLeadWork);
 router.get("/leads/work/current", requireAuth, getMyActiveWork);
+router.get("/leads/stats/value", requireAuth, getLeadValueStatsUser);
 
 export default router;

@@ -8,6 +8,7 @@ import {
 import { randomUUID } from "crypto";
 import { triggerAssignmentNotification } from "../../services/notifications";
 import { getIo } from "../../core/utils/socket";
+import { LeadStatus } from "@prisma/client";
 
 /**
  * Helper: get accountId from req.user.id (user table -> accountId)
@@ -1930,4 +1931,93 @@ export async function updateLeadProductAdmin(req: Request, res: Response) {
   }
 }
 
-// sudo ufw allow from 49.36.0.0 to any port 5432
+/**
+ * GET /stats/leads/value
+ * Total lead value (cost) grouped by status + grand total
+ * Optional filters: fromDate, toDate, source, accountId
+ */
+export async function getLeadValueStatsAdmin(req: Request, res: Response) {
+  try {
+    const { fromDate, toDate, source, accountId } = req.query as Record<
+      string,
+      string
+    >;
+
+    const where: any = {};
+
+    if (source) where.source = source;
+
+    if (fromDate || toDate) {
+      where.createdAt = {};
+      if (fromDate) where.createdAt.gte = new Date(fromDate);
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setDate(end.getDate() + 1);
+        where.createdAt.lt = end;
+      }
+    }
+
+    if (accountId) {
+      where.assignments = {
+        some: { accountId, isActive: true },
+      };
+    }
+
+    // only leads that have a cost value
+    // where.cost = { not: null };
+
+    const grouped = await prisma.lead.groupBy({
+      by: ["status"],
+      where,
+      _sum: { cost: true },
+      _count: { _all: true },
+    });
+
+    const statuses: LeadStatus[] = [
+      "PENDING",
+      "IN_PROGRESS",
+      "DEMO_DONE",
+      "INTERESTED",
+      "CONVERTED",
+      "CLOSED",
+    ];
+
+    // normalize — include all statuses even if no leads
+    const byStatus = statuses.reduce(
+      (acc, status) => {
+        const row = grouped.find((r) => r.status === status);
+        acc[status] = {
+          totalValue: row?._sum?.cost ? Number(row._sum.cost) : 0,
+          count: row?._count?._all ?? 0,
+        };
+        return acc;
+      },
+      {} as Record<string, { totalValue: number; count: number }>,
+    );
+
+    const grandTotal = grouped.reduce(
+      (sum, row) => sum + (row._sum?.cost ? Number(row._sum.cost) : 0),
+      0,
+    );
+
+    const totalCount = grouped.reduce(
+      (sum, row) => sum + (row._count?._all ?? 0),
+      0,
+    );
+
+    return sendSuccessResponse(res, 200, "Lead value stats fetched", {
+      byStatus,
+      total: {
+        totalValue: grandTotal,
+        count: totalCount,
+      },
+    });
+  } catch (err: any) {
+    console.error("Lead value stats error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch lead value stats",
+    );
+  }
+}

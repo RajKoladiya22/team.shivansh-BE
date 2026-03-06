@@ -19,7 +19,8 @@ import {
   getLeadByIdAdmin,
   deleteLeadPermanentAdmin,
   updateLeadCustomerAdmin,
-  updateLeadProductAdmin
+  updateLeadProductAdmin,
+  getLeadValueStatsAdmin,
 } from "../../controller/admin/lead.controller";
 
 const router = Router();
@@ -179,5 +180,6 @@ router.delete(
 
 router.patch("/leads/:id/customer",requireAuth,  updateLeadCustomerAdmin);
 router.patch("/leads/:id/product",requireAuth, updateLeadProductAdmin);
+router.get("/leads/stats/value",requireAuth, getLeadValueStatsAdmin);
 
 export default router;

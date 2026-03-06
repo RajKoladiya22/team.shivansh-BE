@@ -1743,3 +1743,92 @@ export async function getMyActiveWork(req: Request, res: Response) {
     );
   }
 }
+
+/**
+ * GET /leads/stats/value
+ * Lead value stats for the logged-in employee — only their assigned leads
+ */
+export async function getLeadValueStatsUser(req: Request, res: Response) {
+  try {
+    const performerAccountId = req.user?.accountId;
+    if (!performerAccountId)
+      return sendErrorResponse(res, 401, "Invalid session user");
+
+    const { fromDate, toDate, source } = req.query as Record<string, string>;
+
+    /* ── Base where — always scoped to this user's assignments ── */
+    const where: any = {
+      assignments: {
+        some: {
+          accountId: performerAccountId,
+          isActive: true,
+        },
+      },
+    };
+
+    if (source) where.source = source;
+
+    if (fromDate || toDate) {
+      where.createdAt = {};
+      if (fromDate) where.createdAt.gte = new Date(fromDate);
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setDate(end.getDate() + 1);
+        where.createdAt.lt = end;
+      }
+    }
+
+    const grouped = await prisma.lead.groupBy({
+      by: ["status"],
+      where,
+      _sum: { cost: true },
+      _count: { _all: true },
+    });
+
+    const statuses = [
+      "PENDING",
+      "IN_PROGRESS",
+      "DEMO_DONE",
+      "INTERESTED",
+      "CONVERTED",
+      "CLOSED",
+    ] as const;
+
+    const byStatus = statuses.reduce(
+      (acc, status) => {
+        const row = grouped.find((r) => r.status === status);
+        acc[status] = {
+          totalValue: row?._sum?.cost ? Number(row._sum.cost) : 0,
+          count: row?._count?._all ?? 0,
+        };
+        return acc;
+      },
+      {} as Record<string, { totalValue: number; count: number }>,
+    );
+
+    const grandTotalValue = grouped.reduce(
+      (sum, row) => sum + (row._sum?.cost ? Number(row._sum.cost) : 0),
+      0,
+    );
+
+    const grandTotalCount = grouped.reduce(
+      (sum, row) => sum + (row._count?._all ?? 0),
+      0,
+    );
+
+    return sendSuccessResponse(res, 200, "Lead value stats fetched", {
+      byStatus,
+      total: {
+        totalValue: grandTotalValue,
+        count: grandTotalCount,
+      },
+    });
+  } catch (err: any) {
+    console.error("User lead value stats error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch lead value stats",
+    );
+  }
+}
