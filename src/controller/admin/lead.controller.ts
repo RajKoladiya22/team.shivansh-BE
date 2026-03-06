@@ -114,6 +114,12 @@ export async function createLeadAdmin(req: Request, res: Response) {
       demoDate,
     } = req.body as Record<string, any>;
 
+    // console.log(
+    //   "\n\n\n\n\n\ncustomerCompanyName",
+    //   customerCompanyName,
+    //   "\n\n\n\n\n\n\n\n\n\n\n",
+    // );
+
     // console.log("\n\n\n\ndemoDate:", demoDate);
 
     if (!source || !type)
@@ -218,6 +224,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
           data: {
             name: customerName,
             mobile: mobileNumber,
+            customerCompanyName: customerCompanyName,
             normalizedMobile,
             createdBy: creatorAccountId,
             products: newProduct
@@ -228,6 +235,8 @@ export async function createLeadAdmin(req: Request, res: Response) {
               : undefined,
           },
         });
+
+        // console.log("\n\n\n\ncustomer", customer, "\n\n\n\n\n\n\n\n\n\n\n\n");
       }
       // const customer = await tx.customer.upsert({
       //   where: { normalizedMobile },
@@ -686,8 +695,6 @@ export async function assignLeadAdmin(req: Request, res: Response) {
  */
 export async function closeLeadAdmin(req: Request, res: Response) {
   try {
-
-
     const performerAccountId = req.user?.accountId;
     if (!performerAccountId)
       return sendErrorResponse(res, 401, "Invalid session user");
@@ -802,8 +809,6 @@ export async function closeLeadAdmin(req: Request, res: Response) {
  */
 export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
   try {
-
-
     const performerAccountId = req.user?.accountId;
     if (!performerAccountId) {
       return sendErrorResponse(res, 401, "Invalid session user");
@@ -1575,3 +1580,360 @@ export async function removeLeadHelperAdmin(req: Request, res: Response) {
     return sendErrorResponse(res, 500, "Failed to remove helper");
   }
 }
+
+/**
+ * PATCH /admin/leads/:id/customer
+ * Correct customer details on an existing lead
+ */
+export async function updateLeadCustomerAdmin(req: Request, res: Response) {
+  try {
+    const performerAccountId = req.user?.accountId;
+    if (!performerAccountId)
+      return sendErrorResponse(res, 401, "Invalid session user");
+
+    const { id } = req.params;
+    const { customerName, mobileNumber, customerCompanyName } =
+      req.body as Record<string, string>;
+
+    if (!customerName && !mobileNumber && !customerCompanyName)
+      return sendErrorResponse(res, 400, "At least one field is required");
+
+    const existing = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        customerName: true,
+        mobileNumber: true,
+        customerCompanyName: true,
+        assignments: {
+          where: { isActive: true },
+          select: { accountId: true, teamId: true },
+        },
+      },
+    });
+    if (!existing) return sendErrorResponse(res, 404, "Lead not found");
+
+    const updateData: Record<string, any> = {};
+    if (customerName) updateData.customerName = customerName.trim();
+    if (mobileNumber) updateData.mobileNumber = normalizeMobile(mobileNumber);
+    if (customerCompanyName !== undefined)
+      updateData.customerCompanyName = customerCompanyName.trim() || null;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const lead = await tx.lead.update({
+        where: { id },
+        data: updateData,
+      });
+
+      // also sync customer record if mobile changed
+      if (updateData.mobileNumber) {
+        await tx.customer.updateMany({
+          where: { normalizedMobile: existing.mobileNumber },
+          data: {
+            ...(updateData.customerName
+              ? { name: updateData.customerName }
+              : {}),
+            ...(updateData.customerCompanyName !== undefined
+              ? { customerCompanyName: updateData.customerCompanyName }
+              : {}),
+            mobile: mobileNumber,
+            normalizedMobile: updateData.mobileNumber,
+            updatedAt: new Date(),
+          },
+        });
+      } else if (
+        updateData.customerName ||
+        updateData.customerCompanyName !== undefined
+      ) {
+        await tx.customer.updateMany({
+          where: { normalizedMobile: existing.mobileNumber },
+          data: {
+            ...(updateData.customerName
+              ? { name: updateData.customerName }
+              : {}),
+            ...(updateData.customerCompanyName !== undefined
+              ? { customerCompanyName: updateData.customerCompanyName }
+              : {}),
+            updatedAt: new Date(),
+          },
+        });
+      }
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId: id,
+          action: "UPDATED",
+          performedBy: performerAccountId,
+          meta: {
+            type: "CUSTOMER_CORRECTED",
+            changes: {
+              ...(updateData.customerName
+                ? {
+                    customerName: {
+                      from: existing.customerName,
+                      to: updateData.customerName,
+                    },
+                  }
+                : {}),
+              ...(updateData.mobileNumber
+                ? {
+                    mobileNumber: {
+                      from: existing.mobileNumber,
+                      to: updateData.mobileNumber,
+                    },
+                  }
+                : {}),
+              ...(updateData.customerCompanyName !== undefined
+                ? {
+                    customerCompanyName: {
+                      from: existing.customerCompanyName,
+                      to: updateData.customerCompanyName,
+                    },
+                  }
+                : {}),
+            },
+          },
+        },
+      });
+
+      return lead;
+    });
+
+    // socket patch
+    try {
+      const io = getIo();
+      let recipientAccountIds: string[] = [];
+      if (existing.assignments[0]?.accountId) {
+        recipientAccountIds = [existing.assignments[0].accountId];
+      } else if (existing.assignments[0]?.teamId) {
+        const members = await prisma.teamMember.findMany({
+          where: { teamId: existing.assignments[0].teamId, isActive: true },
+          select: { accountId: true },
+        });
+        recipientAccountIds = members.map((m) => m.accountId);
+      }
+      const patchPayload = {
+        id,
+        patch: {
+          customerName: updated.customerName,
+          mobileNumber: updated.mobileNumber,
+          customerCompanyName: updated.customerCompanyName,
+          updatedAt: updated.updatedAt,
+        },
+      };
+      recipientAccountIds.forEach((accId) =>
+        io.to(`leads:user:${accId}`).emit("lead:patch", patchPayload),
+      );
+      io.to("leads:admin").emit("lead:patch", patchPayload);
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(res, 200, "Customer details updated", updated);
+  } catch (err: any) {
+    console.error("Update lead customer error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to update customer details",
+    );
+  }
+}
+
+/**
+ * PATCH /admin/leads/:id/product
+ * Correct product information on an existing lead
+ */
+export async function updateLeadProductAdmin(req: Request, res: Response) {
+  try {
+    const performerAccountId = req.user?.accountId;
+
+    // console.log("\n - - performerAccountId", performerAccountId , "\n");
+
+    if (!performerAccountId)
+      return sendErrorResponse(res, 401, "Invalid session user");
+
+    const { id } = req.params;
+    const { product, productTitle, cost } = req.body as Record<string, any>;
+
+    if (!product && !productTitle && cost === undefined)
+      return sendErrorResponse(res, 400, "At least one field is required");
+
+    const existing = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        customerId: true,
+        product: true,
+        productTitle: true,
+        cost: true,
+        assignments: {
+          where: { isActive: true },
+          select: { accountId: true, teamId: true },
+        },
+      },
+    });
+    if (!existing) return sendErrorResponse(res, 404, "Lead not found");
+
+    const resolvedProduct = product
+      ? {
+          id: product.id || randomUUID(),
+          slug: product.slug ?? null,
+          link: product.link ?? null,
+          title: product.title ?? null,
+          introVideoId: product.introVideoId ?? null,
+        }
+      : undefined;
+
+    const resolvedProductTitle = resolvedProduct?.title ?? productTitle ?? null;
+
+    const updateData: Record<string, any> = {};
+    if (resolvedProduct) updateData.product = resolvedProduct;
+    if (resolvedProductTitle) updateData.productTitle = resolvedProductTitle;
+    if (cost !== undefined) updateData.cost = cost;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const lead = await tx.lead.update({
+        where: { id },
+        data: updateData,
+        select: {
+          id: true,
+          customerId: true,
+          mobileNumber: true,
+          product: true,
+          productTitle: true,
+          cost: true,
+          updatedAt: true,
+        },
+      });
+
+      // ── Sync customer products JSON ──────────────────────────────
+      if (lead.customerId && (resolvedProductTitle || cost !== undefined)) {
+        const customer = await tx.customer.findUnique({
+          where: { id: lead.customerId },
+          select: { id: true, products: true },
+        });
+
+        if (customer) {
+          const existingProducts: any = customer.products ?? {
+            active: [],
+            history: [],
+          };
+          if (!existingProducts.active) existingProducts.active = [];
+
+          // Match by old product title (before update) so we update the right entry
+          const oldTitle =
+            (existing.product as any)?.title ?? existing.productTitle;
+          const oldCost = existing.cost;
+
+          const idx = existingProducts.active.findIndex((p: any) => {
+            const titleMatch = oldTitle && p.name === oldTitle;
+            const costMatch =
+              oldCost !== undefined &&
+              oldCost !== null &&
+              String(p.price) === String(oldCost);
+            return titleMatch || costMatch;
+          });
+
+          if (idx !== -1) {
+            // Update matched entry
+            if (resolvedProductTitle) {
+              existingProducts.active[idx].name = resolvedProductTitle;
+            }
+            if (cost !== undefined) {
+              existingProducts.active[idx].price = cost;
+            }
+          } else if (resolvedProductTitle || cost !== undefined) {
+            // No match found — add a new active entry so customer record stays consistent
+            existingProducts.active.push({
+              id: resolvedProduct?.id ?? randomUUID(),
+              name: resolvedProductTitle ?? "Unknown Product",
+              price: cost ?? null,
+              addedAt: new Date(),
+              status: "ACTIVE",
+            });
+          }
+
+          await tx.customer.update({
+            where: { id: customer.id },
+            data: {
+              products: existingProducts,
+              updatedAt: new Date(),
+            },
+          });
+        }
+      }
+      // ─────────────────────────────────────────────────────────────
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId: id,
+          action: "UPDATED",
+          performedBy: performerAccountId,
+          meta: {
+            type: "PRODUCT_CORRECTED",
+            changes: {
+              ...(resolvedProduct
+                ? { product: { from: existing.product, to: resolvedProduct } }
+                : {}),
+              ...(resolvedProductTitle
+                ? {
+                    productTitle: {
+                      from: existing.productTitle,
+                      to: resolvedProductTitle,
+                    },
+                  }
+                : {}),
+              ...(cost !== undefined
+                ? { cost: { from: existing.cost, to: cost } }
+                : {}),
+            },
+          },
+        },
+      });
+
+      return lead;
+    });
+
+    // socket patch
+    try {
+      const io = getIo();
+      let recipientAccountIds: string[] = [];
+      if (existing.assignments[0]?.accountId) {
+        recipientAccountIds = [existing.assignments[0].accountId];
+      } else if (existing.assignments[0]?.teamId) {
+        const members = await prisma.teamMember.findMany({
+          where: { teamId: existing.assignments[0].teamId, isActive: true },
+          select: { accountId: true },
+        });
+        recipientAccountIds = members.map((m) => m.accountId);
+      }
+      const patchPayload = {
+        id,
+        patch: {
+          product: updated.product,
+          productTitle: updated.productTitle,
+          cost: updated.cost,
+          updatedAt: updated.updatedAt,
+        },
+      };
+      recipientAccountIds.forEach((accId) =>
+        io.to(`leads:user:${accId}`).emit("lead:patch", patchPayload),
+      );
+      io.to("leads:admin").emit("lead:patch", patchPayload);
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(res, 200, "Product details updated", updated);
+  } catch (err: any) {
+    console.error("Update lead product error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to update product details",
+    );
+  }
+}
+
+// sudo ufw allow from 49.36.0.0 to any port 5432

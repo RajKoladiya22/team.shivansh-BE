@@ -18,6 +18,8 @@ import {
   removeLeadHelperAdmin,
   getLeadByIdAdmin,
   deleteLeadPermanentAdmin,
+  updateLeadCustomerAdmin,
+  updateLeadProductAdmin
 } from "../../controller/admin/lead.controller";
 
 const router = Router();
@@ -174,5 +176,8 @@ router.delete(
   requirePermission("ALL", "VIEW_LEADS"),
   removeLeadHelperAdmin,
 );
+
+router.patch("/leads/:id/customer",requireAuth,  updateLeadCustomerAdmin);
+router.patch("/leads/:id/product",requireAuth, updateLeadProductAdmin);
 
 export default router;
