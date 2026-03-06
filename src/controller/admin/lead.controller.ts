@@ -114,12 +114,6 @@ export async function createLeadAdmin(req: Request, res: Response) {
       demoDate,
     } = req.body as Record<string, any>;
 
-    // console.log(
-    //   "\n\n\n\n\n\ncustomerCompanyName",
-    //   customerCompanyName,
-    //   "\n\n\n\n\n\n\n\n\n\n\n",
-    // );
-
     // console.log("\n\n\n\ndemoDate:", demoDate);
 
     if (!source || !type)
