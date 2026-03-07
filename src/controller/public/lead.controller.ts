@@ -24,6 +24,7 @@ export async function createPublicLead(req: Request, res: Response) {
       mobileNumber,
       customerCompanyName,
       productTitle,
+      cost,
       remark,
       product,
     } = req.body as Record<string, any>;
@@ -55,10 +56,12 @@ export async function createPublicLead(req: Request, res: Response) {
           slug: product.slug ?? null,
           link: product.link ?? null,
           title: product.title ?? null,
+          cost: product.cost ?? null
         }
       : undefined;
 
     const resolvedProductTitle = resolvedProduct?.title ?? productTitle ?? null;
+    const resolvedCost = resolvedProduct?.cost ?? cost ?? null;
 
     /* ── Transaction ────────────────────────────── */
     const lead = await prisma.$transaction(async (tx) => {
@@ -98,6 +101,7 @@ export async function createPublicLead(req: Request, res: Response) {
           mobileNumber: normalizedMobile,
           product: resolvedProduct,
           productTitle: resolvedProductTitle,
+          cost: resolvedCost,
           remark: remark?.trim() || null,
           // No createdBy, no assignment
         },
