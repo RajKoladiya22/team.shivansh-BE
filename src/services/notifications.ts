@@ -343,3 +343,185 @@ export async function triggerAdminRegistrationNotification({
     console.error("triggerAdminRegistrationNotification failed:", err);
   }
 }
+
+export async function triggerPublicLeadNotification({
+  leadId,
+  source,
+}: {
+  leadId: string;
+  source: string;
+}) {
+  try {
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: {
+        id: true,
+        customerName: true,
+        mobileNumber: true,
+        productTitle: true,
+        source: true,
+      },
+    });
+    if (!lead) return;
+
+    /* ── Resolve ADMIN + SALES role accounts ────── */
+    const roleAccounts = await prisma.userRole.findMany({
+      where: {
+        role: { name: { in: ["ADMIN", "SALES"] } },
+        user: { account: { isActive: true } },
+      },
+      select: {
+        user: {
+          select: {
+            accountId: true,
+          },
+        },
+      },
+    });
+
+    const recipientAccountIds = [
+      ...new Set(
+        roleAccounts.map((r) => r.user.accountId).filter(Boolean) as string[],
+      ),
+    ];
+
+    if (recipientAccountIds.length === 0) return;
+
+    const sourceLabel: Record<string, string> = {
+      WEBSITE: "Website",
+      INQUIRY_FORM: "Inquiry Form",
+      YOUTUBE: "YouTube",
+    };
+
+    const title = `New Inquiry – ${sourceLabel[source] ?? source}`;
+    const body = `${lead.customerName} (${lead.mobileNumber})${lead.productTitle ? ` · ${lead.productTitle}` : ""}`;
+
+    /* ── Persist + socket + push ────────────────── */
+    const notifications = await Promise.all(
+      recipientAccountIds.map(async (accountId) => {
+        const dedupeKey = `public_lead:${lead.id}:${accountId}`;
+
+        const existing = await prisma.notification.findFirst({
+          where: { dedupeKey },
+          select: { id: true },
+        });
+
+        if (existing) {
+          return prisma.notification.update({
+            where: { id: existing.id },
+            data: {
+              sentAt: null,
+              createdAt: new Date(),
+              payload: {
+                leadId: lead.id,
+                customerName: lead.customerName,
+                mobileNumber: lead.mobileNumber,
+                productTitle: lead.productTitle ?? null,
+                source: lead.source,
+              },
+            },
+          });
+        }
+
+        return prisma.notification.create({
+          data: {
+            accountId,
+            category: "LEAD",
+            level: "INFO",
+            title,
+            body,
+            actionUrl: `/admin/leads/${lead.id}`,
+            dedupeKey,
+            deliveryChannels: ["web", "chrome"],
+            payload: {
+              leadId: lead.id,
+              customerName: lead.customerName,
+              mobileNumber: lead.mobileNumber,
+              productTitle: lead.productTitle ?? null,
+              source: lead.source,
+            },
+          },
+        });
+      }),
+    );
+
+    // Socket
+    let io: ReturnType<typeof getIo> | null = null;
+    try {
+      io = getIo();
+    } catch {
+      /* no-op */
+    }
+
+    if (io) {
+      notifications.forEach((n) => {
+        const payload: ServerNotificationPayload = {
+          id: n.id,
+          category: n.category as any,
+          level: n.level as any,
+          title: n.title,
+          body: n.body,
+          actionUrl: n.actionUrl ?? undefined,
+          payload: n.payload as any,
+          createdAt: n.createdAt.toISOString(),
+        };
+        if (n.accountId) {
+          io!.to(`notif:${n.accountId}`).emit("notification", payload);
+        }
+        // ── Once: push new lead into lead lists ────────
+        const leadCreatedPayload = {
+          id: lead.id,
+          customerName: lead.customerName,
+          mobileNumber: lead.mobileNumber,
+          productTitle: lead.productTitle ?? null,
+          source: lead.source,
+          status: "PENDING",
+          createdAt: new Date().toISOString(),
+        };
+
+        io.to("leads:admin").emit("lead:created", leadCreatedPayload);
+
+        recipientAccountIds.forEach((accountId) => {
+          io!
+            .to(`leads:user:${accountId}`)
+            .emit("lead:created", leadCreatedPayload);
+        });
+      });
+    }
+
+    // Push
+    const subscriptions = await prisma.notificationSubscription.findMany({
+      where: { accountId: { in: recipientAccountIds } },
+    });
+
+    for (const sub of subscriptions) {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.p256dh, auth: sub.auth },
+          },
+          JSON.stringify({
+            title,
+            body,
+            data: { actionUrl: `/admin/leads/${lead.id}` },
+          }),
+        );
+      } catch (err: any) {
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          console.warn("Removing expired push subscription:", sub.endpoint);
+          await prisma.notificationSubscription
+            .delete({ where: { id: sub.id } })
+            .catch(() => {});
+        }
+      }
+    }
+
+    await prisma.notification.updateMany({
+      where: { id: { in: notifications.map((n) => n.id) } },
+      data: { sentAt: new Date() },
+    });
+  } catch (err) {
+    console.error("triggerPublicLeadNotification failed:", err);
+  }
+}

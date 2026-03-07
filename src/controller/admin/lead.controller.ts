@@ -1549,24 +1549,54 @@ export async function updateLeadCustomerAdmin(req: Request, res: Response) {
 
       // also sync customer record if mobile changed
       if (updateData.mobileNumber) {
-        await tx.customer.updateMany({
-          where: { normalizedMobile: existing.mobileNumber },
-          data: {
-            ...(updateData.customerName
-              ? { name: updateData.customerName }
-              : {}),
-            ...(updateData.customerCompanyName !== undefined
-              ? { customerCompanyName: updateData.customerCompanyName }
-              : {}),
-            mobile: mobileNumber,
-            normalizedMobile: updateData.mobileNumber,
-            updatedAt: new Date(),
-          },
+        // Check if another customer already owns the new mobile
+        const targetCustomer = await tx.customer.findUnique({
+          where: { normalizedMobile: updateData.mobileNumber },
+          select: { id: true },
         });
+
+        if (targetCustomer) {
+          // ── Case A: New mobile belongs to an existing customer ──
+          // Re-link the lead to that customer and update their name/company if provided.
+          await tx.lead.update({
+            where: { id },
+            data: { customerId: targetCustomer.id },
+          });
+
+          await tx.customer.update({
+            where: { id: targetCustomer.id },
+            data: {
+              ...(updateData.customerName
+                ? { name: updateData.customerName }
+                : {}),
+              ...(updateData.customerCompanyName !== undefined
+                ? { customerCompanyName: updateData.customerCompanyName }
+                : {}),
+              updatedAt: new Date(),
+            },
+          });
+        } else {
+          // ── Case B: No one owns this mobile yet — safe to update ──
+          await tx.customer.updateMany({
+            where: { normalizedMobile: existing.mobileNumber },
+            data: {
+              ...(updateData.customerName
+                ? { name: updateData.customerName }
+                : {}),
+              ...(updateData.customerCompanyName !== undefined
+                ? { customerCompanyName: updateData.customerCompanyName }
+                : {}),
+              mobile: mobileNumber,
+              normalizedMobile: updateData.mobileNumber,
+              updatedAt: new Date(),
+            },
+          });
+        }
       } else if (
         updateData.customerName ||
         updateData.customerCompanyName !== undefined
       ) {
+        // No mobile change — just update name/company on the existing customer
         await tx.customer.updateMany({
           where: { normalizedMobile: existing.mobileNumber },
           data: {
@@ -1580,43 +1610,6 @@ export async function updateLeadCustomerAdmin(req: Request, res: Response) {
           },
         });
       }
-
-      await tx.leadActivityLog.create({
-        data: {
-          leadId: id,
-          action: "UPDATED",
-          performedBy: performerAccountId,
-          meta: {
-            type: "CUSTOMER_CORRECTED",
-            changes: {
-              ...(updateData.customerName
-                ? {
-                    customerName: {
-                      from: existing.customerName,
-                      to: updateData.customerName,
-                    },
-                  }
-                : {}),
-              ...(updateData.mobileNumber
-                ? {
-                    mobileNumber: {
-                      from: existing.mobileNumber,
-                      to: updateData.mobileNumber,
-                    },
-                  }
-                : {}),
-              ...(updateData.customerCompanyName !== undefined
-                ? {
-                    customerCompanyName: {
-                      from: existing.customerCompanyName,
-                      to: updateData.customerCompanyName,
-                    },
-                  }
-                : {}),
-            },
-          },
-        },
-      });
 
       return lead;
     });
@@ -2021,3 +2014,4 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
     );
   }
 }
+

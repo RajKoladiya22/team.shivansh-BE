@@ -22,7 +22,13 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use(
   cors({
-    origin: ["https://team.shivanshinfosys.in", "http://localhost:5173"],
+    origin: [
+      "https://team.shivanshinfosys.in",
+      "https://shivanshinfosys.in",
+      "https://www.shivanshinfosys.in",
+      "http://localhost:5173",
+      // "http://localhost:3000",
+    ],
     credentials: true,
     optionsSuccessStatus: 204,
   }),
@@ -41,7 +47,7 @@ app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "..", "views"));
 app.use("/storage", express.static(path.join(__dirname, "storage")));
 
-const whitelist = ["/api/v1/auth/reset-password"];
+const whitelist = ["/api/v1/auth/reset-password", "/api/v1/public/leads"];
 
 app.use(requestLogger);
 app.use(checkStaticToken(whitelist));

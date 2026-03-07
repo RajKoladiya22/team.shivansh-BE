@@ -8,7 +8,8 @@ import {
   deleteCustomer,
   addCustomerProduct,
   expireCustomerProduct,
-  deleteCustomerPermanentAdmin
+  deleteCustomerPermanentAdmin,
+  removeCustomerProductAdmin
 } from "../../controller/customer/customer.controller";
 
 const router = Router();
@@ -25,5 +26,10 @@ router.patch(
   expireCustomerProduct,
 );
 router.delete("/:id/permanent", requireAuth, deleteCustomerPermanentAdmin);
+router.delete(
+  "/:customerId/products/:productId",
+  requireAuth,
+  removeCustomerProductAdmin,
+);
 
 export default router;

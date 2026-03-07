@@ -11,6 +11,7 @@ import notificationsRouter from "./notifications";
 import templatesRouter from "./template";
 import dsuRouter from "./dsu";
 import commonRouter from "./common"
+import publicRouter from "./public"
 // import projectsRouter from "./project"
 // import tasksRouter from "./task"
 
@@ -29,6 +30,7 @@ router.use("/notifications", notificationsRouter);
 router.use("/templates", templatesRouter);
 router.use("/common", commonRouter);
 router.use("/dsu", dsuRouter);
+router.use("/public", publicRouter);
 // router.use("/projects", projectsRouter);
 // router.use("/tasks", tasksRouter);
 

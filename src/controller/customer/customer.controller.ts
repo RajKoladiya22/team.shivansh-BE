@@ -9,157 +9,6 @@ import { randomUUID } from "crypto";
 /**
  * GET /customers
  */
-// export async function getCustomerList(req: Request, res: Response) {
-//   try {
-//     // const adminUserId = req.user?.id;
-//     // if (!adminUserId) return sendErrorResponse(res, 401, "Unauthorized");
-
-//     // if (!req.user?.roles?.includes?.("ADMIN"))
-//     //   return sendErrorResponse(res, 403, "Admin access required");
-
-//     const page = Math.max(Number(req.query.page) || 1, 1);
-//     const limit = Math.min(Number(req.query.limit) || 20, 100);
-//     const skip = (page - 1) * limit;
-
-//     const {
-//       search,
-//       isActive,
-//       city,
-//       state,
-//       customerCategory,
-//       businessCategory,
-//       tallySerial,
-//       fromJoiningDate,
-//       toJoiningDate,
-//       productName,
-//       hasActiveProduct,
-//     } = req.query as Record<string, string>;
-
-//     const where: any = {};
-
-//     // Active filter
-//     if (isActive !== undefined) {
-//       where.isActive = isActive === "true";
-//     }
-
-//     // Search
-//     if (search) {
-//       const normalized = search.replace(/\D/g, "");
-//       where.OR = [
-//         { name: { contains: search, mode: "insensitive" } },
-//         { mobile: { contains: search } },
-//         { normalizedMobile: { contains: normalized } },
-//         { customerCompanyName: { contains: search, mode: "insensitive" } },
-//         { contactPerson: { contains: search, mode: "insensitive" } },
-//       ];
-//     }
-
-//     // Structured filters
-//     if (city) where.city = { equals: city, mode: "insensitive" };
-//     if (state) where.state = { equals: state, mode: "insensitive" };
-//     if (customerCategory) where.customerCategory = { equals: customerCategory };
-//     if (businessCategory) where.businessCategory = { equals: businessCategory };
-//     if (tallySerial)
-//       where.tallySerial = { contains: tallySerial, mode: "insensitive" };
-
-//     // Joining date range
-//     if (fromJoiningDate || toJoiningDate) {
-//       where.joiningDate = {};
-//       if (fromJoiningDate) where.joiningDate.gte = new Date(fromJoiningDate);
-//       if (toJoiningDate) where.joiningDate.lte = new Date(toJoiningDate);
-//     }
-
-//     // JSON Product Filters (Postgres JSON path)
-//     if (productName) {
-//       where.products = {
-//         path: ["active"],
-//         array_contains: [
-//           {
-//             name: productName,
-//           },
-//         ],
-//       };
-//     }
-
-//     if (hasActiveProduct === "true") {
-//       where.products = {
-//         path: ["active"],
-//         not: [],
-//       };
-//     }
-
-//     // const [items, total] = await prisma.$transaction([
-//     //   prisma.customer.findMany({
-//     //     where,
-//     //     skip,
-//     //     take: limit,
-//     //     orderBy: { createdAt: "desc" },
-//     //     select: {
-//     //       id: true,
-//     //       name: true,
-//     //       customerCompanyName: true,
-//     //       mobile: true,
-//     //       email: true,
-//     //       city: true,
-//     //       state: true,
-//     //       customerCategory: true,
-//     //       businessCategory: true,
-//     //       tallySerial: true,
-//     //       joiningDate: true,
-//     //       products: true,
-//     //       isActive: true,
-//     //       createdAt: true,
-//     //       _count: {
-//     //         select: { leads: true },
-//     //       },
-//     //     },
-//     //   }),
-//     //   prisma.customer.count({ where }),
-//     // ]);
-//     const items = await prisma.customer.findMany({
-//       where,
-//       skip,
-//       take: limit,
-//       orderBy: { createdAt: "desc" },
-//       select: {
-//         id: true,
-//         name: true,
-//         customerCompanyName: true,
-//         mobile: true,
-//         email: true,
-//         city: true,
-//         state: true,
-//         customerCategory: true,
-//         businessCategory: true,
-//         tallySerial: true,
-//         joiningDate: true,
-//         products: true,
-//         isActive: true,
-//         createdAt: true,
-//         _count: {
-//           select: { leads: true },
-//         },
-//       },
-//     });
-
-//     const total = await prisma.customer.count({ where });
-
-//     return sendSuccessResponse(res, 200, "Customers fetched", {
-//       page,
-//       limit,
-//       total,
-//       pages: Math.ceil(total / limit),
-//       items,
-//     });
-//   } catch (err: any) {
-//     console.error("Get customers error:", err);
-//     return sendErrorResponse(
-//       res,
-//       500,
-//       err?.message ?? "Failed to fetch customers",
-//     );
-//   }
-// }
 
 export async function getCustomerList(req: Request, res: Response) {
   try {
@@ -648,6 +497,60 @@ export async function deleteCustomerPermanentAdmin(
       res,
       500,
       err?.message ?? "Failed to delete customer"
+    );
+  }
+}
+
+/**
+ * DELETE /admin/customers/:customerId/products/:productId
+ * Permanently remove a single product from the customer's active products JSON
+ */
+export async function removeCustomerProductAdmin(req: Request, res: Response) {
+  try {
+    const performerAccountId = req.user?.accountId;
+    if (!performerAccountId)
+      return sendErrorResponse(res, 401, "Invalid session user");
+
+    const { customerId, productId } = req.params;
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { id: true, products: true },
+    });
+    if (!customer) return sendErrorResponse(res, 404, "Customer not found");
+
+    const products = (customer.products ?? { active: [], history: [] }) as {
+      active: any[];
+      history: any[];
+    };
+
+    if (!Array.isArray(products.active))
+      return sendErrorResponse(res, 400, "Invalid products structure");
+
+    const targetIndex = products.active.findIndex((p) => p.id === productId);
+    if (targetIndex === -1)
+      return sendErrorResponse(res, 404, "Product not found in active list");
+
+    products.active.splice(targetIndex, 1);
+
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: {
+        products,
+        updatedAt: new Date(),
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Product removed successfully",{
+      customerId,
+      productId
+    });
+  } catch (err: any) {
+    console.error("Remove customer product error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to remove product",
     );
   }
 }
