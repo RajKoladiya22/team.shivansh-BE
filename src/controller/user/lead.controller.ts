@@ -643,6 +643,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
           | "CLOSED"
           | "CONVERTED"
           | "DEMO_DONE"
+          | "FOLLOW_UPS"
           | "INTERESTED";
         remark?: string;
         cost?: number;
@@ -658,6 +659,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       "CLOSED",
       "DEMO_DONE",
       "CONVERTED",
+      "FOLLOW_UPS",
       "PENDING",
     ] as const;
 
@@ -955,76 +957,6 @@ export async function getMyLeadActivity(req: Request, res: Response) {
       res,
       500,
       err?.message ?? "Failed to fetch activity",
-    );
-  }
-}
-
-/**
- * GET /leads/my/stats/status
- * Lead counts by status for current user
- */
-export async function getMyLeadStatusStats(req: Request, res: Response) {
-  try {
-    const accountId = req.user?.accountId;
-    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
-
-    const baseWhere = {
-      assignments: {
-        some: {
-          isActive: true,
-          OR: [
-            { accountId },
-            {
-              team: {
-                members: {
-                  some: { accountId },
-                },
-              },
-            },
-          ],
-        },
-      },
-    };
-
-    const statuses = [
-      "PENDING",
-      "IN_PROGRESS",
-      "DEMO_DONE",
-      "INTERESTED",
-      "CONVERTED",
-      "CLOSED",
-    ] as const;
-
-    const counts = await prisma.$transaction(
-      statuses.map((status) =>
-        prisma.lead.count({
-          where: {
-            ...baseWhere,
-            status,
-          },
-        }),
-      ),
-    );
-
-    const data: Record<string, number> = {};
-    let total = 0;
-
-    statuses.forEach((status, index) => {
-      data[status] = counts[index];
-      total += counts[index];
-    });
-
-    data.TOTAL = total;
-
-    // console.log("\n\n\n\nMy lead stats\n", data, "\n\n\n\n");
-
-    return sendSuccessResponse(res, 200, "My lead counts fetched", data);
-  } catch (err: any) {
-    console.error("My lead stats error:", err);
-    return sendErrorResponse(
-      res,
-      500,
-      err?.message ?? "Failed to fetch lead stats",
     );
   }
 }
@@ -1745,7 +1677,77 @@ export async function getMyActiveWork(req: Request, res: Response) {
 }
 
 /**
- * GET /leads/stats/value
+ * GET /user/leads/my/stats/status
+ * Lead counts by status for current user
+ */
+export async function getMyLeadStatusStats(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+    const baseWhere = {
+      assignments: {
+        some: {
+          isActive: true,
+          OR: [
+            { accountId },
+            {
+              team: {
+                members: {
+                  some: { accountId },
+                },
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    const statuses = [
+      "PENDING",
+      "IN_PROGRESS",
+      "DEMO_DONE",
+      "INTERESTED",
+      "CONVERTED",
+      "CLOSED",
+    ] as const;
+
+    const counts = await prisma.$transaction(
+      statuses.map((status) =>
+        prisma.lead.count({
+          where: {
+            ...baseWhere,
+            status,
+          },
+        }),
+      ),
+    );
+
+    const data: Record<string, number> = {};
+    let total = 0;
+
+    statuses.forEach((status, index) => {
+      data[status] = counts[index];
+      total += counts[index];
+    });
+
+    data.TOTAL = total;
+
+    // console.log("\n\n\n\nMy lead stats\n", data, "\n\n\n\n");
+
+    return sendSuccessResponse(res, 200, "My lead counts fetched", data);
+  } catch (err: any) {
+    console.error("My lead stats error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch lead stats",
+    );
+  }
+}
+
+/**
+ * GET /user/leads/stats/value
  * Lead value stats for the logged-in employee — only their assigned leads
  */
 export async function getLeadValueStatsUser(req: Request, res: Response) {

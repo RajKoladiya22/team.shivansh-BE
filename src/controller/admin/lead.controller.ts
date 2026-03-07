@@ -1300,79 +1300,6 @@ export async function getLeadActivityTimelineAdmin(
 }
 
 /**
- * GET /admin/leads/stats/status
- * Optional filters: fromDate, toDate, source
- */
-export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
-  try {
-    const { fromDate, toDate, source, accountId } = req.query as Record<
-      string,
-      string
-    >;
-
-    const where: any = {};
-
-    if (source) where.source = source;
-
-    if (fromDate || toDate) {
-      where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate) where.createdAt.lte = new Date(toDate);
-    }
-
-    if (accountId) {
-      where.assignments = {
-        some: {
-          accountId,
-          isActive: true,
-        },
-      };
-    }
-
-    /**
-     * Use groupBy (single DB roundtrip, very fast)
-     */
-    const grouped = await prisma.lead.groupBy({
-      by: ["status"],
-      where,
-      _count: { _all: true },
-    });
-
-    /**
-     * Normalize output to include all statuses
-     */
-    // PENDING
-    // IN_PROGRESS
-    // DEMO_DONE
-    // INTERESTED
-    // CONVERTED
-    // CLOSED
-    const result = {
-      PENDING: 0,
-      IN_PROGRESS: 0,
-      DEMO_DONE: 0,
-      CLOSED: 0,
-      CONVERTED: 0,
-      TOTAL: 0,
-    };
-
-    for (const row of grouped) {
-      result[row.status as keyof typeof result] = row._count._all;
-      result.TOTAL += row._count._all;
-    }
-
-    return sendSuccessResponse(res, 200, "Lead counts fetched", result);
-  } catch (err: any) {
-    console.error("Lead count by status error:", err);
-    return sendErrorResponse(
-      res,
-      500,
-      err?.message ?? "Failed to fetch lead counts",
-    );
-  }
-}
-
-/**
  * POST /admin/leads/:id/helpers
  * Add helper/export employee to lead
  */
@@ -1932,7 +1859,80 @@ export async function updateLeadProductAdmin(req: Request, res: Response) {
 }
 
 /**
- * GET /stats/leads/value
+ * GET /admin/leads/stats/status
+ * Optional filters: fromDate, toDate, source
+ */
+export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
+  try {
+    const { fromDate, toDate, source, accountId } = req.query as Record<
+      string,
+      string
+    >;
+
+    const where: any = {};
+
+    if (source) where.source = source;
+
+    if (fromDate || toDate) {
+      where.createdAt = {};
+      if (fromDate) where.createdAt.gte = new Date(fromDate);
+      if (toDate) where.createdAt.lte = new Date(toDate);
+    }
+
+    if (accountId) {
+      where.assignments = {
+        some: {
+          accountId,
+          isActive: true,
+        },
+      };
+    }
+
+    /**
+     * Use groupBy (single DB roundtrip, very fast)
+     */
+    const grouped = await prisma.lead.groupBy({
+      by: ["status"],
+      where,
+      _count: { _all: true },
+    });
+
+    /**
+     * Normalize output to include all statuses
+     */
+    // PENDING
+    // IN_PROGRESS
+    // DEMO_DONE
+    // INTERESTED
+    // CONVERTED
+    // CLOSED
+    const result = {
+      PENDING: 0,
+      IN_PROGRESS: 0,
+      DEMO_DONE: 0,
+      CLOSED: 0,
+      CONVERTED: 0,
+      TOTAL: 0,
+    };
+
+    for (const row of grouped) {
+      result[row.status as keyof typeof result] = row._count._all;
+      result.TOTAL += row._count._all;
+    }
+
+    return sendSuccessResponse(res, 200, "Lead counts fetched", result);
+  } catch (err: any) {
+    console.error("Lead count by status error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch lead counts",
+    );
+  }
+}
+
+/**
+ * GET /admin/lead/stats/leads/value
  * Total lead value (cost) grouped by status + grand total
  * Optional filters: fromDate, toDate, source, accountId
  */

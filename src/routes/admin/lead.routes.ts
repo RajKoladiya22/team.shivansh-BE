@@ -69,18 +69,6 @@ router
 /* ================= STATIC ROUTES (MUST COME FIRST) ================= */
 
 /**
- * Lead Status Stats
- * GET /admin/leads/stats/status
- */
-router.get(
-  "/leads/stats/status",
-  requireAuth,
-  requireRole("ADMIN", "SALES"),
-  requirePermission("ALL", "VIEW_LEADS"),
-  getLeadCountByStatusAdmin,
-);
-
-/**
  * Lead Activity Timeline
  * GET /admin/leads/:id/activity
  */
@@ -178,8 +166,21 @@ router.delete(
   removeLeadHelperAdmin,
 );
 
-router.patch("/leads/:id/customer",requireAuth,  updateLeadCustomerAdmin);
-router.patch("/leads/:id/product",requireAuth, updateLeadProductAdmin);
-router.get("/leads/stats/value",requireAuth, getLeadValueStatsAdmin);
+router.patch("/leads/:id/customer", requireAuth, updateLeadCustomerAdmin);
+router.patch("/leads/:id/product", requireAuth, updateLeadProductAdmin);
+
+/**
+ * Lead Status Stats
+ * GET /admin/leads/stats/status
+ */
+router.get(
+  "/leads/stats/status",
+  requireAuth,
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
+  getLeadCountByStatusAdmin,
+);
+
+router.get("/leads/stats/value", requireAuth, getLeadValueStatsAdmin);
 
 export default router;
