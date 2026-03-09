@@ -21,6 +21,7 @@ import {
   updateLeadCustomerAdmin,
   updateLeadProductAdmin,
   getLeadValueStatsAdmin,
+  addLeadProductsAdmin,
 } from "../../controller/admin/lead.controller";
 
 const router = Router();
@@ -182,5 +183,7 @@ router.get(
 );
 
 router.get("/leads/stats/value", requireAuth, getLeadValueStatsAdmin);
+
+router.post("/leads/:id/products", requireAuth, addLeadProductsAdmin);
 
 export default router;

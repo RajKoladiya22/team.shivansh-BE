@@ -10,6 +10,16 @@ import { triggerAssignmentNotification } from "../../services/notifications";
 import { getIo } from "../../core/utils/socket";
 import { LeadStatus } from "@prisma/client";
 
+interface LeadProductItem {
+  id: string;
+  title: string;
+  slug?: string | null;
+  link?: string | null;
+  introVideoId?: string | null;
+  cost?: number | null;
+  isPrimary?: boolean;
+}
+
 /**
  * Helper: get accountId from req.user.id (user table -> accountId)
  */
@@ -83,6 +93,20 @@ async function resolvePerformerSnapshot(accountId: string) {
     name: `${acc.firstName} ${acc.lastName}`,
     designation: acc.designation ?? null,
   };
+}
+
+function normalizeLeadProducts(raw: unknown): LeadProductItem[] {
+  if (Array.isArray(raw)) return raw as LeadProductItem[];
+  if (raw && typeof raw === "object") return [raw as LeadProductItem]; // backwards compat
+  return [];
+}
+
+function deriveLeadMeta(products: LeadProductItem[]) {
+  const productTitle =
+    products.map((p) => p.title).filter(Boolean).join(", ") || null;
+  const cost =
+    products.reduce((sum, p) => sum + (p.cost ?? 0), 0) || null;
+  return { productTitle, cost };
 }
 
 /* ==========================
@@ -2015,3 +2039,221 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
   }
 }
 
+
+/**
+ * POST /admin/leads/:id/products
+ * Add / replace products on a lead and sync to customer.
+ *
+ * Body:
+ * {
+ *   products: LeadProductItem[]   // full new list OR items to merge
+ *   mode: "replace" | "merge"     // default: "merge"
+ * }
+ */
+export async function addLeadProductsAdmin(req: Request, res: Response) {
+  try {
+    const performerAccountId = req.user?.accountId;
+    if (!performerAccountId)
+      return sendErrorResponse(res, 401, "Invalid session user");
+
+    const { id } = req.params;
+    const {
+      products: incomingProducts,
+      mode = "merge",
+    } = req.body as {
+      products: LeadProductItem[];
+      mode?: "replace" | "merge";
+    };
+
+    /* ── Validate ───────────────────────────────────────────────── */
+    if (!Array.isArray(incomingProducts) || incomingProducts.length === 0)
+      return sendErrorResponse(res, 400, "products array is required");
+
+    for (const p of incomingProducts) {
+      if (!p.id || !p.title)
+        return sendErrorResponse(
+          res,
+          400,
+          `Each product must have id and title (got: ${JSON.stringify(p)})`,
+        );
+    }
+
+    /* ── Fetch existing lead ────────────────────────────────────── */
+    const existing = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        customerId: true,
+        product: true,
+        productTitle: true,
+        cost: true,
+        assignments: {
+          where: { isActive: true },
+          select: { accountId: true, teamId: true },
+        },
+      },
+    });
+    if (!existing) return sendErrorResponse(res, 404, "Lead not found");
+
+    /* ── Build new products list ────────────────────────────────── */
+    let currentProducts = normalizeLeadProducts(existing.product);
+
+    if (mode === "replace") {
+      currentProducts = incomingProducts;
+    } else {
+      // merge: upsert by id
+      for (const incoming of incomingProducts) {
+        const idx = currentProducts.findIndex((p) => p.id === incoming.id);
+        if (idx !== -1) {
+          currentProducts[idx] = { ...currentProducts[idx], ...incoming };
+        } else {
+          currentProducts.push(incoming);
+        }
+      }
+    }
+
+    // ensure exactly one isPrimary (first wins if none set)
+    const hasPrimary = currentProducts.some((p) => p.isPrimary);
+    if (!hasPrimary && currentProducts.length > 0) {
+      currentProducts[0].isPrimary = true;
+    }
+
+    const { productTitle, cost: derivedCost } = deriveLeadMeta(currentProducts);
+
+    /* ── Transaction ────────────────────────────────────────────── */
+    const updated = await prisma.$transaction(async (tx) => {
+      /* 1. Update lead */
+      const lead = await tx.lead.update({
+        where: { id },
+        data: {
+          product: currentProducts as any,
+          productTitle,
+          cost: derivedCost ?? undefined,
+        },
+        select: {
+          id: true,
+          customerId: true,
+          product: true,
+          productTitle: true,
+          cost: true,
+          updatedAt: true,
+        },
+      });
+
+      /* 2. Sync customer.products.active ── */
+      if (lead.customerId) {
+        const customer = await tx.customer.findUnique({
+          where: { id: lead.customerId },
+          select: { id: true, products: true },
+        });
+
+        if (customer) {
+          const customerProducts: any = customer.products ?? {
+            active: [],
+            history: [],
+          };
+          if (!Array.isArray(customerProducts.active))
+            customerProducts.active = [];
+          if (!Array.isArray(customerProducts.history))
+            customerProducts.history = [];
+
+          for (const lp of currentProducts) {
+            const existingIdx = customerProducts.active.findIndex(
+              (cp: any) => cp.id === lp.id || cp.name === lp.title,
+            );
+
+            if (existingIdx !== -1) {
+              // update price if changed
+              if (lp.cost !== undefined && lp.cost !== null) {
+                customerProducts.active[existingIdx].price = lp.cost;
+              }
+              customerProducts.active[existingIdx].name = lp.title;
+            } else {
+              // add as new active product
+              customerProducts.active.push({
+                id: lp.id,
+                name: lp.title,
+                price: lp.cost ?? null,
+                addedAt: new Date(),
+                status: "ACTIVE",
+              });
+            }
+          }
+
+          await tx.customer.update({
+            where: { id: customer.id },
+            data: {
+              products: customerProducts,
+              updatedAt: new Date(),
+            },
+          });
+        }
+      }
+
+      /* 3. Activity log */
+      await tx.leadActivityLog.create({
+        data: {
+          leadId: id,
+          action: "UPDATED",
+          performedBy: performerAccountId,
+          meta: {
+            type: "PRODUCTS_UPDATED",
+            mode,
+            products: currentProducts as any,
+            productTitle,
+          },
+        },
+      });
+
+      return lead;
+    });
+
+    /* ── Socket ─────────────────────────────────────────────────── */
+    try {
+      const io = getIo();
+      const patchPayload = {
+        id,
+        patch: {
+          product: updated.product,
+          productTitle: updated.productTitle,
+          cost: updated.cost,
+          updatedAt: updated.updatedAt,
+        },
+      };
+
+      const assignee = existing.assignments[0];
+      if (assignee?.accountId) {
+        io.to(`leads:user:${assignee.accountId}`).emit(
+          "lead:patch",
+          patchPayload,
+        );
+      } else if (assignee?.teamId) {
+        const members = await prisma.teamMember.findMany({
+          where: { teamId: assignee.teamId, isActive: true },
+          select: { accountId: true },
+        });
+        members.forEach((m) =>
+          io
+            .to(`leads:user:${m.accountId}`)
+            .emit("lead:patch", patchPayload),
+        );
+      }
+      io.to("leads:admin").emit("lead:patch", patchPayload);
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(res, 200, "Products updated", {
+      products: updated.product,
+      productTitle: updated.productTitle,
+      cost: updated.cost,
+    });
+  } catch (err: any) {
+    console.error("Add lead products error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to update products",
+    );
+  }
+}
