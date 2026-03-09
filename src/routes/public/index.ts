@@ -5,7 +5,7 @@ import quotationsRoutes from "./quotation.public.routes";
 const router = Router();
 
 
-router.post("/leads", leadRoutes);
-router.post("/quotations", quotationsRoutes);
+router.use("/leads", leadRoutes);
+router.use("/quotations", quotationsRoutes);
 
 export default router;
