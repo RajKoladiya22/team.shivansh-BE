@@ -19,9 +19,9 @@ export async function getCustomerList(req: Request, res: Response) {
     //   return sendErrorResponse(res, 403, "Admin access required");
 
     /* ── Pagination ── */
-    const page  = Math.max(Number(req.query.page)  || 1,   1);
-    const limit = Math.min(Number(req.query.limit)  || 20, 100);
-    const skip  = (page - 1) * limit;
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const skip = (page - 1) * limit;
 
     const {
       search,
@@ -56,24 +56,24 @@ export async function getCustomerList(req: Request, res: Response) {
        AND conditions below.
     ─────────────────────────────────────────────── */
     if (search?.trim()) {
-      const raw        = search.trim();
+      const raw = search.trim();
       const normalized = raw.replace(/\D/g, "");
-      const isPhone    = /^\d+$/.test(raw) && normalized.length >= 6;
+      const isPhone = /^\d+$/.test(raw) && normalized.length >= 6;
 
       if (isPhone) {
         // Fast indexed path for mobile lookups
         andConditions.push({
           OR: [
             { normalizedMobile: { contains: normalized } },
-            { mobile:           { contains: raw       } },
+            { mobile: { contains: raw } },
           ],
         });
       } else {
         // Text search: names + company + mobile prefix
         const orBlock: any[] = [
-          { name:                { contains: raw, mode: "insensitive" } },
+          { name: { contains: raw, mode: "insensitive" } },
           { customerCompanyName: { contains: raw, mode: "insensitive" } },
-          { contactPerson:       { contains: raw, mode: "insensitive" } },
+          { contactPerson: { contains: raw, mode: "insensitive" } },
         ];
         // Also allow numeric substring within the text query
         if (normalized.length >= 4) {
@@ -88,17 +88,24 @@ export async function getCustomerList(req: Request, res: Response) {
        so "surat" matches "Surat" and partial strings
        still return results from the searchable dropdown.
     ─────────────────────────────────────────────── */
-    if (city)             andConditions.push({ city:             { contains: city,             mode: "insensitive" } });
-    if (state)            andConditions.push({ state:            { contains: state,            mode: "insensitive" } });
-    if (customerCategory) andConditions.push({ customerCategory: { equals:   customerCategory  } });
-    if (businessCategory) andConditions.push({ businessCategory: { equals:   businessCategory  } });
-    if (tallySerial)      andConditions.push({ tallySerial:      { contains: tallySerial,      mode: "insensitive" } });
+    if (city)
+      andConditions.push({ city: { contains: city, mode: "insensitive" } });
+    if (state)
+      andConditions.push({ state: { contains: state, mode: "insensitive" } });
+    if (customerCategory)
+      andConditions.push({ customerCategory: { equals: customerCategory } });
+    if (businessCategory)
+      andConditions.push({ businessCategory: { equals: businessCategory } });
+    if (tallySerial)
+      andConditions.push({
+        tallySerial: { contains: tallySerial, mode: "insensitive" },
+      });
 
     /* ── Joining date range ── */
     if (fromJoiningDate || toJoiningDate) {
       const joiningDateFilter: any = {};
       if (fromJoiningDate) joiningDateFilter.gte = new Date(fromJoiningDate);
-      if (toJoiningDate)   joiningDateFilter.lte = new Date(toJoiningDate);
+      if (toJoiningDate) joiningDateFilter.lte = new Date(toJoiningDate);
       andConditions.push({ joiningDate: joiningDateFilter });
     }
 
@@ -184,7 +191,11 @@ export async function getCustomerList(req: Request, res: Response) {
     });
   } catch (err: any) {
     console.error("Get customers error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch customers");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch customers",
+    );
   }
 }
 
@@ -193,7 +204,6 @@ export async function getCustomerList(req: Request, res: Response) {
  */
 export async function getCustomerDetails(req: Request, res: Response) {
   try {
-
     const { id } = req.params;
     if (!id) return sendErrorResponse(res, 400, "Customer id is required");
 
@@ -314,7 +324,6 @@ export async function updateCustomer(req: Request, res: Response) {
   try {
     if (!req.user?.id) return sendErrorResponse(res, 401, "Unauthorized");
 
-
     const { id } = req.params;
 
     const existing = await prisma.customer.findUnique({ where: { id } });
@@ -358,7 +367,6 @@ export async function deleteCustomer(req: Request, res: Response) {
 
 export async function addCustomerProduct(req: Request, res: Response) {
   try {
-
     const { id } = req.params;
     const { name, price } = req.body;
 
@@ -398,7 +406,6 @@ export async function addCustomerProduct(req: Request, res: Response) {
 
 export async function expireCustomerProduct(req: Request, res: Response) {
   try {
-
     const { id, productId } = req.params;
 
     const customer = await prisma.customer.findUnique({ where: { id } });
@@ -442,10 +449,9 @@ export async function expireCustomerProduct(req: Request, res: Response) {
  */
 export async function deleteCustomerPermanentAdmin(
   req: Request,
-  res: Response
+  res: Response,
 ) {
   try {
-
     const { id } = req.params;
 
     const existing = await prisma.customer.findUnique({
@@ -489,14 +495,14 @@ export async function deleteCustomerPermanentAdmin(
     return sendSuccessResponse(
       res,
       200,
-      "Customer permanently deleted with related leads"
+      "Customer permanently deleted with related leads",
     );
   } catch (err: any) {
     console.error("Delete customer error:", err);
     return sendErrorResponse(
       res,
       500,
-      err?.message ?? "Failed to delete customer"
+      err?.message ?? "Failed to delete customer",
     );
   }
 }
@@ -528,8 +534,13 @@ export async function removeCustomerProductAdmin(req: Request, res: Response) {
       return sendErrorResponse(res, 400, "Invalid products structure");
 
     const targetIndex = products.active.findIndex((p) => p.id === productId);
-    if (targetIndex === -1)
-      return sendErrorResponse(res, 404, "Product not found in active list");
+    if (targetIndex === -1) {
+      const h_targetIndex = products.history.findIndex(
+        (p) => p.id === productId,
+      );
+      products.history.splice(h_targetIndex, 1);
+      // return sendErrorResponse(res, 404, "Product not found in active list");
+    }
 
     products.active.splice(targetIndex, 1);
 
@@ -541,9 +552,9 @@ export async function removeCustomerProductAdmin(req: Request, res: Response) {
       },
     });
 
-    return sendSuccessResponse(res, 200, "Product removed successfully",{
+    return sendSuccessResponse(res, 200, "Product removed successfully", {
       customerId,
-      productId
+      productId,
     });
   } catch (err: any) {
     console.error("Remove customer product error:", err);

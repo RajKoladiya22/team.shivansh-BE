@@ -103,9 +103,11 @@ function normalizeLeadProducts(raw: unknown): LeadProductItem[] {
 
 function deriveLeadMeta(products: LeadProductItem[]) {
   const productTitle =
-    products.map((p) => p.title).filter(Boolean).join(", ") || null;
-  const cost =
-    products.reduce((sum, p) => sum + (p.cost ?? 0), 0) || null;
+    products
+      .map((p) => p.title)
+      .filter(Boolean)
+      .join(", ") || null;
+  const cost = products.reduce((sum, p) => sum + (p.cost ?? 0), 0) || null;
   return { productTitle, cost };
 }
 
@@ -2039,7 +2041,6 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
   }
 }
 
-
 /**
  * POST /admin/leads/:id/products
  * Add / replace products on a lead and sync to customer.
@@ -2057,10 +2058,7 @@ export async function addLeadProductsAdmin(req: Request, res: Response) {
       return sendErrorResponse(res, 401, "Invalid session user");
 
     const { id } = req.params;
-    const {
-      products: incomingProducts,
-      mode = "merge",
-    } = req.body as {
+    const { products: incomingProducts, mode = "merge" } = req.body as {
       products: LeadProductItem[];
       mode?: "replace" | "merge";
     };
@@ -2233,9 +2231,7 @@ export async function addLeadProductsAdmin(req: Request, res: Response) {
           select: { accountId: true },
         });
         members.forEach((m) =>
-          io
-            .to(`leads:user:${m.accountId}`)
-            .emit("lead:patch", patchPayload),
+          io.to(`leads:user:${m.accountId}`).emit("lead:patch", patchPayload),
         );
       }
       io.to("leads:admin").emit("lead:patch", patchPayload);

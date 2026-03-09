@@ -109,6 +109,10 @@ model Account {
   commentMentions           CommentMention[]
   taskWatchers              TaskWatcher[]
   taskTimeEntries           TaskTimeEntry[]
+  quotationsCreated         Quotation[]                @relation("QuotationCreatedBy")
+  quotationsPrepared        Quotation[]                @relation("QuotationPreparedBy")
+  quotationActivities       QuotationActivity[]
+  quotationTemplates        QuotationTemplate[]
 
   @@index([isActive])
   @@index([jobType])
@@ -1173,13 +1177,13 @@ model Lead {
   //   ]
   // }
 
-  customerName String
-  mobileNumber String
+  customerName        String
+  mobileNumber        String
   customerCompanyName String?
-  product      Json? 
-  productTitle String? 
-  cost         Decimal? @db.Decimal(12, 2)
-  remark       String?
+  product             Json?
+  productTitle        String?
+  cost                Decimal? @db.Decimal(12, 2)
+  remark              String?
 
   isActive  Boolean @default(true)
   isWorking Boolean @default(false)
@@ -1201,6 +1205,7 @@ model Lead {
   leadHelpers LeadHelper[]
   // employeeLeadWorks EmployeeLeadWork[]
   accounts    Account[]
+  quotations  Quotation[]
 
   @@index([isWorking])
   @@index([createdAt, status])
@@ -1324,7 +1329,8 @@ model Customer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  leads Lead[]
+  leads      Lead[]
+  quotations Quotation[]
 
   @@index([normalizedMobile])
   @@index([customerCompanyName])
@@ -1746,6 +1752,273 @@ model DsuEntry {
   @@index([teamId])
   @@index([date])
   @@index([submittedAt])
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum QuotationStatus {
+  DRAFT // being prepared
+  SENT // sent to customer
+  VIEWED // customer opened it
+  ACCEPTED // customer accepted
+  REJECTED // customer rejected
+  EXPIRED // validity passed without response
+  CONVERTED // converted to order/invoice
+  CANCELLED // cancelled by us
+}
+
+enum QuotationChannel {
+  EMAIL
+  WHATSAPP
+  IN_PERSON
+  PORTAL
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FLAT
+}
+
+enum TaxType {
+  GST
+  IGST
+  NONE
+}
+
+// ─────────────────────────────────────────────
+// QUOTATION
+// ─────────────────────────────────────────────
+
+model Quotation {
+  id String @id @default(cuid())
+
+  // ── Reference Number ──────────────────────
+  // e.g. "QT-2024-0042"
+  quotationNumber String @unique
+
+  // ── Status ────────────────────────────────
+  status  QuotationStatus  @default(DRAFT)
+  channel QuotationChannel @default(EMAIL)
+
+  // ── Quotation FOR (customer) ──────────────
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  // Snapshot at time of quotation (customer may change later)
+  customerSnapshot Json
+  // {
+  //   name: string
+  //   mobile: string
+  //   email?: string
+  //   companyName?: string
+  //   address?: string
+  //   city?: string
+  //   state?: string
+  //   gstin?: string
+  // }
+
+  // ── Quotation BY (employee/account) ───────
+  createdBy    String // accountId
+  createdByAcc Account @relation("QuotationCreatedBy", fields: [createdBy], references: [id])
+
+  // Who prepared / owns this quotation
+  preparedBy    String? // accountId (if different from creator)
+  preparedByAcc Account? @relation("QuotationPreparedBy", fields: [preparedBy], references: [id])
+
+  // ── Line Items (product snapshots) ────────
+  // Stored as JSON since products live in a separate DB
+  lineItems Json
+  // [
+  //   {
+  //     position: 1,                     // display order
+  //     productId: "cuid...",            // from admin DB (nullable for custom items)
+  //     productSlug: "tally-prime-gold",
+  //     name: "Tally Prime Gold",
+  //     description: "Single user license, lifetime",
+  //     hsn: "8523",                     // HSN/SAC code
+  //     qty: 1,
+  //     unit: "LICENSE",                 // LICENSE / YEAR / MONTH / PCS / HRS
+  //     basePrice: 18000,                // per unit, before discount
+  //     discountType: "PERCENTAGE",      // PERCENTAGE | FLAT
+  //     discountValue: 10,               // 10% or ₹10
+  //     discountedPrice: 16200,          // per unit after discount
+  //     taxType: "GST",                  // GST | IGST | NONE
+  //     taxPercent: 18,
+  //     taxAmount: 2916,                 // on discounted price
+  //     totalPrice: 19116,               // discounted + tax, per unit * qty
+  //     notes: "Includes 1yr support",
+  //   }
+  // ]
+
+  // ── Financials (denormalized for fast access) ──
+  subtotal      Decimal @db.Decimal(14, 2) // sum of discountedPrice * qty
+  totalDiscount Decimal @db.Decimal(14, 2) // sum of all discounts
+  totalTax      Decimal @db.Decimal(14, 2) // sum of all tax
+  grandTotal    Decimal @db.Decimal(14, 2) // final amount
+
+  currency String @default("INR")
+
+  // ── Optional global discount on top ───────
+  extraDiscountType  DiscountType?
+  extraDiscountValue Decimal?      @db.Decimal(10, 2)
+  extraDiscountNote  String?
+
+  // ── Tax ───────────────────────────────────
+  taxType       TaxType @default(GST)
+  gstin         String? // our company GSTIN
+  customerGstin String? // customer GSTIN (for B2B)
+  placeOfSupply String? // state code for GST
+
+  // ── Important Dates ───────────────────────
+  quotationDate  DateTime  @default(now()) // date on the document
+  validUntil     DateTime? // expiry date
+  sentAt         DateTime? // when sent to customer
+  viewedAt       DateTime? // when customer first opened
+  respondedAt    DateTime? // when accepted/rejected
+  convertedAt    DateTime? // when converted to order
+  reminderSentAt DateTime? // last reminder sent
+
+  // ── Lead Link (optional) ──────────────────
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id])
+
+  // ── Content ───────────────────────────────
+  subject    String? // email subject / quotation title
+  introNote  String? // message at top of quotation
+  termsNote  String? // terms & conditions (can be template-filled)
+  footerNote String? // footer message
+
+  // ── Payment Terms ─────────────────────────
+  paymentTerms   String? // e.g. "50% advance, 50% on delivery"
+  paymentDueDays Int? // e.g. 15 (days after quotation date)
+
+  // ── Delivery / Scope ──────────────────────
+  deliveryScope String? // what's included / scope of work
+  deliveryDays  Int? // estimated delivery in days
+
+  // ── Send History ──────────────────────────
+  sendHistory Json?
+  // [
+  //   {
+  //     sentAt: DateTime,
+  //     channel: "WHATSAPP" | "EMAIL",
+  //     sentTo: "9876543210" | "email@example.com",
+  //     sentBy: accountId,
+  //     note: "Sent to owner directly"
+  //   }
+  // ]
+
+  // ── Version / Revision ────────────────────
+  version   Int         @default(1) // increment on each resend with changes
+  parentId  String? // if revised from another quotation
+  parent    Quotation?  @relation("QuotationRevisions", fields: [parentId], references: [id])
+  revisions Quotation[] @relation("QuotationRevisions")
+
+  // ── Internal ──────────────────────────────
+  internalNote String? // not shown to customer
+  tags         String[] // e.g. ["renewal", "bulk", "urgent"]
+
+  // ── Acceptance ────────────────────────────
+  acceptedBy      String? // customer name who accepted
+  acceptanceNote  String? // customer's acceptance note
+  rejectionReason String? // if rejected
+
+  // ── Audit ─────────────────────────────────
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // soft delete
+
+  // ── Relations ─────────────────────────────
+  activities QuotationActivity[]
+
+  @@index([customerId])
+  @@index([createdBy])
+  @@index([status])
+  @@index([quotationDate])
+  @@index([validUntil])
+  @@index([leadId])
+  @@index([quotationNumber])
+  @@index([parentId])
+}
+
+// ─────────────────────────────────────────────
+// QUOTATION ACTIVITY LOG
+// ─────────────────────────────────────────────
+
+enum QuotationActivityAction {
+  CREATED
+  UPDATED
+  SENT
+  VIEWED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CONVERTED
+  CANCELLED
+  REVISED
+  REMINDER_SENT
+  NOTE_ADDED
+}
+
+model QuotationActivity {
+  id String @id @default(cuid())
+
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  action         QuotationActivityAction
+  performedBy    String? // accountId (null = system)
+  performedByAcc Account?                @relation(fields: [performedBy], references: [id])
+
+  meta Json?
+  // {
+  //   note: string,
+  //   changes: { field: { from, to } },
+  //   channel: "WHATSAPP",
+  //   sentTo: "9876543210"
+  // }
+
+  createdAt DateTime @default(now())
+
+  @@index([quotationId])
+  @@index([performedBy])
+}
+
+// ─────────────────────────────────────────────
+// QUOTATION TEMPLATE (reusable terms/intro)
+// ─────────────────────────────────────────────
+
+model QuotationTemplate {
+  id           String  @id @default(cuid())
+  name         String // e.g. "Standard Tally License"
+  subject      String?
+  introNote    String?
+  termsNote    String?
+  footerNote   String?
+  paymentTerms String?
+  isDefault    Boolean @default(false)
+  isActive     Boolean @default(true)
+
+  createdBy    String
+  createdByAcc Account @relation(fields: [createdBy], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// QUOTATION NUMBER SEQUENCE (auto-increment counter)
+// ─────────────────────────────────────────────
+
+model QuotationSequence {
+  id      Int @id @default(autoincrement())
+  year    Int // 2024
+  month   Int // 3 (optional — for monthly reset)
+  counter Int @default(0)
+
+  @@unique([year, month])
 }
 
 // enum DailyStatusSection {
