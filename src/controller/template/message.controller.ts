@@ -396,7 +396,6 @@ export async function listTemplates(req: Request, res: Response) {
     const userId = req.user?.id;
     const accountId = await getAccountIdFromReqUser(userId);
     // console.log("userId:", userId, "accountId:", accountId);
-    
 
     const {
       q,
@@ -466,7 +465,6 @@ export async function listTemplates(req: Request, res: Response) {
 
     const where = { AND: and };
     // console.log("\n\nlistTemplates db where:\n", JSON.stringify(where, null, 2));
-    
 
     const templates = await prisma.messageTemplate.findMany({
       where,
@@ -496,9 +494,10 @@ export async function listTemplates(req: Request, res: Response) {
         ? JSON.parse(channels)
         : channels.split(",").map((c) => c.trim());
 
-      filtered = filtered.filter((t) =>
-        Array.isArray(t.channels) &&
-        t.channels.some((c) => wanted.includes(String(c))),
+      filtered = filtered.filter(
+        (t) =>
+          Array.isArray(t.channels) &&
+          t.channels.some((c) => wanted.includes(String(c))),
       );
     }
 
@@ -545,10 +544,13 @@ export async function listTemplates(req: Request, res: Response) {
     });
   } catch (err: any) {
     console.error("listTemplates error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to list templates");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to list templates",
+    );
   }
 }
-
 
 /**
  * GET /api/v1/templates/message/:id
@@ -558,7 +560,6 @@ export async function getTemplateById(req: Request, res: Response) {
     const { id } = req.params;
 
     console.log("getTemplateById id:", id);
-    
 
     const userId = req.user?.id ?? null;
     const accountId = await getAccountIdFromReqUser(userId);
@@ -650,30 +651,25 @@ export async function updateTemplate(req: Request, res: Response) {
     const { id } = req.params;
 
     const template = await prisma.messageTemplate.findUnique({ where: { id } });
-    if (!template) return sendErrorResponse(res, 404, "Template not found");
+
+    if (!template) {
+      return sendErrorResponse(res, 404, "Template not found");
+    }
 
     /* ─────────────────────────────
        Authorization
     ───────────────────────────── */
 
-    if (template.visibility === "PUBLIC" && !isAdmin) {
-      return sendErrorResponse(
-        res,
-        403,
-        "Only admin can update public templates",
-      );
-    }
-
-    if (
-      template.visibility === "PRIVATE" &&
-      template.accountId !== accountId &&
-      !isAdmin
-    ) {
-      return sendErrorResponse(
-        res,
-        403,
-        "Not authorized to update this template",
-      );
+    // Admin can update anything
+    if (!isAdmin) {
+      // User can update only their own template
+      if (template.accountId !== accountId) {
+        return sendErrorResponse(
+          res,
+          403,
+          "Not authorized to update this template"
+        );
+      }
     }
 
     /* ─────────────────────────────
@@ -763,14 +759,14 @@ export async function updateTemplate(req: Request, res: Response) {
     return sendErrorResponse(
       res,
       500,
-      err?.message ?? "Failed to update template",
+      err?.message ?? "Failed to update template"
     );
   }
 }
 
 /**
  * DELETE /api/v1/templates/message/:id
- * Soft delete (isActive = false)
+ * Permanent delete
  */
 export async function deleteTemplate(req: Request, res: Response) {
   try {
@@ -782,41 +778,42 @@ export async function deleteTemplate(req: Request, res: Response) {
 
     const { id } = req.params;
 
-    const template = await prisma.messageTemplate.findUnique({ where: { id } });
-    if (!template) return sendErrorResponse(res, 404, "Template not found");
+    const template = await prisma.messageTemplate.findUnique({
+      where: { id },
+    });
+
+    if (!template) {
+      return sendErrorResponse(res, 404, "Template not found");
+    }
 
     /* ─────────────────────────────
        Authorization
     ───────────────────────────── */
 
-    if (template.visibility === "PUBLIC" && !isAdmin) {
-      return sendErrorResponse(
-        res,
-        403,
-        "Only admin can delete public templates",
-      );
+    // Admin can delete any template
+    if (!isAdmin) {
+      // User can delete only their own template
+      if (template.accountId !== accountId) {
+        return sendErrorResponse(
+          res,
+          403,
+          "Not authorized to delete this template",
+        );
+      }
     }
 
-    if (
-      template.visibility === "PRIVATE" &&
-      template.accountId !== accountId &&
-      !isAdmin
-    ) {
-      return sendErrorResponse(
-        res,
-        403,
-        "Not authorized to delete this template",
-      );
-    }
+    /* ─────────────────────────────
+       Permanent Delete
+    ───────────────────────────── */
 
-    await prisma.messageTemplate.update({
+    await prisma.messageTemplate.delete({
       where: { id },
-      data: { isActive: false },
     });
 
-    return sendSuccessResponse(res, 200, "Template deactivated");
+    return sendSuccessResponse(res, 200, "Template permanently deleted");
   } catch (err: any) {
     console.error("deleteTemplate error:", err);
+
     return sendErrorResponse(
       res,
       500,

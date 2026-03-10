@@ -27,7 +27,7 @@ app.use(
       "https://shivanshinfosys.in",
       "https://www.shivanshinfosys.in",
       "http://localhost:5173",
-      // "http://localhost:3000",
+      "http://localhost:3000",
     ],
     credentials: true,
     optionsSuccessStatus: 204,
