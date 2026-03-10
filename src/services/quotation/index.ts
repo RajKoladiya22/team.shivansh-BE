@@ -261,3 +261,15 @@ export const quotationFullSelect = {
     orderBy: { version: "desc" as const },
   },
 };
+
+
+export function toNullableNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+export function parsePositiveInt(raw: unknown, fallback: number): number {
+  const n = parseInt(String(raw), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}

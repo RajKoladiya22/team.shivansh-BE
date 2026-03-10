@@ -8,7 +8,7 @@ import {
 import { randomUUID } from "crypto";
 import { triggerAssignmentNotification } from "../../services/notifications";
 import { getIo } from "../../core/utils/socket";
-import { LeadStatus } from "@prisma/client";
+import { Lead_Status } from "@prisma/client";
 
 interface LeadProductItem {
   id: string;
@@ -1051,6 +1051,9 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       { createdAt: "desc" as const }, // btree index
     ];
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     /* -------------------------
        QUERY (minimal payload)
     ------------------------- */
@@ -1992,7 +1995,7 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
       _count: { _all: true },
     });
 
-    const statuses: LeadStatus[] = [
+    const statuses: Lead_Status[] = [
       "PENDING",
       "IN_PROGRESS",
       "DEMO_DONE",

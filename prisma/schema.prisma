@@ -1128,7 +1128,7 @@ enum LeadType {
   SUPPORT
 }
 
-enum LeadStatus {
+enum Lead_Status {
   PENDING
   IN_PROGRESS
   FOLLOW_UPS
@@ -1162,7 +1162,7 @@ model Lead {
 
   source     LeadSource
   type       LeadType
-  status     LeadStatus @default(PENDING)
+  status     Lead_Status @default(PENDING)
   statusMark Json?
 
   demoScheduledAt DateTime?
