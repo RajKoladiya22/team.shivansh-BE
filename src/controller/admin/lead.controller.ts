@@ -1954,12 +1954,6 @@ export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
     /**
      * Normalize output to include all statuses
      */
-    // PENDING
-    // IN_PROGRESS
-    // DEMO_DONE
-    // INTERESTED
-    // CONVERTED
-    // CLOSED
    const result = {
       PENDING:    0,
       IN_PROGRESS: 0,
