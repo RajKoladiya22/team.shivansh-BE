@@ -1886,19 +1886,48 @@ export async function updateLeadProductAdmin(req: Request, res: Response) {
  */
 export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
   try {
-    const { fromDate, toDate, source, accountId } = req.query as Record<
-      string,
-      string
-    >;
+    const {
+      fromDate,
+      toDate,
+      source,
+      accountId,
+      demoFromDate,
+      demoToDate,
+      demoStatus,
+    } = req.query as Record<string, string>;
 
     const where: any = {};
+    const now = new Date();
 
     if (source) where.source = source;
 
     if (fromDate || toDate) {
       where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate) where.createdAt.lte = new Date(toDate);
+      if (fromDate) where.createdAt.gte = new Date(`${fromDate}T00:00:00.000Z`);
+      if (toDate) where.createdAt.lte = new Date(`${toDate}T23:59:59.999Z`);
+    }
+
+    if (demoFromDate || demoToDate) {
+      where.demoScheduledAt = {
+        ...(demoFromDate && {
+          gte: new Date(`${demoFromDate}T00:00:00.000+05:30`),
+        }),
+        ...(demoToDate && {
+          lte: new Date(`${demoToDate}T23:59:59.999+05:30`),
+        }),
+      };
+    }
+
+    if (demoStatus === "overdue") {
+      where.demoScheduledAt = { lt: now };
+      where.demoDoneAt = null;
+    }
+    if (demoStatus === "upcoming") {
+      where.demoScheduledAt = { gt: now };
+      where.demoDoneAt = null;
+    }
+    if (demoStatus === "done") {
+      where.demoDoneAt = { not: null };
     }
 
     if (accountId) {
@@ -1909,6 +1938,9 @@ export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
         },
       };
     }
+
+    // console.log("\n\n\n\n\nfromDate", fromDate);
+    // console.log("\ntoDate", toDate);
 
     /**
      * Use groupBy (single DB roundtrip, very fast)
@@ -1928,13 +1960,15 @@ export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
     // INTERESTED
     // CONVERTED
     // CLOSED
-    const result = {
-      PENDING: 0,
+   const result = {
+      PENDING:    0,
       IN_PROGRESS: 0,
-      DEMO_DONE: 0,
-      CLOSED: 0,
-      CONVERTED: 0,
-      TOTAL: 0,
+      FOLLOW_UPS:  0,
+      DEMO_DONE:   0,
+      INTERESTED:  0,
+      CONVERTED:   0,
+      CLOSED:      0,
+      TOTAL:       0,
     };
 
     for (const row of grouped) {

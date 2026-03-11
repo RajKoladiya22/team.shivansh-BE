@@ -402,8 +402,8 @@ export async function listMyLeads(req: Request, res: Response) {
 
     if (fromDate || toDate) {
       where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate) where.createdAt.lte = new Date(toDate);
+      if (fromDate) where.createdAt.gte = new Date(`${fromDate}T00:00:00.000Z`);
+      if (toDate) where.createdAt.lte = new Date(`${toDate}T23:59:59.999Z`);
     }
 
     if (search) {
@@ -448,6 +448,12 @@ export async function listMyLeads(req: Request, res: Response) {
       { status: "asc" as const }, // enum index
       { createdAt: "desc" as const }, // btree index
     ];
+
+    // console.log(
+    //   "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nfromDate",
+    //   fromDate,
+    // );
+    // console.log("\ntoDate", toDate);
 
     const [total, leads] = await Promise.all([
       prisma.lead.count({ where }),
@@ -1685,55 +1691,90 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
+    const { fromDate, toDate, source, demoFromDate, demoToDate, demoStatus } =
+      req.query as {
+        fromDate?: string;
+        toDate?: string;
+        source?: string;
+        demoFromDate?: string;
+        demoToDate?: string;
+        demoStatus?: string;
+      };
+
+    const now = new Date();
     const baseWhere = {
       assignments: {
         some: {
           isActive: true,
-          OR: [
-            { accountId },
-            {
-              team: {
-                members: {
-                  some: { accountId },
-                },
-              },
-            },
-          ],
+          OR: [{ accountId }, { team: { members: { some: { accountId } } } }],
         },
       },
+
+      ...(source && { source: source as any }),
+
+      ...(fromDate || toDate
+        ? {
+            createdAt: {
+              ...(fromDate && {
+                gte: new Date(`${fromDate}T00:00:00.000+05:30`),
+              }),
+              ...(toDate && { lte: new Date(`${toDate}T23:59:59.999+05:30`) }),
+            },
+          }
+        : {}),
+
+      ...(demoFromDate || demoToDate
+        ? {
+            demoScheduledAt: {
+              ...(demoFromDate && {
+                gte: new Date(`${demoFromDate}T00:00:00.000+05:30`),
+              }),
+              ...(demoToDate && {
+                lte: new Date(`${demoToDate}T23:59:59.999+05:30`),
+              }),
+            },
+          }
+        : {}),
+
+      ...(demoStatus === "overdue" && {
+        demoScheduledAt: { lt: now },
+        demoDoneAt: null,
+      }),
+      ...(demoStatus === "upcoming" && {
+        demoScheduledAt: { gt: now },
+        demoDoneAt: null,
+      }),
+      ...(demoStatus === "done" && { demoDoneAt: { not: null } }),
     };
 
     const statuses = [
       "PENDING",
       "IN_PROGRESS",
+      "FOLLOW_UPS",
       "DEMO_DONE",
       "INTERESTED",
       "CONVERTED",
       "CLOSED",
     ] as const;
 
+    // console.log("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nfromDate", fromDate);
+    // console.log("\ntoDate", toDate);
+
     const counts = await prisma.$transaction(
       statuses.map((status) =>
-        prisma.lead.count({
-          where: {
-            ...baseWhere,
-            status,
-          },
-        }),
+        prisma.lead.count({ where: { ...baseWhere, status } }),
       ),
     );
 
     const data: Record<string, number> = {};
     let total = 0;
 
-    statuses.forEach((status, index) => {
-      data[status] = counts[index];
-      total += counts[index];
+    statuses.forEach((status, i) => {
+      data[status] = counts[i];
+      total += counts[i];
     });
 
     data.TOTAL = total;
-
-    // console.log("\n\n\n\nMy lead stats\n", data, "\n\n\n\n");
 
     return sendSuccessResponse(res, 200, "My lead counts fetched", data);
   } catch (err: any) {
