@@ -173,7 +173,7 @@ async function stopWorkIfActive(tx: any, accountId: string, leadId: string) {
    ========================== */
 
 /**
- * POST /leads/my
+ * POST user/leads/my
  * User creates lead and auto-assigns to self
  */
 export async function createMyLead(req: Request, res: Response) {
@@ -191,6 +191,7 @@ export async function createMyLead(req: Request, res: Response) {
       cost,
       remark,
       demoDate,
+      followUps,
     } = req.body as Record<string, any>;
 
     if (!customerName || !mobileNumber)
@@ -215,97 +216,141 @@ export async function createMyLead(req: Request, res: Response) {
 
     const now = new Date();
 
-    const newLead = await prisma.$transaction(async (tx) => {
-      /* -------------------------
-         1️⃣ Upsert Customer
-      ------------------------- */
+    const { newLead, createdFollowUps } = await prisma.$transaction(
+      async (tx) => {
+        /* -------------------------
+     1️⃣ Upsert Customer
+  ------------------------- */
+        const customer = await tx.customer.upsert({
+          where: { normalizedMobile },
+          create: {
+            name: customerName,
+            mobile: mobileNumber,
+            normalizedMobile,
+            createdBy: accountId,
+          },
+          update: { name: customerName },
+        });
 
-      const customer = await tx.customer.upsert({
-        where: { normalizedMobile },
-        create: {
-          name: customerName,
-          mobile: mobileNumber,
-          normalizedMobile,
-          createdBy: accountId,
-        },
-        update: {
-          name: customerName,
-        },
-      });
-
-      /* -------------------------
-         2️⃣ Create Lead
-      ------------------------- */
-
-      const lead = await tx.lead.create({
-        data: {
-          source,
-          type,
-          customerId: customer.id,
-          customerName,
-          mobileNumber: normalizedMobile,
-          product: resolvedProduct,
-          productTitle: finalProductTitle,
-          cost: cost ?? undefined,
-          remark: remark ?? undefined,
-          createdBy: accountId,
-
-          demoScheduledAt: demoDate ? new Date(demoDate) : undefined,
-          demoCount: demoDate ? 1 : 0,
-          demoMeta: demoDate
-            ? {
-                history: [
-                  {
-                    type: "SCHEDULED",
-                    at: new Date(demoDate),
-                    by: accountId,
-                  },
-                ],
-              }
-            : undefined,
-        },
-      });
-
-      /* -------------------------
-         3️⃣ Self Assignment
-      ------------------------- */
-
-      await tx.leadAssignment.create({
-        data: {
-          leadId: lead.id,
-          type: "ACCOUNT",
-          accountId,
-          isActive: true,
-          assignedBy: accountId,
-          assignedAt: now,
-        },
-      });
-
-      /* -------------------------
-         4️⃣ Activity Log
-      ------------------------- */
-
-      const initialAssignee = await resolveAssigneeSnapshot({
-        accountId,
-      });
-
-      await tx.leadActivityLog.create({
-        data: {
-          leadId: lead.id,
-          action: "CREATED",
-          performedBy: accountId,
-          meta: {
+        /* -------------------------
+     2️⃣ Create Lead
+  ------------------------- */
+        const lead = await tx.lead.create({
+          data: {
             source,
             type,
-            selfAssigned: true,
-            initialAssignment: initialAssignee,
-            demoScheduledAt: demoDate ?? null,
+            customerId: customer.id,
+            customerName,
+            mobileNumber: normalizedMobile,
+            product: resolvedProduct,
+            productTitle: finalProductTitle,
+            cost: cost ?? undefined,
+            remark: remark ?? undefined,
+            createdBy: accountId,
+            demoScheduledAt: demoDate ? new Date(demoDate) : undefined,
+            demoCount: demoDate ? 1 : 0,
+            demoMeta: demoDate
+              ? {
+                  history: [
+                    {
+                      type: "SCHEDULED",
+                      at: new Date(demoDate),
+                      by: accountId,
+                    },
+                  ],
+                }
+              : undefined,
           },
-        },
-      });
+        });
 
-      return lead;
-    });
+        /* -------------------------
+     3️⃣ Self Assignment
+  ------------------------- */
+        await tx.leadAssignment.create({
+          data: {
+            leadId: lead.id,
+            type: "ACCOUNT",
+            accountId,
+            isActive: true,
+            assignedBy: accountId,
+            assignedAt: now,
+          },
+        });
+
+        /* -------------------------
+     4️⃣ Activity Log
+  ------------------------- */
+        const initialAssignee = await resolveAssigneeSnapshot({ accountId });
+
+        await tx.leadActivityLog.create({
+          data: {
+            leadId: lead.id,
+            action: "CREATED",
+            performedBy: accountId,
+            meta: {
+              source,
+              type,
+              selfAssigned: true,
+              initialAssignment: initialAssignee,
+              demoScheduledAt: demoDate ?? null,
+            },
+          },
+        });
+
+        /* -------------------------
+     5️⃣ Follow-ups
+  ------------------------- */
+        let createdFollowUps: any[] = [];
+
+        if (Array.isArray(followUps) && followUps.length > 0) {
+          const invalid = followUps.some((f) => !f.scheduledAt);
+          if (invalid)
+            throw new Error("Each follow-up must have a scheduledAt");
+
+          await tx.leadFollowUp.createMany({
+            data: followUps.map((f) => ({
+              leadId: lead.id,
+              type: f.type ?? "CALL",
+              status: "PENDING" as const,
+              scheduledAt: new Date(f.scheduledAt),
+              remark: f.remark ?? null,
+              createdBy: accountId,
+            })),
+          });
+
+          createdFollowUps = await tx.leadFollowUp.findMany({
+            where: { leadId: lead.id },
+            orderBy: { scheduledAt: "asc" },
+          });
+
+          await tx.lead.update({
+            where: { id: lead.id },
+            data: {
+              followUpCount: createdFollowUps.length,
+              nextFollowUpAt: createdFollowUps[0].scheduledAt,
+            },
+          });
+
+          await tx.leadActivityLog.create({
+            data: {
+              leadId: lead.id,
+              action: "FOLLOW_UP_SCHEDULED",
+              performedBy: accountId,
+              meta: {
+                count: createdFollowUps.length,
+                followUps: createdFollowUps.map((f) => ({
+                  id: f.id,
+                  type: f.type,
+                  scheduledAt: f.scheduledAt,
+                })),
+              },
+            },
+          });
+        }
+
+        return { newLead: lead, createdFollowUps };
+      },
+    );
 
     /* -------------------------
        🔔 Socket Emit (Minimal)
@@ -332,7 +377,10 @@ export async function createMyLead(req: Request, res: Response) {
       res,
       201,
       "Lead created and assigned to you",
-      newLead,
+      {
+  ...newLead,
+  followUps: createdFollowUps,
+},
     );
   } catch (err: any) {
     console.error("Create my lead error:", err);
@@ -341,7 +389,7 @@ export async function createMyLead(req: Request, res: Response) {
 }
 
 /**
- * GET /leads/my
+ * GET user/leads/my
  * List leads assigned to the current user's account or teams
  */
 export async function listMyLeads(req: Request, res: Response) {
@@ -530,112 +578,7 @@ export async function listMyLeads(req: Request, res: Response) {
 }
 
 /**
- * GET /leads/my/:id
- * Get lead detail visible to current assignee (includes assignments history & activity summary)
- */
-export async function getMyLeadById(req: Request, res: Response) {
-  try {
-    const { id } = req.params;
-    if (!id) return sendErrorResponse(res, 400, "Lead ID required");
-
-    const accountId = req.user?.accountId;
-    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
-
-    const lead = await prisma.lead.findFirst({
-      where: {
-        id,
-        assignments: {
-          some: {
-            isActive: true,
-            OR: [
-              { accountId },
-              {
-                team: {
-                  members: {
-                    some: { accountId },
-                  },
-                },
-              },
-            ],
-          },
-        },
-      },
-
-      include: {
-        // include all assignments (active + history) so UI can show reassign history
-        assignments: {
-          orderBy: { assignedAt: "desc" },
-          include: {
-            account: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                contactPhone: true,
-                designation: true,
-              },
-            },
-            team: { select: { id: true, name: true } },
-            assignedByAcc: {
-              select: { id: true, firstName: true, lastName: true },
-            },
-          },
-        },
-        activity: {
-          orderBy: { createdAt: "desc" },
-          take: 100, // limit to latest 100 for payload safety
-          include: {
-            performedByAccount: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                designation: true,
-                contactPhone: true,
-              },
-            },
-          },
-        },
-        leadHelpers: {
-          where: { isActive: true },
-          select: {
-            role: true,
-            addedAt: true,
-            account: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                designation: true,
-                contactPhone: true,
-              },
-            },
-          },
-        },
-        customer: {
-          select: {
-            id: true,
-            name: true,
-            mobile: true,
-            customerCompanyName: true,
-            products: true,
-          },
-        },
-      },
-    });
-
-    if (!lead)
-      return sendErrorResponse(res, 404, "Lead not found or not accessible");
-
-    return sendSuccessResponse(res, 200, "Lead fetched", lead);
-  } catch (err: any) {
-    console.error("Get my lead error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch lead");
-  }
-}
-
-/**
- * PATCH /leads/my/:id/status
+ * PATCH user/leads/my/:id/status
  * Update status/remark as the assignee (account or team member)
  */
 export async function updateMyLeadStatus(req: Request, res: Response) {
@@ -901,6 +844,111 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
   } catch (err: any) {
     console.error("Update lead status error:", err);
     return sendErrorResponse(res, 500, err?.message ?? "Failed to update lead");
+  }
+}
+
+/**
+ * GET /leads/my/:id
+ * Get lead detail visible to current assignee (includes assignments history & activity summary)
+ */
+export async function getMyLeadById(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    if (!id) return sendErrorResponse(res, 400, "Lead ID required");
+
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+    const lead = await prisma.lead.findFirst({
+      where: {
+        id,
+        assignments: {
+          some: {
+            isActive: true,
+            OR: [
+              { accountId },
+              {
+                team: {
+                  members: {
+                    some: { accountId },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+
+      include: {
+        // include all assignments (active + history) so UI can show reassign history
+        assignments: {
+          orderBy: { assignedAt: "desc" },
+          include: {
+            account: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                contactPhone: true,
+                designation: true,
+              },
+            },
+            team: { select: { id: true, name: true } },
+            assignedByAcc: {
+              select: { id: true, firstName: true, lastName: true },
+            },
+          },
+        },
+        activity: {
+          orderBy: { createdAt: "desc" },
+          take: 100, // limit to latest 100 for payload safety
+          include: {
+            performedByAccount: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                designation: true,
+                contactPhone: true,
+              },
+            },
+          },
+        },
+        leadHelpers: {
+          where: { isActive: true },
+          select: {
+            role: true,
+            addedAt: true,
+            account: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                designation: true,
+                contactPhone: true,
+              },
+            },
+          },
+        },
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            mobile: true,
+            customerCompanyName: true,
+            products: true,
+          },
+        },
+      },
+    });
+
+    if (!lead)
+      return sendErrorResponse(res, 404, "Lead not found or not accessible");
+
+    return sendSuccessResponse(res, 200, "Lead fetched", lead);
+  } catch (err: any) {
+    console.error("Get my lead error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch lead");
   }
 }
 

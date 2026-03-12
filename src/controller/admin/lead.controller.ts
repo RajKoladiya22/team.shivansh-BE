@@ -139,6 +139,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
       accountId: assigneeAccountId,
       teamId: assigneeTeamId,
       demoDate,
+      followUps,
     } = req.body as Record<string, any>;
 
     // console.log("\n\n\n\ndemoDate:", demoDate);
@@ -182,7 +183,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
     });
 
     // Create lead + initial assignment + CREATED activity in single transaction
-    const { lead, recipients } = await prisma.$transaction(async (tx) => {
+    const { lead, recipients, followUps: createdFollowUps } = await prisma.$transaction(async (tx) => {
       // 1️⃣ find existing customer first
       let customer = await tx.customer.findUnique({
         where: { normalizedMobile },
@@ -341,7 +342,68 @@ export async function createLeadAdmin(req: Request, res: Response) {
         recipientAccountIds = members.map((m) => m.accountId);
       }
 
-      return { lead: created, recipients: recipientAccountIds };
+      // After tx.leadAssignment.create(...)
+
+      // ── Follow-ups ────────────────────────────────────────────────
+      let createdFollowUps: any[] = [];
+
+      if (Array.isArray(followUps) && followUps.length > 0) {
+        // validate: all must have scheduledAt
+        const invalid = followUps.some((f) => !f.scheduledAt);
+        if (invalid) throw new Error("Each follow-up must have a scheduledAt");
+
+        const data = followUps.map((f) => ({
+          leadId: created.id,
+          type: f.type ?? "CALL",
+          status: "PENDING" as const,
+          scheduledAt: new Date(f.scheduledAt),
+          remark: f.remark ?? null,
+          createdBy: creatorAccountId, // or `accountId` in createMyLead
+        }));
+
+        await tx.leadFollowUp.createMany({ data });
+
+        createdFollowUps = await tx.leadFollowUp.findMany({
+          where: { leadId: created.id },
+          orderBy: { scheduledAt: "asc" },
+        });
+
+        // sync aggregates on lead
+        const earliest = createdFollowUps[0];
+        await tx.lead.update({
+          where: { id: created.id },
+          data: {
+            followUpCount: createdFollowUps.length,
+            nextFollowUpAt: earliest.scheduledAt,
+          },
+        });
+
+        // single activity log for all scheduled follow-ups
+        await tx.leadActivityLog.create({
+          data: {
+            leadId: created.id,
+            action: "FOLLOW_UP_SCHEDULED",
+            performedBy: creatorAccountId, // or `accountId`
+            meta: {
+              count: createdFollowUps.length,
+              followUps: createdFollowUps.map((f) => ({
+                id: f.id,
+                type: f.type,
+                scheduledAt: f.scheduledAt,
+              })),
+            },
+          },
+        });
+      }
+
+      // ── return from transaction ───────────────────────────────────
+      return {
+        lead: created,
+        recipients: recipientAccountIds,
+        followUps: createdFollowUps,
+      };
+
+      // return { lead: created, recipients: recipientAccountIds };
     });
 
     void triggerAssignmentNotification({
@@ -373,7 +435,10 @@ export async function createLeadAdmin(req: Request, res: Response) {
       console.warn("Socket emit skipped");
     }
 
-    return sendSuccessResponse(res, 201, "Lead created successfully", lead);
+    return sendSuccessResponse(res, 201, "Lead created successfully", {
+      ...lead,
+      followUps: createdFollowUps,
+    });
   } catch (err: any) {
     console.error("Create lead error:", err);
     // Prisma common error handling
@@ -587,330 +652,6 @@ export async function updateLeadAdmin(req: Request, res: Response) {
   } catch (err: any) {
     console.error("Update lead error:", err);
     return sendErrorResponse(res, 500, err?.message ?? "Failed to update lead");
-  }
-}
-
-/**
- * POST /admin/leads/:id/assign
- */
-export async function assignLeadAdmin(req: Request, res: Response) {
-  try {
-    const performerAccountId = req.user?.accountId;
-    if (!performerAccountId) return sendErrorResponse(res, 401, "Unauthorized");
-
-    const { id } = req.params;
-    const { accountId, teamId, remark } = req.body;
-
-    const previousAssignment = await prisma.leadAssignment.findFirst({
-      where: { leadId: id, isActive: true },
-      include: {
-        account: { select: { id: true, firstName: true, lastName: true } },
-        team: { select: { id: true, name: true } },
-      },
-    });
-
-    const fromSnapshot = previousAssignment
-      ? previousAssignment.account
-        ? {
-            type: "ACCOUNT",
-            id: previousAssignment.account.id,
-            name: `${previousAssignment.account.firstName} ${previousAssignment.account.lastName}`,
-          }
-        : {
-            type: "TEAM",
-            id: previousAssignment.team!.id,
-            name: previousAssignment.team!.name,
-          }
-      : null;
-
-    const toSnapshot = await resolveAssigneeSnapshot({ accountId, teamId });
-
-    const { recipients } = await prisma.$transaction(async (tx) => {
-      await tx.leadAssignment.updateMany({
-        where: { leadId: id, isActive: true },
-        data: { isActive: false, unassignedAt: new Date() },
-      });
-
-      await tx.leadAssignment.create({
-        data: {
-          leadId: id,
-          type: accountId ? "ACCOUNT" : "TEAM",
-          accountId: accountId ?? null,
-          teamId: teamId ?? null,
-          remark,
-          isActive: true,
-          assignedBy: performerAccountId,
-        },
-      });
-
-      await tx.leadActivityLog.create({
-        data: {
-          leadId: id,
-          action: "ASSIGN_CHANGED",
-          performedBy: performerAccountId,
-          meta: {
-            from: fromSnapshot,
-            to: toSnapshot,
-            remark: remark ?? null,
-          },
-        },
-      });
-
-      let newRecipients: string[] = [];
-
-      if (accountId) {
-        newRecipients = [accountId];
-      } else if (teamId) {
-        const members = await tx.teamMember.findMany({
-          where: { teamId, isActive: true },
-          select: { accountId: true },
-        });
-        newRecipients = members.map((m) => m.accountId);
-      }
-
-      // include old account if existed
-      const oldRecipients = previousAssignment?.accountId
-        ? [previousAssignment.accountId]
-        : [];
-
-      return {
-        recipients: [...new Set([...newRecipients, ...oldRecipients])],
-      };
-    });
-
-    try {
-      const io = getIo();
-
-      const patchPayload = {
-        id,
-        patch: {
-          assignment: toSnapshot,
-          updatedAt: new Date(),
-        },
-      };
-
-      recipients.forEach((accId) => {
-        io.to(`leads:user:${accId}`).emit("lead:patch", patchPayload);
-      });
-
-      io.to("leads:admin").emit("lead:patch", patchPayload);
-    } catch (e) {
-      console.warn("Socket emit skipped");
-    }
-
-    void triggerAssignmentNotification({
-      leadId: id,
-      assigneeAccountId: accountId ?? null,
-      assigneeTeamId: accountId ?? null,
-    });
-
-    return sendSuccessResponse(res, 200, "Lead reassigned");
-  } catch (err) {
-    console.error(err);
-    return sendErrorResponse(res, 500, "Failed to reassign lead");
-  }
-}
-
-/**
- * DELETE /admin/leads/:id   (soft close)
- */
-export async function closeLeadAdmin(req: Request, res: Response) {
-  try {
-    const performerAccountId = req.user?.accountId;
-    if (!performerAccountId)
-      return sendErrorResponse(res, 401, "Invalid session user");
-
-    const { id } = req.params;
-
-    const performerSnapshot =
-      await resolvePerformerSnapshot(performerAccountId);
-
-    const existing = await prisma.lead.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        status: true,
-        statusMark: true,
-        assignments: {
-          where: { isActive: true },
-          select: { accountId: true, teamId: true },
-        },
-      },
-    });
-
-    if (!existing) return sendErrorResponse(res, 404, "Lead not found");
-
-    if (existing.status === "CLOSED")
-      return sendErrorResponse(res, 400, "Lead already closed");
-
-    const updated = await prisma.$transaction(async (tx) => {
-      const statusMark = {
-        ...(existing.statusMark as Record<string, boolean> | null),
-        close: true,
-      };
-      await tx.lead.update({
-        where: { id },
-        data: {
-          status: "CLOSED",
-          closedAt: new Date(),
-          isWorking: false,
-          statusMark,
-        },
-      });
-
-      // deactivate active assignments
-      await tx.leadAssignment.updateMany({
-        where: { leadId: id, isActive: true },
-        data: {
-          isActive: false,
-          unassignedAt: new Date(),
-        },
-      });
-
-      await tx.leadActivityLog.create({
-        data: {
-          leadId: id,
-          action: "CLOSED",
-          performedBy: performerAccountId,
-          meta: {
-            closedBy: performerSnapshot,
-            closedAt: new Date().toISOString(),
-          },
-        },
-      });
-    });
-
-    // -------------------------
-    // Resolve recipients
-    // -------------------------
-    let recipientAccountIds: string[] = [];
-
-    if (existing.assignments[0]?.accountId) {
-      recipientAccountIds = [existing.assignments[0].accountId];
-    } else if (existing.assignments[0]?.teamId) {
-      const members = await prisma.teamMember.findMany({
-        where: { teamId: existing.assignments[0].teamId, isActive: true },
-        select: { accountId: true },
-      });
-      recipientAccountIds = members.map((m) => m.accountId);
-    }
-
-    try {
-      const io = getIo();
-
-      const patchPayload = {
-        id,
-        patch: {
-          status: "CLOSED",
-          isWorking: false,
-          closedAt: new Date(),
-          updatedAt: new Date(),
-        },
-      };
-
-      recipientAccountIds.forEach((accId) => {
-        io.to(`leads:user:${accId}`).emit("lead:patch", patchPayload);
-      });
-
-      io.to("leads:admin").emit("lead:patch", patchPayload);
-    } catch {
-      console.warn("Socket emit skipped");
-    }
-
-    return sendSuccessResponse(res, 200, "Lead closed successfully");
-  } catch (err: any) {
-    console.error("Close lead error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to close lead");
-  }
-}
-
-/**
- * DELETE /admin/leads/:id/permanent
- * Hard delete lead with all related records
- */
-export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
-  try {
-    const performerAccountId = req.user?.accountId;
-    if (!performerAccountId) {
-      return sendErrorResponse(res, 401, "Invalid session user");
-    }
-
-    const { id } = req.params;
-
-    const existing = await prisma.lead.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        isWorking: true,
-      },
-    });
-
-    if (!existing) {
-      return sendErrorResponse(res, 404, "Lead not found");
-    }
-
-    if (existing.isWorking) {
-      return sendErrorResponse(
-        res,
-        400,
-        "Cannot delete lead while work is active",
-      );
-    }
-
-    await prisma.$transaction(async (tx) => {
-      // 1️⃣ Delete activity logs
-      await tx.leadActivityLog.deleteMany({
-        where: { leadId: id },
-      });
-
-      // 2️⃣ Delete assignments
-      await tx.leadAssignment.deleteMany({
-        where: { leadId: id },
-      });
-
-      // 3️⃣ Delete helpers
-      await tx.leadHelper.deleteMany({
-        where: { leadId: id },
-      });
-
-      // 4️⃣ Disconnect M2M accounts (if any)
-      await tx.lead.update({
-        where: { id },
-        data: {
-          accounts: {
-            set: [],
-          },
-        },
-      });
-
-      // 5️⃣ Finally delete lead
-      await tx.lead.delete({
-        where: { id },
-      });
-    });
-
-    // Socket patch → remove from UI
-    try {
-      const io = getIo();
-
-      io.to("leads:admin").emit("lead:deleted", { id });
-      io.emit("lead:deleted", { id });
-    } catch {
-      console.warn("Socket emit skipped");
-    }
-
-    return sendSuccessResponse(
-      res,
-      200,
-      "Lead permanently deleted successfully",
-    );
-  } catch (err: any) {
-    console.error("Permanent delete lead error:", err);
-    return sendErrorResponse(
-      res,
-      500,
-      err?.message ?? "Failed to permanently delete lead",
-    );
   }
 }
 
@@ -1158,6 +899,127 @@ export async function listLeadsAdmin(req: Request, res: Response) {
 }
 
 /**
+ * POST /admin/leads/:id/assign
+ */
+export async function assignLeadAdmin(req: Request, res: Response) {
+  try {
+    const performerAccountId = req.user?.accountId;
+    if (!performerAccountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { id } = req.params;
+    const { accountId, teamId, remark } = req.body;
+
+    const previousAssignment = await prisma.leadAssignment.findFirst({
+      where: { leadId: id, isActive: true },
+      include: {
+        account: { select: { id: true, firstName: true, lastName: true } },
+        team: { select: { id: true, name: true } },
+      },
+    });
+
+    const fromSnapshot = previousAssignment
+      ? previousAssignment.account
+        ? {
+            type: "ACCOUNT",
+            id: previousAssignment.account.id,
+            name: `${previousAssignment.account.firstName} ${previousAssignment.account.lastName}`,
+          }
+        : {
+            type: "TEAM",
+            id: previousAssignment.team!.id,
+            name: previousAssignment.team!.name,
+          }
+      : null;
+
+    const toSnapshot = await resolveAssigneeSnapshot({ accountId, teamId });
+
+    const { recipients } = await prisma.$transaction(async (tx) => {
+      await tx.leadAssignment.updateMany({
+        where: { leadId: id, isActive: true },
+        data: { isActive: false, unassignedAt: new Date() },
+      });
+
+      await tx.leadAssignment.create({
+        data: {
+          leadId: id,
+          type: accountId ? "ACCOUNT" : "TEAM",
+          accountId: accountId ?? null,
+          teamId: teamId ?? null,
+          remark,
+          isActive: true,
+          assignedBy: performerAccountId,
+        },
+      });
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId: id,
+          action: "ASSIGN_CHANGED",
+          performedBy: performerAccountId,
+          meta: {
+            from: fromSnapshot,
+            to: toSnapshot,
+            remark: remark ?? null,
+          },
+        },
+      });
+
+      let newRecipients: string[] = [];
+
+      if (accountId) {
+        newRecipients = [accountId];
+      } else if (teamId) {
+        const members = await tx.teamMember.findMany({
+          where: { teamId, isActive: true },
+          select: { accountId: true },
+        });
+        newRecipients = members.map((m) => m.accountId);
+      }
+
+      // include old account if existed
+      const oldRecipients = previousAssignment?.accountId
+        ? [previousAssignment.accountId]
+        : [];
+
+      return {
+        recipients: [...new Set([...newRecipients, ...oldRecipients])],
+      };
+    });
+
+    try {
+      const io = getIo();
+
+      const patchPayload = {
+        id,
+        patch: {
+          assignment: toSnapshot,
+          updatedAt: new Date(),
+        },
+      };
+
+      recipients.forEach((accId) => {
+        io.to(`leads:user:${accId}`).emit("lead:patch", patchPayload);
+      });
+
+      io.to("leads:admin").emit("lead:patch", patchPayload);
+    } catch (e) {
+      console.warn("Socket emit skipped");
+    }
+
+    void triggerAssignmentNotification({
+      leadId: id,
+      assigneeAccountId: accountId ?? null,
+      assigneeTeamId: accountId ?? null,
+    });
+
+    return sendSuccessResponse(res, 200, "Lead reassigned");
+  } catch (err) {
+    console.error(err);
+    return sendErrorResponse(res, 500, "Failed to reassign lead");
+  }
+}
+
+/**
  * GET /admin/leads/:id
  * Fetch single lead detail (optimized)
  */
@@ -1276,6 +1138,211 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
     return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch lead");
   }
 }
+
+/**
+ * DELETE /admin/leads/:id   (soft close)
+ */
+export async function closeLeadAdmin(req: Request, res: Response) {
+  try {
+    const performerAccountId = req.user?.accountId;
+    if (!performerAccountId)
+      return sendErrorResponse(res, 401, "Invalid session user");
+
+    const { id } = req.params;
+
+    const performerSnapshot =
+      await resolvePerformerSnapshot(performerAccountId);
+
+    const existing = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        statusMark: true,
+        assignments: {
+          where: { isActive: true },
+          select: { accountId: true, teamId: true },
+        },
+      },
+    });
+
+    if (!existing) return sendErrorResponse(res, 404, "Lead not found");
+
+    if (existing.status === "CLOSED")
+      return sendErrorResponse(res, 400, "Lead already closed");
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const statusMark = {
+        ...(existing.statusMark as Record<string, boolean> | null),
+        close: true,
+      };
+      await tx.lead.update({
+        where: { id },
+        data: {
+          status: "CLOSED",
+          closedAt: new Date(),
+          isWorking: false,
+          statusMark,
+        },
+      });
+
+      // deactivate active assignments
+      await tx.leadAssignment.updateMany({
+        where: { leadId: id, isActive: true },
+        data: {
+          isActive: false,
+          unassignedAt: new Date(),
+        },
+      });
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId: id,
+          action: "CLOSED",
+          performedBy: performerAccountId,
+          meta: {
+            closedBy: performerSnapshot,
+            closedAt: new Date().toISOString(),
+          },
+        },
+      });
+    });
+
+    // -------------------------
+    // Resolve recipients
+    // -------------------------
+    let recipientAccountIds: string[] = [];
+
+    if (existing.assignments[0]?.accountId) {
+      recipientAccountIds = [existing.assignments[0].accountId];
+    } else if (existing.assignments[0]?.teamId) {
+      const members = await prisma.teamMember.findMany({
+        where: { teamId: existing.assignments[0].teamId, isActive: true },
+        select: { accountId: true },
+      });
+      recipientAccountIds = members.map((m) => m.accountId);
+    }
+
+    try {
+      const io = getIo();
+
+      const patchPayload = {
+        id,
+        patch: {
+          status: "CLOSED",
+          isWorking: false,
+          closedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      };
+
+      recipientAccountIds.forEach((accId) => {
+        io.to(`leads:user:${accId}`).emit("lead:patch", patchPayload);
+      });
+
+      io.to("leads:admin").emit("lead:patch", patchPayload);
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(res, 200, "Lead closed successfully");
+  } catch (err: any) {
+    console.error("Close lead error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to close lead");
+  }
+}
+
+/**
+ * DELETE /admin/leads/:id/permanent
+ * Hard delete lead with all related records
+ */
+export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
+  try {
+    const performerAccountId = req.user?.accountId;
+    if (!performerAccountId) {
+      return sendErrorResponse(res, 401, "Invalid session user");
+    }
+
+    const { id } = req.params;
+
+    const existing = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        isWorking: true,
+      },
+    });
+
+    if (!existing) {
+      return sendErrorResponse(res, 404, "Lead not found");
+    }
+
+    if (existing.isWorking) {
+      return sendErrorResponse(
+        res,
+        400,
+        "Cannot delete lead while work is active",
+      );
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // 1️⃣ Delete activity logs
+      await tx.leadActivityLog.deleteMany({
+        where: { leadId: id },
+      });
+
+      // 2️⃣ Delete assignments
+      await tx.leadAssignment.deleteMany({
+        where: { leadId: id },
+      });
+
+      // 3️⃣ Delete helpers
+      await tx.leadHelper.deleteMany({
+        where: { leadId: id },
+      });
+
+      // 4️⃣ Disconnect M2M accounts (if any)
+      await tx.lead.update({
+        where: { id },
+        data: {
+          accounts: {
+            set: [],
+          },
+        },
+      });
+
+      // 5️⃣ Finally delete lead
+      await tx.lead.delete({
+        where: { id },
+      });
+    });
+
+    // Socket patch → remove from UI
+    try {
+      const io = getIo();
+
+      io.to("leads:admin").emit("lead:deleted", { id });
+      io.emit("lead:deleted", { id });
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(
+      res,
+      200,
+      "Lead permanently deleted successfully",
+    );
+  } catch (err: any) {
+    console.error("Permanent delete lead error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to permanently delete lead",
+    );
+  }
+}
+
+
 
 /**
  * GET /admin/leads/:id/activity
@@ -1954,15 +2021,15 @@ export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
     /**
      * Normalize output to include all statuses
      */
-   const result = {
-      PENDING:    0,
+    const result = {
+      PENDING: 0,
       IN_PROGRESS: 0,
-      FOLLOW_UPS:  0,
-      DEMO_DONE:   0,
-      INTERESTED:  0,
-      CONVERTED:   0,
-      CLOSED:      0,
-      TOTAL:       0,
+      FOLLOW_UPS: 0,
+      DEMO_DONE: 0,
+      INTERESTED: 0,
+      CONVERTED: 0,
+      CLOSED: 0,
+      TOTAL: 0,
     };
 
     for (const row of grouped) {
@@ -2281,6 +2348,526 @@ export async function addLeadProductsAdmin(req: Request, res: Response) {
       res,
       500,
       err?.message ?? "Failed to update products",
+    );
+  }
+}
+
+/* ─────────────────────────────────────────
+   Helpers
+───────────────────────────────────────── */
+
+/**
+ * Recalculates and syncs Lead.nextFollowUpAt + Lead.lastFollowUpDoneAt
+ * Must be called inside a transaction after any follow-up mutation.
+ */
+async function syncLeadFollowUpAggregates(
+  tx: any,
+  leadId: string,
+): Promise<void> {
+  const [nextPending, lastDone] = await Promise.all([
+    tx.leadFollowUp.findFirst({
+      where: { leadId, status: "PENDING" },
+      orderBy: { scheduledAt: "asc" },
+      select: { scheduledAt: true },
+    }),
+    tx.leadFollowUp.findFirst({
+      where: { leadId, status: "DONE" },
+      orderBy: { doneAt: "desc" },
+      select: { doneAt: true },
+    }),
+  ]);
+
+  await tx.lead.update({
+    where: { id: leadId },
+    data: {
+      nextFollowUpAt: nextPending?.scheduledAt ?? null,
+      lastFollowUpDoneAt: lastDone?.doneAt ?? null,
+    },
+  });
+}
+
+/* ─────────────────────────────────────────
+   POST /leads/:leadId/follow-ups
+   Create a new follow-up for a lead
+───────────────────────────────────────── */
+export async function createFollowUp(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { leadId } = req.params;
+    const { type = "CALL", scheduledAt, remark } = req.body as {
+      type?: "CALL" | "DEMO" | "MEETING" | "VISIT" | "WHATSAPP" | "OTHER";
+      scheduledAt: string;
+      remark?: string;
+    };
+
+    if (!scheduledAt)
+      return sendErrorResponse(res, 400, "scheduledAt is required");
+
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true, customerName: true, status: true },
+    });
+    if (!lead) return sendErrorResponse(res, 404, "Lead not found");
+
+    const followUp = await prisma.$transaction(async (tx) => {
+      const created = await tx.leadFollowUp.create({
+        data: {
+          leadId,
+          type,
+          status: "PENDING",
+          scheduledAt: new Date(scheduledAt),
+          remark: remark ?? null,
+          createdBy: accountId,
+        },
+      });
+
+      // increment followUpCount + sync nextFollowUpAt
+      await tx.lead.update({
+        where: { id: leadId },
+        data: { followUpCount: { increment: 1 } },
+      });
+
+      await syncLeadFollowUpAggregates(tx, leadId);
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId,
+          action: "FOLLOW_UP_SCHEDULED",
+          performedBy: accountId,
+          meta: {
+            followUpId: created.id,
+            type,
+            scheduledAt: new Date(scheduledAt).toISOString(),
+            remark: remark ?? null,
+          },
+        },
+      });
+
+      return created;
+    });
+
+    // socket
+    try {
+      getIo()
+        .to("leads:admin")
+        .emit("followup:created", { leadId, followUp });
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(res, 201, "Follow-up scheduled", followUp);
+  } catch (err: any) {
+    console.error("Create follow-up error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to create follow-up",
+    );
+  }
+}
+
+/* ─────────────────────────────────────────
+   PATCH /leads/:leadId/follow-ups/:id
+   Mark done | reschedule | update remark
+───────────────────────────────────────── */
+export async function updateFollowUp(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { leadId, id } = req.params;
+    const {
+      action,        // "done" | "reschedule" | "missed" | "update"
+      scheduledAt,   // required when action = "reschedule"
+      remark,
+      type,
+    } = req.body as {
+      action: "done" | "reschedule" | "missed" | "update";
+      scheduledAt?: string;
+      remark?: string;
+      type?: "CALL" | "DEMO" | "MEETING" | "VISIT" | "WHATSAPP" | "OTHER";
+    };
+
+    if (!action)
+      return sendErrorResponse(
+        res,
+        400,
+        "action is required: done | reschedule | missed | update",
+      );
+
+    const existing = await prisma.leadFollowUp.findFirst({
+      where: { id, leadId },
+    });
+    if (!existing) return sendErrorResponse(res, 404, "Follow-up not found");
+
+    if (existing.status === "DONE")
+      return sendErrorResponse(res, 400, "Follow-up already marked as done");
+
+    const result = await prisma.$transaction(async (tx) => {
+      let updated: any;
+      let newFollowUp: any = null;
+      let activityAction: string;
+
+      // ── DONE ──────────────────────────────────────────────────────────
+      if (action === "done") {
+        updated = await tx.leadFollowUp.update({
+          where: { id },
+          data: {
+            status: "DONE",
+            doneAt: new Date(),
+            doneBy: accountId,
+            remark: remark ?? existing.remark,
+          },
+        });
+        activityAction = "FOLLOW_UP_DONE";
+      }
+
+      // ── RESCHEDULE ────────────────────────────────────────────────────
+      else if (action === "reschedule") {
+        if (!scheduledAt)
+          throw new Error("scheduledAt is required for reschedule");
+
+        // mark old one as RESCHEDULED
+        updated = await tx.leadFollowUp.update({
+          where: { id },
+          data: { status: "RESCHEDULED" },
+        });
+
+        // create new follow-up linked to old one
+        newFollowUp = await tx.leadFollowUp.create({
+          data: {
+            leadId,
+            type: type ?? existing.type,
+            status: "PENDING",
+            scheduledAt: new Date(scheduledAt),
+            remark: remark ?? null,
+            rescheduledFrom: { connect: { id } },
+            createdBy: accountId,
+          },
+        });
+
+        await tx.lead.update({
+          where: { id: leadId },
+          data: { followUpCount: { increment: 1 } },
+        });
+
+        activityAction = "FOLLOW_UP_RESCHEDULED";
+      }
+
+      // ── MISSED ────────────────────────────────────────────────────────
+      else if (action === "missed") {
+        updated = await tx.leadFollowUp.update({
+          where: { id },
+          data: { status: "MISSED" },
+        });
+        activityAction = "FOLLOW_UP_MISSED";
+      }
+
+      // ── UPDATE (remark / type only) ───────────────────────────────────
+      else if (action === "update") {
+        const patch: any = {};
+        if (remark !== undefined) patch.remark = remark;
+        if (type !== undefined) patch.type = type;
+        if (scheduledAt !== undefined)
+          patch.scheduledAt = new Date(scheduledAt);
+
+        updated = await tx.leadFollowUp.update({ where: { id }, data: patch });
+        activityAction = "FOLLOW_UP_SCHEDULED"; // reuse — or add FOLLOW_UP_UPDATED enum
+      } else {
+        throw new Error("Invalid action");
+      }
+
+      await syncLeadFollowUpAggregates(tx, leadId);
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId,
+          action: activityAction as any,
+          performedBy: accountId,
+          meta: {
+            followUpId: id,
+            action,
+            newFollowUpId: newFollowUp?.id ?? null,
+            rescheduledTo: newFollowUp?.scheduledAt ?? null,
+          },
+        },
+      });
+
+      return { updated, newFollowUp };
+    });
+
+    try {
+      getIo()
+        .to("leads:admin")
+        .emit("followup:updated", { leadId, ...result });
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(res, 200, "Follow-up updated", result);
+  } catch (err: any) {
+    console.error("Update follow-up error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to update follow-up",
+    );
+  }
+}
+
+/* ─────────────────────────────────────────
+   GET /leads/:leadId/follow-ups
+   Follow-ups for a specific lead
+───────────────────────────────────────── */
+export async function getLeadFollowUps(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { leadId } = req.params;
+    const { status } = req.query as { status?: string };
+
+    const where: any = { leadId };
+    if (status) where.status = status;
+
+    const followUps = await prisma.leadFollowUp.findMany({
+      where,
+      orderBy: { scheduledAt: "asc" },
+      include: {
+        createdByAcc: {
+          select: { id: true, firstName: true, lastName: true },
+        },
+        doneByAcc: {
+          select: { id: true, firstName: true, lastName: true },
+        },
+        rescheduledTo: {
+          select: { id: true, scheduledAt: true, status: true },
+        },
+        rescheduledFrom: {
+          select: { id: true, scheduledAt: true, status: true },
+        },
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Follow-ups fetched", followUps);
+  } catch (err: any) {
+    console.error("Get lead follow-ups error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch follow-ups",
+    );
+  }
+}
+
+/* ─────────────────────────────────────────
+   GET /follow-ups
+   Global list — filter by status / type /
+   date range / assignee / overdue etc.
+───────────────────────────────────────── */
+export async function listFollowUps(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const {
+      status,           // PENDING | DONE | MISSED | RESCHEDULED
+      type,             // CALL | DEMO | MEETING | ...
+      range,            // today | tomorrow | week | overdue | custom
+      fromDate,
+      toDate,
+      assignedToAccountId,
+      assignedToTeamId,
+      leadId,
+      sortBy = "scheduledAt",   // scheduledAt | createdAt
+      sortOrder = "asc",
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string>;
+
+    const pageNumber = Math.max(Number(page), 1);
+    const pageSize = Math.min(Number(limit), 100);
+    const skip = (pageNumber - 1) * pageSize;
+
+    const now = new Date();
+
+    /* ── where ── */
+    const where: any = {};
+
+    if (leadId) where.leadId = leadId;
+    if (status) where.status = status;
+    if (type) where.type = type;
+
+    // ── date range shortcuts ──────────────────────────────────────────
+    if (range === "today") {
+      const start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(now);
+      end.setHours(23, 59, 59, 999);
+      where.scheduledAt = { gte: start, lte: end };
+    } else if (range === "tomorrow") {
+      const start = new Date(now);
+      start.setDate(start.getDate() + 1);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(start);
+      end.setHours(23, 59, 59, 999);
+      where.scheduledAt = { gte: start, lte: end };
+    } else if (range === "week") {
+      const start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(now);
+      end.setDate(end.getDate() + 7);
+      end.setHours(23, 59, 59, 999);
+      where.scheduledAt = { gte: start, lte: end };
+    } else if (range === "overdue") {
+      where.status = "PENDING";
+      where.scheduledAt = { lt: now };
+    } else if (range === "custom") {
+      where.scheduledAt = {};
+      if (fromDate) where.scheduledAt.gte = new Date(fromDate);
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setHours(23, 59, 59, 999);
+        where.scheduledAt.lte = end;
+      }
+    }
+
+    // ── filter by lead's assignee ─────────────────────────────────────
+    if (assignedToAccountId || assignedToTeamId) {
+      where.lead = {
+        assignments: {
+          some: {
+            isActive: true,
+            ...(assignedToAccountId ? { accountId: assignedToAccountId } : {}),
+            ...(assignedToTeamId ? { teamId: assignedToTeamId } : {}),
+          },
+        },
+      };
+    }
+
+    /* ── orderBy ── */
+    const validSortFields: Record<string, boolean> = {
+      scheduledAt: true,
+      createdAt: true,
+      doneAt: true,
+    };
+    const safeSortBy = validSortFields[sortBy] ? sortBy : "scheduledAt";
+    const safeOrder = sortOrder === "desc" ? "desc" : "asc";
+    const orderBy = [{ [safeSortBy]: safeOrder }];
+
+    /* ── query ── */
+    const [total, followUps] = await Promise.all([
+      prisma.leadFollowUp.count({ where }),
+      prisma.leadFollowUp.findMany({
+        where,
+        orderBy,
+        skip,
+        take: pageSize,
+        include: {
+          lead: {
+            select: {
+              id: true,
+              customerName: true,
+              mobileNumber: true,
+              productTitle: true,
+              status: true,
+              assignments: {
+                where: { isActive: true },
+                select: {
+                  account: {
+                    select: { id: true, firstName: true, lastName: true },
+                  },
+                  team: { select: { id: true, name: true } },
+                },
+              },
+            },
+          },
+          createdByAcc: {
+            select: { id: true, firstName: true, lastName: true },
+          },
+          doneByAcc: {
+            select: { id: true, firstName: true, lastName: true },
+          },
+        },
+      }),
+    ]);
+
+    return sendSuccessResponse(res, 200, "Follow-ups fetched", {
+      data: followUps,
+      meta: {
+        page: pageNumber,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+        hasNext: pageNumber * pageSize < total,
+        hasPrev: pageNumber > 1,
+      },
+    });
+  } catch (err: any) {
+    console.error("List follow-ups error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch follow-ups",
+    );
+  }
+}
+
+/* ─────────────────────────────────────────
+   DELETE /leads/:leadId/follow-ups/:id
+   Only PENDING follow-ups can be deleted
+───────────────────────────────────────── */
+export async function deleteFollowUp(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { leadId, id } = req.params;
+
+    const existing = await prisma.leadFollowUp.findFirst({
+      where: { id, leadId },
+    });
+    if (!existing) return sendErrorResponse(res, 404, "Follow-up not found");
+    if (existing.status !== "PENDING")
+      return sendErrorResponse(
+        res,
+        400,
+        "Only PENDING follow-ups can be deleted",
+      );
+
+    await prisma.$transaction(async (tx) => {
+      await tx.leadFollowUp.delete({ where: { id } });
+
+      await tx.lead.update({
+        where: { id: leadId },
+        data: { followUpCount: { decrement: 1 } },
+      });
+
+      await syncLeadFollowUpAggregates(tx, leadId);
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId,
+          action: "FOLLOW_UP_SCHEDULED", // log deletion in meta
+          performedBy: accountId,
+          meta: {
+            followUpId: id,
+            action: "DELETED",
+            scheduledAt: existing.scheduledAt,
+          },
+        },
+      });
+    });
+
+    return sendSuccessResponse(res, 200, "Follow-up deleted");
+  } catch (err: any) {
+    console.error("Delete follow-up error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to delete follow-up",
     );
   }
 }

@@ -114,6 +114,9 @@ model Account {
   quotationActivities       QuotationActivity[]
   quotationTemplates        QuotationTemplate[]
 
+  followUpsCreated LeadFollowUp[] @relation("FollowUpCreatedBy")
+  followUpsDone    LeadFollowUp[] @relation("FollowUpDoneBy")
+
   @@index([isActive])
   @@index([jobType])
   @@index([contactEmail])
@@ -1149,6 +1152,26 @@ enum LeadActivityAction {
   HELPER_REMOVED
   WORK_STARTED
   WORK_ENDED
+  FOLLOW_UP_SCHEDULED
+  FOLLOW_UP_DONE
+  FOLLOW_UP_MISSED
+  FOLLOW_UP_RESCHEDULED
+}
+
+enum FollowUpStatus {
+  PENDING
+  DONE
+  MISSED
+  RESCHEDULED
+}
+
+enum FollowUpType {
+  CALL
+  DEMO
+  MEETING
+  VISIT
+  WHATSAPP
+  OTHER
 }
 
 enum LeadHelperRole {
@@ -1176,6 +1199,10 @@ model Lead {
   //     { type: "DONE", at: DateTime, by: accountId }
   //   ]
   // }
+  followUpCount       Int       @default(0)
+  nextFollowUpAt      DateTime? // next pending follow-up
+  lastFollowUpDoneAt  DateTime? // last completed follow-up
+  followUps    LeadFollowUp[]
 
   customerName        String
   mobileNumber        String
@@ -1267,6 +1294,40 @@ model LeadHelper {
   @@unique([leadId, accountId])
   @@index([leadId])
   @@index([accountId])
+}
+
+model LeadFollowUp {
+  id String @id @default(uuid())
+
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  type   FollowUpType   @default(CALL)
+  status FollowUpStatus @default(PENDING)
+
+  scheduledAt DateTime  // when it's planned
+  doneAt      DateTime? // when it was marked done
+  remark      String?   // note before or after
+
+  // if rescheduled, link to new follow-up
+  rescheduledToId String?       @unique
+  rescheduledTo   LeadFollowUp? @relation("Reschedule", fields: [rescheduledToId], references: [id])
+  rescheduledFrom LeadFollowUp? @relation("Reschedule")
+
+  createdBy    String?
+  createdByAcc Account? @relation("FollowUpCreatedBy", fields: [createdBy], references: [id])
+
+  doneBy    String?
+  doneByAcc Account? @relation("FollowUpDoneBy", fields: [doneBy], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId])
+  @@index([scheduledAt])
+  @@index([status])
+  @@index([leadId, status])
+  @@index([scheduledAt, status]) // for "today's follow-ups" queries
 }
 
 model LeadActivityLog {

@@ -22,6 +22,11 @@ import {
   updateLeadProductAdmin,
   getLeadValueStatsAdmin,
   addLeadProductsAdmin,
+  createFollowUp,
+  updateFollowUp,
+  getLeadFollowUps,
+  listFollowUps,
+  deleteFollowUp,
 } from "../../controller/admin/lead.controller";
 
 const router = Router();
@@ -185,5 +190,12 @@ router.get(
 router.get("/leads/stats/value", requireAuth, getLeadValueStatsAdmin);
 
 router.post("/leads/:id/products", requireAuth, addLeadProductsAdmin);
+
+
+router.post("/leads/:leadId/follow-ups", requireAuth, createFollowUp);
+router.patch("/leads/:leadId/follow-ups/:id", requireAuth, updateFollowUp);
+router.get("/leads/:leadId/follow-ups", requireAuth, getLeadFollowUps);
+router.get("/leads/follow-ups", requireAuth, listFollowUps);
+router.delete("/leads/:leadId/follow-ups/:id", requireAuth, deleteFollowUp);
 
 export default router;
