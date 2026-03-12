@@ -1923,3 +1923,524 @@ export async function getLeadValueStatsUser(req: Request, res: Response) {
     );
   }
 }
+
+
+/* ─────────────────────────────────────────
+    FOLLOW UPS
+───────────────────────────────────────── */
+
+/**
+ * Recalculates and syncs Lead.nextFollowUpAt + Lead.lastFollowUpDoneAt
+ * Must be called inside a transaction after any follow-up mutation.
+ */
+async function syncLeadFollowUpAggregates(
+  tx: any,
+  leadId: string,
+): Promise<void> {
+  const [nextPending, lastDone] = await Promise.all([
+    tx.leadFollowUp.findFirst({
+      where: { leadId, status: "PENDING" },
+      orderBy: { scheduledAt: "asc" },
+      select: { scheduledAt: true },
+    }),
+    tx.leadFollowUp.findFirst({
+      where: { leadId, status: "DONE" },
+      orderBy: { doneAt: "desc" },
+      select: { doneAt: true },
+    }),
+  ]);
+
+  await tx.lead.update({
+    where: { id: leadId },
+    data: {
+      nextFollowUpAt: nextPending?.scheduledAt ?? null,
+      lastFollowUpDoneAt: lastDone?.doneAt ?? null,
+    },
+  });
+}
+
+/* ─────────────────────────────────────────
+   POST /leads/:leadId/follow-ups
+   Create a new follow-up for a lead
+───────────────────────────────────────── */
+export async function createFollowUp(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { leadId } = req.params;
+    const { type = "CALL", scheduledAt, remark } = req.body as {
+      type?: "CALL" | "DEMO" | "MEETING" | "VISIT" | "WHATSAPP" | "OTHER";
+      scheduledAt: string;
+      remark?: string;
+    };
+
+    if (!scheduledAt)
+      return sendErrorResponse(res, 400, "scheduledAt is required");
+
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true, customerName: true, status: true },
+    });
+    if (!lead) return sendErrorResponse(res, 404, "Lead not found");
+
+    const followUp = await prisma.$transaction(async (tx) => {
+      const created = await tx.leadFollowUp.create({
+        data: {
+          leadId,
+          type,
+          status: "PENDING",
+          scheduledAt: new Date(scheduledAt),
+          remark: remark ?? null,
+          createdBy: accountId,
+        },
+      });
+
+      // increment followUpCount + sync nextFollowUpAt
+      await tx.lead.update({
+        where: { id: leadId },
+        data: { followUpCount: { increment: 1 } },
+      });
+
+      await syncLeadFollowUpAggregates(tx, leadId);
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId,
+          action: "FOLLOW_UP_SCHEDULED",
+          performedBy: accountId,
+          meta: {
+            followUpId: created.id,
+            type,
+            scheduledAt: new Date(scheduledAt).toISOString(),
+            remark: remark ?? null,
+          },
+        },
+      });
+
+      return created;
+    });
+
+    // socket
+    try {
+      getIo()
+        .to("leads:admin")
+        .emit("followup:created", { leadId, followUp });
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(res, 201, "Follow-up scheduled", followUp);
+  } catch (err: any) {
+    console.error("Create follow-up error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to create follow-up",
+    );
+  }
+}
+
+/* ─────────────────────────────────────────
+   PATCH /leads/:leadId/follow-ups/:id
+   Mark done | reschedule | update remark
+───────────────────────────────────────── */
+export async function updateFollowUp(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { leadId, id } = req.params;
+    const {
+      action,        // "done" | "reschedule" | "missed" | "update"
+      scheduledAt,   // required when action = "reschedule"
+      remark,
+      type,
+    } = req.body as {
+      action: "done" | "reschedule" | "missed" | "update";
+      scheduledAt?: string;
+      remark?: string;
+      type?: "CALL" | "DEMO" | "MEETING" | "VISIT" | "WHATSAPP" | "OTHER";
+    };
+
+    if (!action)
+      return sendErrorResponse(
+        res,
+        400,
+        "action is required: done | reschedule | missed | update",
+      );
+
+    const existing = await prisma.leadFollowUp.findFirst({
+      where: { id, leadId },
+    });
+    if (!existing) return sendErrorResponse(res, 404, "Follow-up not found");
+
+    if (existing.status === "DONE")
+      return sendErrorResponse(res, 400, "Follow-up already marked as done");
+
+    const result = await prisma.$transaction(async (tx) => {
+      let updated: any;
+      let newFollowUp: any = null;
+      let activityAction: string;
+
+      // ── DONE ──────────────────────────────────────────────────────────
+      if (action === "done") {
+        updated = await tx.leadFollowUp.update({
+          where: { id },
+          data: {
+            status: "DONE",
+            doneAt: new Date(),
+            doneBy: accountId,
+            remark: remark ?? existing.remark,
+          },
+        });
+        activityAction = "FOLLOW_UP_DONE";
+      }
+
+      // ── RESCHEDULE ────────────────────────────────────────────────────
+      else if (action === "reschedule") {
+        if (!scheduledAt)
+          throw new Error("scheduledAt is required for reschedule");
+
+        // mark old one as RESCHEDULED
+        updated = await tx.leadFollowUp.update({
+          where: { id },
+          data: { status: "RESCHEDULED" },
+        });
+
+        // create new follow-up linked to old one
+        newFollowUp = await tx.leadFollowUp.create({
+          data: {
+            leadId,
+            type: type ?? existing.type,
+            status: "PENDING",
+            scheduledAt: new Date(scheduledAt),
+            remark: remark ?? null,
+            rescheduledFrom: { connect: { id } },
+            createdBy: accountId,
+          },
+        });
+
+        await tx.lead.update({
+          where: { id: leadId },
+          data: { followUpCount: { increment: 1 } },
+        });
+
+        activityAction = "FOLLOW_UP_RESCHEDULED";
+      }
+
+      // ── MISSED ────────────────────────────────────────────────────────
+      else if (action === "missed") {
+        updated = await tx.leadFollowUp.update({
+          where: { id },
+          data: { status: "MISSED" },
+        });
+        activityAction = "FOLLOW_UP_MISSED";
+      }
+
+      // ── UPDATE (remark / type only) ───────────────────────────────────
+      else if (action === "update") {
+        const patch: any = {};
+        if (remark !== undefined) patch.remark = remark;
+        if (type !== undefined) patch.type = type;
+        if (scheduledAt !== undefined)
+          patch.scheduledAt = new Date(scheduledAt);
+
+        updated = await tx.leadFollowUp.update({ where: { id }, data: patch });
+        activityAction = "FOLLOW_UP_SCHEDULED"; // reuse — or add FOLLOW_UP_UPDATED enum
+      } else {
+        throw new Error("Invalid action");
+      }
+
+      await syncLeadFollowUpAggregates(tx, leadId);
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId,
+          action: activityAction as any,
+          performedBy: accountId,
+          meta: {
+            followUpId: id,
+            action,
+            newFollowUpId: newFollowUp?.id ?? null,
+            rescheduledTo: newFollowUp?.scheduledAt ?? null,
+          },
+        },
+      });
+
+      return { updated, newFollowUp };
+    });
+
+    try {
+      getIo()
+        .to("leads:admin")
+        .emit("followup:updated", { leadId, ...result });
+    } catch {
+      console.warn("Socket emit skipped");
+    }
+
+    return sendSuccessResponse(res, 200, "Follow-up updated", result);
+  } catch (err: any) {
+    console.error("Update follow-up error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to update follow-up",
+    );
+  }
+}
+
+/* ─────────────────────────────────────────
+   GET /leads/:leadId/follow-ups
+   Follow-ups for a specific lead
+───────────────────────────────────────── */
+export async function getLeadFollowUps(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { leadId } = req.params;
+    const { status } = req.query as { status?: string };
+
+    const where: any = { leadId };
+    if (status) where.status = status;
+
+    const followUps = await prisma.leadFollowUp.findMany({
+      where,
+      orderBy: { scheduledAt: "asc" },
+      include: {
+        createdByAcc: {
+          select: { id: true, firstName: true, lastName: true },
+        },
+        doneByAcc: {
+          select: { id: true, firstName: true, lastName: true },
+        },
+        rescheduledTo: {
+          select: { id: true, scheduledAt: true, status: true },
+        },
+        rescheduledFrom: {
+          select: { id: true, scheduledAt: true, status: true },
+        },
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Follow-ups fetched", followUps);
+  } catch (err: any) {
+    console.error("Get lead follow-ups error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch follow-ups",
+    );
+  }
+}
+
+/* ─────────────────────────────────────────
+   GET /follow-ups
+   Global list — filter by status / type /
+   date range / assignee / overdue etc.
+───────────────────────────────────────── */
+export async function listFollowUps(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const {
+      status,           // PENDING | DONE | MISSED | RESCHEDULED
+      type,             // CALL | DEMO | MEETING | ...
+      range,            // today | tomorrow | week | overdue | custom
+      fromDate,
+      toDate,
+      assignedToAccountId,
+      assignedToTeamId,
+      leadId,
+      sortBy = "scheduledAt",   // scheduledAt | createdAt
+      sortOrder = "asc",
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string>;
+
+    const pageNumber = Math.max(Number(page), 1);
+    const pageSize = Math.min(Number(limit), 100);
+    const skip = (pageNumber - 1) * pageSize;
+
+    const now = new Date();
+
+    /* ── where ── */
+    const where: any = {};
+
+    if (leadId) where.leadId = leadId;
+    if (status) where.status = status;
+    if (type) where.type = type;
+
+    // ── date range shortcuts ──────────────────────────────────────────
+    if (range === "today") {
+      const start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(now);
+      end.setHours(23, 59, 59, 999);
+      where.scheduledAt = { gte: start, lte: end };
+    } else if (range === "tomorrow") {
+      const start = new Date(now);
+      start.setDate(start.getDate() + 1);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(start);
+      end.setHours(23, 59, 59, 999);
+      where.scheduledAt = { gte: start, lte: end };
+    } else if (range === "week") {
+      const start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(now);
+      end.setDate(end.getDate() + 7);
+      end.setHours(23, 59, 59, 999);
+      where.scheduledAt = { gte: start, lte: end };
+    } else if (range === "overdue") {
+      where.status = "PENDING";
+      where.scheduledAt = { lt: now };
+    } else if (range === "custom") {
+      where.scheduledAt = {};
+      if (fromDate) where.scheduledAt.gte = new Date(fromDate);
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setHours(23, 59, 59, 999);
+        where.scheduledAt.lte = end;
+      }
+    }
+
+    // ── filter by lead's assignee ─────────────────────────────────────
+    if (assignedToAccountId || assignedToTeamId) {
+      where.lead = {
+        assignments: {
+          some: {
+            isActive: true,
+            ...(assignedToAccountId ? { accountId: assignedToAccountId } : {}),
+            ...(assignedToTeamId ? { teamId: assignedToTeamId } : {}),
+          },
+        },
+      };
+    }
+
+    /* ── orderBy ── */
+    const validSortFields: Record<string, boolean> = {
+      scheduledAt: true,
+      createdAt: true,
+      doneAt: true,
+    };
+    const safeSortBy = validSortFields[sortBy] ? sortBy : "scheduledAt";
+    const safeOrder = sortOrder === "desc" ? "desc" : "asc";
+    const orderBy = [{ [safeSortBy]: safeOrder }];
+
+    /* ── query ── */
+    const [total, followUps] = await Promise.all([
+      prisma.leadFollowUp.count({ where }),
+      prisma.leadFollowUp.findMany({
+        where,
+        orderBy,
+        skip,
+        take: pageSize,
+        include: {
+          lead: {
+            select: {
+              id: true,
+              customerName: true,
+              mobileNumber: true,
+              productTitle: true,
+              status: true,
+              assignments: {
+                where: { isActive: true },
+                select: {
+                  account: {
+                    select: { id: true, firstName: true, lastName: true },
+                  },
+                  team: { select: { id: true, name: true } },
+                },
+              },
+            },
+          },
+          createdByAcc: {
+            select: { id: true, firstName: true, lastName: true },
+          },
+          doneByAcc: {
+            select: { id: true, firstName: true, lastName: true },
+          },
+        },
+      }),
+    ]);
+
+    return sendSuccessResponse(res, 200, "Follow-ups fetched", {
+      data: followUps,
+      meta: {
+        page: pageNumber,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+        hasNext: pageNumber * pageSize < total,
+        hasPrev: pageNumber > 1,
+      },
+    });
+  } catch (err: any) {
+    console.error("List follow-ups error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch follow-ups",
+    );
+  }
+}
+
+/* ─────────────────────────────────────────
+   DELETE /leads/:leadId/follow-ups/:id
+   Only PENDING follow-ups can be deleted
+───────────────────────────────────────── */
+export async function deleteFollowUp(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { leadId, id } = req.params;
+
+    const existing = await prisma.leadFollowUp.findFirst({
+      where: { id, leadId },
+    });
+    if (!existing) return sendErrorResponse(res, 404, "Follow-up not found");
+    if (existing.status !== "PENDING")
+      return sendErrorResponse(
+        res,
+        400,
+        "Only PENDING follow-ups can be deleted",
+      );
+
+    await prisma.$transaction(async (tx) => {
+      await tx.leadFollowUp.delete({ where: { id } });
+
+      await tx.lead.update({
+        where: { id: leadId },
+        data: { followUpCount: { decrement: 1 } },
+      });
+
+      await syncLeadFollowUpAggregates(tx, leadId);
+
+      await tx.leadActivityLog.create({
+        data: {
+          leadId,
+          action: "FOLLOW_UP_SCHEDULED", // log deletion in meta
+          performedBy: accountId,
+          meta: {
+            followUpId: id,
+            action: "DELETED",
+            scheduledAt: existing.scheduledAt,
+          },
+        },
+      });
+    });
+
+    return sendSuccessResponse(res, 200, "Follow-up deleted");
+  } catch (err: any) {
+    console.error("Delete follow-up error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to delete follow-up",
+    );
+  }
+}

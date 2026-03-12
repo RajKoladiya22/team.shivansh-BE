@@ -15,6 +15,11 @@ import {
   getMyActiveWork,
   createMyLead,
   getLeadValueStatsUser,
+  createFollowUp,
+  updateFollowUp,
+  getLeadFollowUps,
+  listFollowUps,
+  deleteFollowUp,
 } from "../../controller/user/lead.controller";
 
 const router = Router();
@@ -34,5 +39,11 @@ router.post("/leads/work/stop", requireAuth, stopLeadWork);
 router.get("/leads/work/current", requireAuth, getMyActiveWork);
 router.get("/leads/my/stats/status", requireAuth, getMyLeadStatusStats);
 router.get("/leads/stats/value", requireAuth, getLeadValueStatsUser);
+
+router.post("/leads/:leadId/follow-ups", requireAuth, createFollowUp);
+router.patch("/leads/:leadId/follow-ups/:id", requireAuth, updateFollowUp);
+router.get("/leads/:leadId/follow-ups", requireAuth, getLeadFollowUps);
+router.get("/leads/follow-ups", requireAuth, listFollowUps);
+router.delete("/leads/:leadId/follow-ups/:id", requireAuth, deleteFollowUp);
 
 export default router;
