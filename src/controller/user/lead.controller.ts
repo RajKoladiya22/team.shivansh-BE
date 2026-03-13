@@ -409,6 +409,11 @@ export async function listMyLeads(req: Request, res: Response) {
       demoStatus,
       page = "1",
       limit = "20",
+      followUpStatus,       // PENDING | DONE | MISSED | RESCHEDULED
+      followUpType,         // CALL | DEMO | MEETING | VISIT | WHATSAPP | OTHER
+      followUpRange,        // today | tomorrow | week | overdue | upcoming | custom
+      followUpFromDate,
+      followUpToDate,
     } = req.query as Record<string, string>;
 
     const pageNumber = Math.max(Number(page), 1);
@@ -543,6 +548,18 @@ export async function listMyLeads(req: Request, res: Response) {
               mobile: true,
               customerCompanyName: true,
               products: true,
+            },
+          },
+          followUps: {
+            where: { status: "PENDING" },
+            orderBy: { scheduledAt: "asc" },
+            take: 1,
+            select: {
+              id: true,
+              type: true,
+              status: true,
+              scheduledAt: true,
+              remark: true,
             },
           },
         },

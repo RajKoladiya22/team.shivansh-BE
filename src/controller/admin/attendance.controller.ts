@@ -30,8 +30,8 @@ function getDayName(date: Date): string {
 
 /** Derive AttendanceStatus from worked minutes */
 function deriveStatus(minutes: number): AttendanceStatus {
-  if (minutes >= 420) return AttendanceStatus.PRESENT;
-  if (minutes >= 240) return AttendanceStatus.HALF_DAY;
+  if (minutes >= 300) return AttendanceStatus.PRESENT; // 5h
+  if (minutes >= 240) return AttendanceStatus.HALF_DAY; // 4h
   return AttendanceStatus.ABSENT;
 }
 

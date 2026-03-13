@@ -183,7 +183,11 @@ export async function createLeadAdmin(req: Request, res: Response) {
     });
 
     // Create lead + initial assignment + CREATED activity in single transaction
-    const { lead, recipients, followUps: createdFollowUps } = await prisma.$transaction(async (tx) => {
+    const {
+      lead,
+      recipients,
+      followUps: createdFollowUps,
+    } = await prisma.$transaction(async (tx) => {
       // 1️⃣ find existing customer first
       let customer = await tx.customer.findUnique({
         where: { normalizedMobile },
@@ -676,11 +680,18 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       demoStatus,
       page = "1",
       limit = "20",
+      followUpStatus, // PENDING | DONE | MISSED | RESCHEDULED
+      followUpType, // CALL | DEMO | MEETING | VISIT | WHATSAPP | OTHER
+      followUpRange, // today | tomorrow | week | overdue | upcoming | custom
+      followUpFromDate,
+      followUpToDate,
     } = req.query as Record<string, string>;
 
     const pageNumber = Math.max(Number(page), 1);
     const pageSize = Math.min(Number(limit), 100);
     const skip = (pageNumber - 1) * pageSize;
+
+    console.log("\n\n\n\n\n\n\n req.query", req.query);
 
     /* -------------------------
        WHERE (index-friendly)
@@ -779,6 +790,83 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       };
     }
 
+    /* -------------------------------------------------------
+       ✅ FOLLOW-UP FILTERS
+       Filters leads that HAVE a matching follow-up
+    ------------------------------------------------------- */
+    if (
+      followUpStatus ||
+      followUpType ||
+      followUpRange ||
+      followUpFromDate ||
+      followUpToDate
+    ) {
+      const followUpWhere: any = {};
+
+      // status filter
+      if (followUpStatus) followUpWhere.status = followUpStatus;
+
+      // type filter
+      if (followUpType) followUpWhere.type = followUpType;
+
+      // date range filter
+      if (followUpRange) {
+        const now = new Date();
+
+        if (followUpRange === "today") {
+          const start = new Date(now);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(now);
+          end.setHours(23, 59, 59, 999);
+          followUpWhere.scheduledAt = { gte: start, lte: end };
+        } else if (followUpRange === "tomorrow") {
+          const start = new Date(now);
+          start.setDate(start.getDate() + 1);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(start);
+          end.setHours(23, 59, 59, 999);
+          followUpWhere.scheduledAt = { gte: start, lte: end };
+        } else if (followUpRange === "week") {
+          const start = new Date(now);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(now);
+          end.setDate(end.getDate() + 7);
+          end.setHours(23, 59, 59, 999);
+          followUpWhere.scheduledAt = { gte: start, lte: end };
+        } else if (followUpRange === "overdue") {
+          followUpWhere.status = "PENDING";
+          followUpWhere.scheduledAt = { lt: now };
+        } else if (followUpRange === "upcoming") {
+          followUpWhere.status = "PENDING";
+          followUpWhere.scheduledAt = { gt: now };
+        } else if (followUpRange === "custom") {
+          followUpWhere.scheduledAt = {};
+          if (followUpFromDate)
+            followUpWhere.scheduledAt.gte = new Date(followUpFromDate);
+          if (followUpToDate) {
+            const end = new Date(followUpToDate);
+            end.setHours(23, 59, 59, 999);
+            followUpWhere.scheduledAt.lte = end;
+          }
+        }
+      } else if (followUpFromDate || followUpToDate) {
+        // custom range without followUpRange=custom
+        followUpWhere.scheduledAt = {};
+        if (followUpFromDate)
+          followUpWhere.scheduledAt.gte = new Date(followUpFromDate);
+        if (followUpToDate) {
+          const end = new Date(followUpToDate);
+          end.setHours(23, 59, 59, 999);
+          followUpWhere.scheduledAt.lte = end;
+        }
+      }
+
+      // attach to lead where: lead must have at least one matching follow-up
+      where.followUps = { some: followUpWhere };
+    }
+
+    /* ------------------------------------------------------- */
+
     /* -------------------------
        DB ORDERING (NO JS SORT)
        Priority:
@@ -794,6 +882,8 @@ export async function listLeadsAdmin(req: Request, res: Response) {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+
+    console.log("\n where", JSON.stringify(where), "\n\n" );
 
     /* -------------------------
        QUERY (minimal payload)
@@ -823,6 +913,19 @@ export async function listLeadsAdmin(req: Request, res: Response) {
           totalWorkSeconds: true,
           createdAt: true,
           updatedAt: true,
+
+          followUps: {
+            where: { status: "PENDING" },
+            orderBy: { scheduledAt: "asc" },
+            take: 1,
+            select: {
+              id: true,
+              type: true,
+              status: true,
+              scheduledAt: true,
+              remark: true,
+            },
+          },
 
           assignments: {
             where: { isActive: true },
@@ -877,6 +980,10 @@ export async function listLeadsAdmin(req: Request, res: Response) {
         },
       }),
     ]);
+
+    
+    console.log("\n Leads Response----> ", leads);
+    
 
     /* -------------------------
        RESPONSE
@@ -1341,8 +1448,6 @@ export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
     );
   }
 }
-
-
 
 /**
  * GET /admin/leads/:id/activity
@@ -2396,7 +2501,11 @@ export async function createFollowUp(req: Request, res: Response) {
     if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
 
     const { leadId } = req.params;
-    const { type = "CALL", scheduledAt, remark } = req.body as {
+    const {
+      type = "CALL",
+      scheduledAt,
+      remark,
+    } = req.body as {
       type?: "CALL" | "DEMO" | "MEETING" | "VISIT" | "WHATSAPP" | "OTHER";
       scheduledAt: string;
       remark?: string;
@@ -2450,9 +2559,7 @@ export async function createFollowUp(req: Request, res: Response) {
 
     // socket
     try {
-      getIo()
-        .to("leads:admin")
-        .emit("followup:created", { leadId, followUp });
+      getIo().to("leads:admin").emit("followup:created", { leadId, followUp });
     } catch {
       console.warn("Socket emit skipped");
     }
@@ -2479,8 +2586,8 @@ export async function updateFollowUp(req: Request, res: Response) {
 
     const { leadId, id } = req.params;
     const {
-      action,        // "done" | "reschedule" | "missed" | "update"
-      scheduledAt,   // required when action = "reschedule"
+      action, // "done" | "reschedule" | "missed" | "update"
+      scheduledAt, // required when action = "reschedule"
       remark,
       type,
     } = req.body as {
@@ -2673,15 +2780,15 @@ export async function listFollowUps(req: Request, res: Response) {
     if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
 
     const {
-      status,           // PENDING | DONE | MISSED | RESCHEDULED
-      type,             // CALL | DEMO | MEETING | ...
-      range,            // today | tomorrow | week | overdue | custom
+      status, // PENDING | DONE | MISSED | RESCHEDULED
+      type, // CALL | DEMO | MEETING | ...
+      range, // today | tomorrow | week | overdue | custom
       fromDate,
       toDate,
       assignedToAccountId,
       assignedToTeamId,
       leadId,
-      sortBy = "scheduledAt",   // scheduledAt | createdAt
+      sortBy = "scheduledAt", // scheduledAt | createdAt
       sortOrder = "asc",
       page = "1",
       limit = "20",

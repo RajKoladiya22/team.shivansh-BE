@@ -20,7 +20,6 @@ import {
    INTERNAL HELPERS
 ═══════════════════════════════════════════════════════════════ */
 
-
 /** Strip time — midnight 00:00:00 in LOCAL server timezone */
 function toDateOnly(date: Date = new Date()): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -32,8 +31,8 @@ function getDayName(date: Date): string {
 
 /** Derive AttendanceStatus from worked minutes */
 function deriveStatus(minutes: number): AttendanceStatus {
-  if (minutes >= 420) return AttendanceStatus.PRESENT;
-  if (minutes >= 240) return AttendanceStatus.HALF_DAY;
+  if (minutes >= 300) return AttendanceStatus.PRESENT; // 5h
+  if (minutes >= 240) return AttendanceStatus.HALF_DAY; // 4h
   return AttendanceStatus.ABSENT;
 }
 
@@ -316,6 +315,9 @@ export async function userCheckOut(req: Request, res: Response) {
 
       /* 5. Update log */
       const newTotal = log.totalWorkMinutes + sessionMinutes;
+      console.log("\n\n\n\n\n\n newTotal---> ", newTotal);
+      console.log("\n deriveStatus---> ", deriveStatus(newTotal));
+
       const updatedLog = await tx.attendanceLog.update({
         where: { id: log.id },
         data: {
