@@ -1,4 +1,5 @@
 // src/controller/user/attendance.controller.ts
+
 import { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import { prisma } from "../../config/database.config";
@@ -740,8 +741,17 @@ export async function userBreakStart(req: Request, res: Response) {
         data: { hasOpenBreak: true } as any,
       });
 
+      await tx.account.update({
+        where: { id: accountId },
+        data: { isAvailable: false, isBusy: false },
+      });
+
       return { log: updatedLog, breakLog, breakSessionId };
     });
+
+    // console.log("\n\n\n\n\n\n\n result--->", result);
+    // console.log("\n breakSessionId--->", breakSessionId);
+    // console.log("\n breakType--->", breakType);
 
     emit("attendance:admin", "attendance:break_start", {
       accountId,
@@ -845,6 +855,11 @@ export async function userBreakEnd(req: Request, res: Response) {
         } as any,
       });
 
+      await tx.account.update({
+        where: { id: accountId },
+        data: { isAvailable: true },
+      });
+
       return { log: updatedLog, breakEndLog, breakMinutes };
     });
 
@@ -855,8 +870,6 @@ export async function userBreakEnd(req: Request, res: Response) {
     });
 
     try {
-      console.log("\n\n\n[break-end] Emitting busy:changed — accountId:", accountId);
-      
       getIo().emit("busy:changed", {
         accountId: accountId,
         isBusy: false,
