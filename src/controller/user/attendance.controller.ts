@@ -20,6 +20,7 @@ import {
    INTERNAL HELPERS
 ═══════════════════════════════════════════════════════════════ */
 
+
 /** Strip time — midnight 00:00:00 in LOCAL server timezone */
 function toDateOnly(date: Date = new Date()): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
