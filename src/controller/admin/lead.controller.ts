@@ -691,7 +691,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
     const pageSize = Math.min(Number(limit), 100);
     const skip = (pageNumber - 1) * pageSize;
 
-    console.log("\n\n\n\n\n\n\n req.query", req.query);
+    // console.log("\n\n\n\n\n\n\n req.query", req.query);
 
     /* -------------------------
        WHERE (index-friendly)
@@ -883,7 +883,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    console.log("\n where", JSON.stringify(where), "\n\n" );
+    // console.log("\n where", JSON.stringify(where), "\n\n" );
 
     /* -------------------------
        QUERY (minimal payload)
@@ -982,7 +982,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
     ]);
 
     
-    console.log("\n Leads Response----> ", leads);
+    // console.log("\n Leads Response----> ", leads);
     
 
     /* -------------------------
