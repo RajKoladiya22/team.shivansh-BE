@@ -1896,6 +1896,7 @@ export async function getLeadValueStatsUser(req: Request, res: Response) {
     const statuses = [
       "PENDING",
       "IN_PROGRESS",
+      "FOLLOW_UPS",
       "DEMO_DONE",
       "INTERESTED",
       "CONVERTED",

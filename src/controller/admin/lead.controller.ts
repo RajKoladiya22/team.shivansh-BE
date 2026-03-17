@@ -2198,6 +2198,7 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
     const statuses: Lead_Status[] = [
       "PENDING",
       "IN_PROGRESS",
+      "FOLLOW_UPS",
       "DEMO_DONE",
       "INTERESTED",
       "CONVERTED",
