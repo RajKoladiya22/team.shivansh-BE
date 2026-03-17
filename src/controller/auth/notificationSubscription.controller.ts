@@ -19,7 +19,7 @@ export async function subscribeNotifications(req: Request, res: Response) {
     ) {
       return res.status(400).json({ message: "Invalid push subscription" });
     }
-    let a =10;
+    let a = 10;
 
     // USER → ACCOUNT
     const user = await prisma.user.findUnique({
@@ -121,5 +121,53 @@ export async function getNotificationSubscriptionStatus(
   } catch (err) {
     console.error("getNotificationSubscriptionStatus error:", err);
     return res.status(500).json({ message: "Failed to fetch status" });
+  }
+}
+
+/**
+ * DELETE /api/notifications/subscription
+ * Hard delete a push subscription (per endpoint or all for user)
+ */
+export async function deleteNotificationSubscription(
+  req: Request,
+  res: Response,
+) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return res.status(401).json({ message: "Unauthorized" });
+
+    const { endpoint, clearAll } = req.body;
+
+    // 🔹 Case 1: delete all subscriptions for this user
+    if (clearAll) {
+      await prisma.notificationSubscription.deleteMany({
+        where: { accountId: accountId },
+      });
+
+      return res.json({
+        message: "All subscriptions deleted successfully",
+      });
+    }
+
+    // 🔹 Case 2: delete specific endpoint
+    if (!endpoint) {
+      return res.status(400).json({
+        message: "Endpoint required (or use clearAll=true)",
+      });
+    }
+
+    await prisma.notificationSubscription.deleteMany({
+      where: {
+        endpoint,
+        accountId: accountId, // safety
+      },
+    });
+
+    return res.json({
+      message: "Subscription deleted successfully",
+    });
+  } catch (err) {
+    console.error("deleteNotificationSubscription error:", err);
+    return res.status(500).json({ message: "Failed to delete subscription" });
   }
 }

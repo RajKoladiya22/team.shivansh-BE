@@ -1411,6 +1411,10 @@ export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
       select: {
         id: true,
         isWorking: true,
+        customerId: true,
+        product: true,
+        productTitle: true,
+        cost: true,
       },
     });
 
@@ -1441,6 +1445,51 @@ export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
       await tx.leadHelper.deleteMany({
         where: { leadId: id },
       });
+
+      // --- Inside transaction (add BEFORE deleting lead) ---
+
+      // 🧹 Remove this lead's product from customer
+      if (existing.customerId) {
+        const customer = await tx.customer.findUnique({
+          where: { id: existing.customerId },
+          select: { id: true, products: true },
+        });
+
+        const customerProducts: any = customer?.products ?? {
+          active: [],
+          history: [],
+        };
+        if (
+          Array.isArray(customerProducts.active) &&
+          customerProducts.active.length
+        ) {
+          const oldTitle =
+            (existing.product as any)?.title ?? existing.productTitle;
+          const oldCost = existing.cost;
+
+          const filteredActive = customerProducts.active.filter((p: any) => {
+            const titleMatch = oldTitle && p.name === oldTitle;
+            const costMatch =
+              oldCost !== undefined &&
+              oldCost !== null &&
+              String(p.price) === String(oldCost);
+
+            // ❌ remove only matching product
+            return !(titleMatch || costMatch);
+          });
+
+          await tx.customer.update({
+            where: { id: existing.customerId },
+            data: {
+              products: {
+                ...customerProducts,
+                active: filteredActive,
+              },
+              updatedAt: new Date(),
+            },
+          });
+        }
+      }
 
       // 4️⃣ Disconnect M2M accounts (if any)
       await tx.lead.update({
