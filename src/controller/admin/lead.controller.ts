@@ -917,7 +917,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
           followUps: {
             where: { status: "PENDING" },
             orderBy: { scheduledAt: "asc" },
-            take: 1,
+            // take: 1,
             select: {
               id: true,
               type: true,
