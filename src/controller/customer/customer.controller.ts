@@ -223,6 +223,36 @@ export async function getCustomerDetails(req: Request, res: Response) {
             closedAt: true,
           },
         },
+        quotations: {
+          where: { deletedAt: null },
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            quotationNumber: true,
+            status: true,
+            channel: true,
+            grandTotal: true,
+            subtotal: true,
+            totalDiscount: true,
+            totalTax: true,
+            currency: true,
+            subject: true,
+            quotationDate: true,
+            validUntil: true,
+            sentAt: true,
+            convertedAt: true,
+            version: true,
+            lineItems: true,
+            createdAt: true,
+            createdByAcc: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        },
         createdByAcc: {
           select: {
             id: true,
