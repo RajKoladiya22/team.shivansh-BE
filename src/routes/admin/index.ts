@@ -15,6 +15,7 @@ import quotationRoutes from "./quotation.routes";
 // import tasksRoutes from "./task.routes"
 
 // base path for each module
+router.use("/quotations", quotationRoutes);
 router.use("/", leadRoutes);
 router.use("/", employeesRouter);
 router.use("/", registerRouter);
@@ -22,7 +23,7 @@ router.use("/", teamRouter);
 router.use("/salary", salaryRoutes);
 router.use("/", busyLogsRoutes);
 router.use("/attendance", attendanceRoutes);
-router.use("/quotations", quotationRoutes);
+
 // router.use("/holiday", holidayRoutes);
 // router.use("/pipeline-templates", pipelineRouter);
 // router.use("/tasks", tasksRoutes);
