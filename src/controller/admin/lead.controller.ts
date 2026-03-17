@@ -500,6 +500,8 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         demoDoneAt: true,
         demoCount: true,
         demoMeta: true,
+        cost: true,
+        remark: true,
         assignments: {
           where: { isActive: true },
           select: { accountId: true, teamId: true },
@@ -531,17 +533,6 @@ export async function updateLeadAdmin(req: Request, res: Response) {
     // -------------------------
     // Demo Reschedule Handling
     // -------------------------
-    // if (data.demoScheduledAt) {
-    //   const newDate = new Date(data.demoScheduledAt);
-
-    //   if (
-    //     !existing.demoScheduledAt ||
-    //     existing.demoScheduledAt.getTime() !== newDate.getTime()
-    //   ) {
-    //     data.demoCount = { increment: 1 };
-    //     data.demoRescheduledAt = new Date();
-    //   }
-    // }
     if (data.demoScheduledAt) {
       const newDate = new Date(data.demoScheduledAt);
 
@@ -599,20 +590,64 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         },
       });
 
-      await tx.leadActivityLog.create({
-        data: {
-          leadId: id,
-          action: "UPDATED",
-          performedBy: performerAccountId,
-          meta: {
-            fromState: existing,
-            toState: lead,
-          },
-        },
+      // await tx.leadActivityLog.create({
+      //   data: {
+      //     leadId: id,
+      //     action: "UPDATED",
+      //     performedBy: performerAccountId,
+      //     meta: {
+      //       fromState: existing,
+      //       toState: lead,
+      //     },
+      //   },
+      // });
+
+      // --- Replace diff calculation ---
+      const diff: Record<string, any> = {};
+      Object.keys(data).forEach((key) => {
+        const oldVal = (existing as any)[key] ?? null;
+        const newVal = data[key];
+
+        // compare properly (handles object/date)
+        if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
+          diff[key] = {
+            from: oldVal,
+            to: newVal,
+          };
+        }
       });
+
+      // --- Replace activity log creation ---
+      if (Object.keys(diff).length > 0) {
+        await tx.leadActivityLog.create({
+          data: {
+            leadId: id,
+            action: "UPDATED",
+            performedBy: performerAccountId,
+            meta: {
+              fromState: Object.fromEntries(
+                Object.entries(diff).map(([k, v]) => [k, v.from]),
+              ),
+              toState: Object.fromEntries(
+                Object.entries(diff).map(([k, v]) => [k, v.to]),
+              ),
+            },
+          },
+        });
+      }
 
       return lead;
     });
+
+    // console.log(
+    //   "\n\n\n\n\n\n\n\n\n\n\n\n\\n\n\n\n",
+    //   {
+    //     fromState: existing,
+    //     toState: updated,
+    //   },
+
+    //   "\n\n\n",
+    // );
 
     // -------------------------
     // Resolve recipients
@@ -982,9 +1017,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       }),
     ]);
 
-    
     // console.log("\n Leads Response----> ", leads);
-    
 
     /* -------------------------
        RESPONSE
@@ -2696,10 +2729,11 @@ export async function updateFollowUp(req: Request, res: Response) {
           action: activityAction as any,
           performedBy: accountId,
           meta: {
-            followUpId: id,
             action,
-            newFollowUpId: newFollowUp?.id ?? null,
             rescheduledTo: newFollowUp?.scheduledAt ?? null,
+            remarkTo: newFollowUp?.remark ?? null,
+            rescheduledFrom: existing?.scheduledAt ?? null,
+            remarkFrom: existing?.remark ?? null,
           },
         },
       });

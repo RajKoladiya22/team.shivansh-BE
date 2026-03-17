@@ -2249,10 +2249,11 @@ export async function updateFollowUp(req: Request, res: Response) {
           action: activityAction as any,
           performedBy: accountId,
           meta: {
-            followUpId: id,
             action,
-            newFollowUpId: newFollowUp?.id ?? null,
             rescheduledTo: newFollowUp?.scheduledAt ?? null,
+            remarkTo: newFollowUp?.remark ?? null,
+            rescheduledFrom: existing?.scheduledAt ?? null,
+            remarkFrom: existing?.remark ?? null,
           },
         },
       });

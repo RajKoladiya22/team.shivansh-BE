@@ -195,6 +195,7 @@ export async function triggerAssignmentNotification({
           JSON.stringify({
             title: "New Lead Assigned",
             body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
+            actionUrl: `/user/leads/${lead.id}`,
             data: {
               actionUrl: `/user/leads/${lead.id}`,
               payload: {
@@ -324,6 +325,7 @@ export async function triggerAdminRegistrationNotification({
           JSON.stringify({
             title: "New employee registration request",
             body: `${firstName} ${lastName} requested access`,
+            actionUrl: `/employee/requests`,
             data: {
               actionUrl: `/employee/requests`,
             },
@@ -504,6 +506,7 @@ export async function triggerPublicLeadNotification({
           JSON.stringify({
             title,
             body,
+            actionUrl: `/admin/leads/${lead.id}`,
             data: { actionUrl: `/admin/leads/${lead.id}` },
           }),
         );
