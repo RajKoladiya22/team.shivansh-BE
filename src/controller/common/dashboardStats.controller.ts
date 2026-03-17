@@ -188,7 +188,7 @@ export async function getDashboardStats(req: Request, res: Response) {
     ]);
 
     /* ─── Normalize lead status counts ─── */
-    const STATUS_LIST = ["PENDING", "IN_PROGRESS", "DEMO_DONE", "INTERESTED", "CONVERTED", "CLOSED"] as const;
+    const STATUS_LIST = ["PENDING", "IN_PROGRESS", "FOLLOW_UPS", "DEMO_DONE", "INTERESTED", "CONVERTED", "CLOSED"] as const;
 
     const leadStatusCounts = STATUS_LIST.reduce(
       (acc, status) => {
