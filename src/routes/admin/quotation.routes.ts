@@ -25,7 +25,7 @@ import {
 const router = Router();
 
 // All admin quotation routes require authentication
-router.use(requireAuth, requireRole("ADMIN", "SALES"));
+router.use(requireAuth, requireRole("ADMIN", "SALES", "MARKETING"));
 
 /* ─────────────────────────────────────────────
    STATS  (before /:id to avoid param collision)
