@@ -765,6 +765,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
     if (search) {
       where.OR = [
         { customerName: { contains: search, mode: "insensitive" } },
+        { customerCompanyName: { contains: search, mode: "insensitive" } },
         { mobileNumber: { contains: search } },
         { productTitle: { contains: search, mode: "insensitive" } },
       ];
