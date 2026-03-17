@@ -373,15 +373,10 @@ export async function createMyLead(req: Request, res: Response) {
       console.warn("Socket emit skipped");
     }
 
-    return sendSuccessResponse(
-      res,
-      201,
-      "Lead created and assigned to you",
-      {
-  ...newLead,
-  followUps: createdFollowUps,
-},
-    );
+    return sendSuccessResponse(res, 201, "Lead created and assigned to you", {
+      ...newLead,
+      followUps: createdFollowUps,
+    });
   } catch (err: any) {
     console.error("Create my lead error:", err);
     return sendErrorResponse(res, 500, err?.message ?? "Failed to create lead");
@@ -409,9 +404,9 @@ export async function listMyLeads(req: Request, res: Response) {
       demoStatus,
       page = "1",
       limit = "20",
-      followUpStatus,       // PENDING | DONE | MISSED | RESCHEDULED
-      followUpType,         // CALL | DEMO | MEETING | VISIT | WHATSAPP | OTHER
-      followUpRange,        // today | tomorrow | week | overdue | upcoming | custom
+      followUpStatus, // PENDING | DONE | MISSED | RESCHEDULED
+      followUpType, // CALL | DEMO | MEETING | VISIT | WHATSAPP | OTHER
+      followUpRange, // today | tomorrow | week | overdue | upcoming | custom
       followUpFromDate,
       followUpToDate,
     } = req.query as Record<string, string>;
@@ -494,6 +489,81 @@ export async function listMyLeads(req: Request, res: Response) {
       if (demoStatus === "done") {
         where.demoDoneAt = { not: null };
       }
+    }
+
+    /* -------------------------------------------------------
+       ✅ FOLLOW-UP FILTERS
+       Filters leads that HAVE a matching follow-up
+    ------------------------------------------------------- */
+    if (
+      followUpStatus ||
+      followUpType ||
+      followUpRange ||
+      followUpFromDate ||
+      followUpToDate
+    ) {
+      const followUpWhere: any = {};
+
+      // status filter
+      if (followUpStatus) followUpWhere.status = followUpStatus;
+
+      // type filter
+      if (followUpType) followUpWhere.type = followUpType;
+
+      // date range filter
+      if (followUpRange) {
+        const now = new Date();
+
+        if (followUpRange === "today") {
+          const start = new Date(now);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(now);
+          end.setHours(23, 59, 59, 999);
+          followUpWhere.scheduledAt = { gte: start, lte: end };
+        } else if (followUpRange === "tomorrow") {
+          const start = new Date(now);
+          start.setDate(start.getDate() + 1);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(start);
+          end.setHours(23, 59, 59, 999);
+          followUpWhere.scheduledAt = { gte: start, lte: end };
+        } else if (followUpRange === "week") {
+          const start = new Date(now);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(now);
+          end.setDate(end.getDate() + 7);
+          end.setHours(23, 59, 59, 999);
+          followUpWhere.scheduledAt = { gte: start, lte: end };
+        } else if (followUpRange === "overdue") {
+          followUpWhere.status = "PENDING";
+          followUpWhere.scheduledAt = { lt: now };
+        } else if (followUpRange === "upcoming") {
+          followUpWhere.status = "PENDING";
+          followUpWhere.scheduledAt = { gt: now };
+        } else if (followUpRange === "custom") {
+          followUpWhere.scheduledAt = {};
+          if (followUpFromDate)
+            followUpWhere.scheduledAt.gte = new Date(followUpFromDate);
+          if (followUpToDate) {
+            const end = new Date(followUpToDate);
+            end.setHours(23, 59, 59, 999);
+            followUpWhere.scheduledAt.lte = end;
+          }
+        }
+      } else if (followUpFromDate || followUpToDate) {
+        // custom range without followUpRange=custom
+        followUpWhere.scheduledAt = {};
+        if (followUpFromDate)
+          followUpWhere.scheduledAt.gte = new Date(followUpFromDate);
+        if (followUpToDate) {
+          const end = new Date(followUpToDate);
+          end.setHours(23, 59, 59, 999);
+          followUpWhere.scheduledAt.lte = end;
+        }
+      }
+
+      // attach to lead where: lead must have at least one matching follow-up
+      where.followUps = { some: followUpWhere };
     }
 
     const orderBy = [
@@ -1942,7 +2012,6 @@ export async function getLeadValueStatsUser(req: Request, res: Response) {
   }
 }
 
-
 /* ─────────────────────────────────────────
     FOLLOW UPS
 ───────────────────────────────────────── */
@@ -1987,7 +2056,11 @@ export async function createFollowUp(req: Request, res: Response) {
     if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
 
     const { leadId } = req.params;
-    const { type = "CALL", scheduledAt, remark } = req.body as {
+    const {
+      type = "CALL",
+      scheduledAt,
+      remark,
+    } = req.body as {
       type?: "CALL" | "DEMO" | "MEETING" | "VISIT" | "WHATSAPP" | "OTHER";
       scheduledAt: string;
       remark?: string;
@@ -2041,9 +2114,7 @@ export async function createFollowUp(req: Request, res: Response) {
 
     // socket
     try {
-      getIo()
-        .to("leads:admin")
-        .emit("followup:created", { leadId, followUp });
+      getIo().to("leads:admin").emit("followup:created", { leadId, followUp });
     } catch {
       console.warn("Socket emit skipped");
     }
@@ -2070,8 +2141,8 @@ export async function updateFollowUp(req: Request, res: Response) {
 
     const { leadId, id } = req.params;
     const {
-      action,        // "done" | "reschedule" | "missed" | "update"
-      scheduledAt,   // required when action = "reschedule"
+      action, // "done" | "reschedule" | "missed" | "update"
+      scheduledAt, // required when action = "reschedule"
       remark,
       type,
     } = req.body as {
@@ -2264,15 +2335,15 @@ export async function listFollowUps(req: Request, res: Response) {
     if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
 
     const {
-      status,           // PENDING | DONE | MISSED | RESCHEDULED
-      type,             // CALL | DEMO | MEETING | ...
-      range,            // today | tomorrow | week | overdue | custom
+      status, // PENDING | DONE | MISSED | RESCHEDULED
+      type, // CALL | DEMO | MEETING | ...
+      range, // today | tomorrow | week | overdue | custom
       fromDate,
       toDate,
       assignedToAccountId,
       assignedToTeamId,
       leadId,
-      sortBy = "scheduledAt",   // scheduledAt | createdAt
+      sortBy = "scheduledAt", // scheduledAt | createdAt
       sortOrder = "asc",
       page = "1",
       limit = "20",
