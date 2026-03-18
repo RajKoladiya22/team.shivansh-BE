@@ -177,6 +177,7 @@ export async function getCustomerList(req: Request, res: Response) {
           isActive: true,
           createdAt: true,
           _count: { select: { leads: true } },
+          leads : true
         },
       }),
       prisma.customer.count({ where }),

@@ -3,7 +3,7 @@
 import { getIo } from "../core/utils/socket";
 import { prisma } from "../config/database.config";
 import * as webpush from "web-push";
-import { sendWhatsAppNotification } from "./whatsapp";
+import { sendWhatsAppSmart } from "./whatsapp";
 
 type TriggerArgs = {
   leadId: string;
@@ -38,7 +38,7 @@ export async function triggerAssignmentNotification({
   assigneeTeamId = null,
 }: TriggerArgs) {
   try {
-    console.log("\n\nTriggering assignment notification for leadId:", leadId);
+    // console.log("\n\nTriggering assignment notification for leadId:", leadId);
 
     // 1. Fetch lead
     const lead = await prisma.lead.findUnique({
@@ -48,6 +48,8 @@ export async function triggerAssignmentNotification({
         customerName: true,
         productTitle: true,
         status: true,
+        cost: true,
+        remark: true,
         createdByAcc: {
           select: { firstName: true, lastName: true },
         },
@@ -76,23 +78,40 @@ export async function triggerAssignmentNotification({
     if (recipientAccountIds.length === 0) return;
 
     // WhatsApp notification to first recipient (best effort, outside transaction)
-    //     if (recipientAccountIds.length > 0) {
-    //       const assignee = await prisma.account.findUnique({
-    //         where: { id: recipientAccountIds[0] },
-    //         select: { contactPhone: true, firstName: true },
-    //       });
+//     if (recipientAccountIds.length > 0) {
+//       const assignee = await prisma.account.findUnique({
+//         where: { id: recipientAccountIds[0] },
+//         select: { contactPhone: true, firstName: true },
+//       });
 
-    //       if (assignee?.contactPhone) {
-    //         await sendWhatsAppNotification({
-    //           phoneNumber: assignee.contactPhone,
-    //           message: `New Lead Assigned:
-    // Customer: ${lead.customerName}
-    // Product: ${lead.productTitle ?? "-"}
-    // Status: ${lead.status}
-    // Assigned By: ${assignedBy}`,
-    //         });
-    //       }
-    //     }
+//       if (assignee?.contactPhone) {
+//         const message = `*New Lead*
+
+// *Customer Name:* ${lead.customerName}
+// *Mobile Number:* ${assignee.contactPhone}
+// *Product:* ${lead.productTitle ?? "-"}
+// *Cost:* - ${lead.cost ?? "-"}
+// *Remark:* -${lead.remark ?? "-"}
+
+// *Assigned By* - ${assignedBy}`;
+
+//         await sendWhatsAppSmart({
+//           phoneNumber: assignee.contactPhone,
+//           message: `*Lead*
+
+// *Customer Name:* ${lead.customerName}
+// *Mobile Number:* ${assignee.contactPhone}
+// *Product:* ${lead.productTitle ?? "-"}
+// *Cost:* 25000
+// *Remark:* call them to connect
+
+// *Assigned By* - ${assignedBy}`,
+
+//           templateName: "pract", // approved template
+//           // templateName: "new_lead_assigned",
+//         });
+//       }
+//     }
 
     // Step 3 — find existing by dedupeKey and update or create per recipient (dedupeKey is not a unique field in Prisma schema)
     const notifications = await Promise.all(

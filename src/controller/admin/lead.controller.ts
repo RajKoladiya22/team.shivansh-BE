@@ -111,6 +111,155 @@ function deriveLeadMeta(products: LeadProductItem[]) {
   return { productTitle, cost };
 }
 
+/**
+ * Syncs a product cost change across:
+ *  1. customer.products.active[].price
+ *  2. All DRAFT quotations linked to this lead (lineItems + financials recomputed)
+ *
+ * Call this INSIDE a transaction after updating lead.cost / lead.product.
+ */
+async function syncProductCostToEntities(
+  tx: any,
+  params: {
+    leadId: string;
+    customerId: string | null;
+    productId?: string | null;
+    productSlug?: string | null;
+    productTitle?: string | null;
+    oldTitle?: string | null; // previous title — fallback match in customer/quotation
+    newCost: number;
+  },
+) {
+  const {
+    leadId,
+    customerId,
+    productId,
+    productSlug,
+    productTitle,
+    oldTitle,
+    newCost,
+  } = params;
+
+  /* ── 1. Customer sync ─────────────────────────────────────────── */
+  if (customerId) {
+    const customer = await tx.customer.findUnique({
+      where: { id: customerId },
+      select: { id: true, products: true },
+    });
+
+    if (customer) {
+      const cp: any = customer.products ?? { active: [], history: [] };
+      if (!Array.isArray(cp.active)) cp.active = [];
+
+      const idx = cp.active.findIndex(
+        (p: any) =>
+          (productId && p.id === productId) ||
+          (productTitle && p.name === productTitle) ||
+          (oldTitle && p.name === oldTitle),
+      );
+
+      if (idx !== -1) {
+        cp.active[idx].price = newCost;
+        if (productTitle) cp.active[idx].name = productTitle;
+      }
+
+      await tx.customer.update({
+        where: { id: customerId },
+        data: { products: cp, updatedAt: new Date() },
+      });
+    }
+  }
+
+  /* ── 2. Quotation sync (DRAFT only) ───────────────────────────── */
+  const draftQuotations = await tx.quotation.findMany({
+    where: { leadId, status: "DRAFT" },
+    select: {
+      id: true,
+      lineItems: true,
+      extraDiscountType: true,
+      extraDiscountValue: true,
+    },
+  });
+
+  for (const q of draftQuotations) {
+    const items: any[] = Array.isArray(q.lineItems) ? q.lineItems : [];
+    let changed = false;
+
+    const updatedItems = items.map((item: any) => {
+      const matches =
+        (productId && item.productId === productId) ||
+        (productSlug && item.productSlug === productSlug) ||
+        (productTitle && item.name === productTitle) ||
+        (oldTitle && item.name === oldTitle);
+
+      if (!matches) return item;
+      changed = true;
+
+      // Recompute line totals with new basePrice
+      const qty = Math.max(Number(item.qty) || 1, 1);
+      const dv = Number(item.discountValue) || 0;
+      const tp = Number(item.taxPercent) || 0;
+
+      let dp = newCost;
+      if (item.discountType === "PERCENTAGE")
+        dp = newCost - (newCost * dv) / 100;
+      else if (item.discountType === "FLAT") dp = Math.max(newCost - dv, 0);
+
+      const taxable = dp * qty;
+      const taxAmount = item.taxType === "NONE" ? 0 : (taxable * tp) / 100;
+
+      return {
+        ...item,
+        basePrice: newCost,
+        discountedPrice: parseFloat(dp.toFixed(2)),
+        taxAmount: parseFloat(taxAmount.toFixed(2)),
+        totalPrice: parseFloat((taxable + taxAmount).toFixed(2)),
+      };
+    });
+
+    if (!changed) continue;
+
+    // Recompute quotation-level financials
+    let subtotal = 0,
+      totalDiscount = 0,
+      totalTax = 0;
+    for (const item of updatedItems) {
+      const qty = Math.max(Number(item.qty) || 1, 1);
+      const base = Number(item.basePrice) || 0;
+      const dv = Number(item.discountValue) || 0;
+      let dp = base;
+      if (item.discountType === "PERCENTAGE") dp = base - (base * dv) / 100;
+      else if (item.discountType === "FLAT") dp = Math.max(base - dv, 0);
+      subtotal += dp * qty;
+      totalDiscount += (base - dp) * qty;
+      totalTax += Number(item.taxAmount) || 0;
+    }
+
+    // Extra discount
+    const edv = Number(q.extraDiscountValue) || 0;
+    let extraDiscount = 0;
+    if (edv > 0 && q.extraDiscountType) {
+      extraDiscount =
+        q.extraDiscountType === "PERCENTAGE"
+          ? (subtotal * edv) / 100
+          : Math.min(edv, subtotal);
+    }
+    totalDiscount += extraDiscount;
+    const grandTotal = Math.max(subtotal - extraDiscount + totalTax, 0);
+
+    await tx.quotation.update({
+      where: { id: q.id },
+      data: {
+        lineItems: updatedItems,
+        subtotal: parseFloat(subtotal.toFixed(2)),
+        totalDiscount: parseFloat(totalDiscount.toFixed(2)),
+        totalTax: parseFloat(totalTax.toFixed(2)),
+        grandTotal: parseFloat(grandTotal.toFixed(2)),
+      },
+    });
+  }
+}
+
 /* ==========================
    ADMIN CONTROLLER ACTIONS
    ========================== */
@@ -502,6 +651,9 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         demoMeta: true,
         cost: true,
         remark: true,
+        customerId: true,
+        product: true,
+        productTitle: true,
         assignments: {
           where: { isActive: true },
           select: { accountId: true, teamId: true },
@@ -589,6 +741,18 @@ export async function updateLeadAdmin(req: Request, res: Response) {
           },
         },
       });
+
+      if (data.cost !== undefined && existing.customerId) {
+        await syncProductCostToEntities(tx, {
+          leadId: id,
+          customerId: existing.customerId,
+          productId: (existing.product as any)?.id ?? null,
+          productSlug: (existing.product as any)?.slug ?? null,
+          productTitle:
+            (existing.product as any)?.title ?? existing.productTitle ?? null,
+          newCost: Number(data.cost),
+        });
+      }
 
       // await tx.leadActivityLog.create({
       //   data: {
@@ -2007,60 +2171,77 @@ export async function updateLeadProductAdmin(req: Request, res: Response) {
       });
 
       // ── Sync customer products JSON ──────────────────────────────
-      if (lead.customerId && (resolvedProductTitle || cost !== undefined)) {
-        const customer = await tx.customer.findUnique({
-          where: { id: lead.customerId },
-          select: { id: true, products: true },
+      // if (lead.customerId && (resolvedProductTitle || cost !== undefined)) {
+      //   const customer = await tx.customer.findUnique({
+      //     where: { id: lead.customerId },
+      //     select: { id: true, products: true },
+      //   });
+
+      //   if (customer) {
+      //     const existingProducts: any = customer.products ?? {
+      //       active: [],
+      //       history: [],
+      //     };
+      //     if (!existingProducts.active) existingProducts.active = [];
+
+      //     // Match by old product title (before update) so we update the right entry
+      //     const oldTitle =
+      //       (existing.product as any)?.title ?? existing.productTitle;
+      //     const oldCost = existing.cost;
+
+      //     const idx = existingProducts.active.findIndex((p: any) => {
+      //       const titleMatch = oldTitle && p.name === oldTitle;
+      //       const costMatch =
+      //         oldCost !== undefined &&
+      //         oldCost !== null &&
+      //         String(p.price) === String(oldCost);
+      //       return titleMatch || costMatch;
+      //     });
+
+      //     if (idx !== -1) {
+      //       // Update matched entry
+      //       if (resolvedProductTitle) {
+      //         existingProducts.active[idx].name = resolvedProductTitle;
+      //       }
+      //       if (cost !== undefined) {
+      //         existingProducts.active[idx].price = cost;
+      //       }
+      //     } else if (resolvedProductTitle || cost !== undefined) {
+      //       // No match found — add a new active entry so customer record stays consistent
+      //       existingProducts.active.push({
+      //         id: resolvedProduct?.id ?? randomUUID(),
+      //         name: resolvedProductTitle ?? "Unknown Product",
+      //         price: cost ?? null,
+      //         addedAt: new Date(),
+      //         status: "ACTIVE",
+      //       });
+      //     }
+
+      //     await tx.customer.update({
+      //       where: { id: customer.id },
+      //       data: {
+      //         products: existingProducts,
+      //         updatedAt: new Date(),
+      //       },
+      //     });
+      //   }
+      // }
+
+      // Replace the manual customer sync block with:
+      if (cost !== undefined || resolvedProductTitle) {
+        await syncProductCostToEntities(tx, {
+          leadId: id,
+          customerId: lead.customerId,
+          productId:
+            (existing.product as any)?.id ?? resolvedProduct?.id ?? null,
+          productSlug:
+            (existing.product as any)?.slug ?? resolvedProduct?.slug ?? null,
+          productTitle: resolvedProductTitle,
+          oldTitle:
+            (existing.product as any)?.title ?? existing.productTitle ?? null,
+          newCost:
+            cost !== undefined ? Number(cost) : Number(existing.cost ?? 0),
         });
-
-        if (customer) {
-          const existingProducts: any = customer.products ?? {
-            active: [],
-            history: [],
-          };
-          if (!existingProducts.active) existingProducts.active = [];
-
-          // Match by old product title (before update) so we update the right entry
-          const oldTitle =
-            (existing.product as any)?.title ?? existing.productTitle;
-          const oldCost = existing.cost;
-
-          const idx = existingProducts.active.findIndex((p: any) => {
-            const titleMatch = oldTitle && p.name === oldTitle;
-            const costMatch =
-              oldCost !== undefined &&
-              oldCost !== null &&
-              String(p.price) === String(oldCost);
-            return titleMatch || costMatch;
-          });
-
-          if (idx !== -1) {
-            // Update matched entry
-            if (resolvedProductTitle) {
-              existingProducts.active[idx].name = resolvedProductTitle;
-            }
-            if (cost !== undefined) {
-              existingProducts.active[idx].price = cost;
-            }
-          } else if (resolvedProductTitle || cost !== undefined) {
-            // No match found — add a new active entry so customer record stays consistent
-            existingProducts.active.push({
-              id: resolvedProduct?.id ?? randomUUID(),
-              name: resolvedProductTitle ?? "Unknown Product",
-              price: cost ?? null,
-              addedAt: new Date(),
-              status: "ACTIVE",
-            });
-          }
-
-          await tx.customer.update({
-            where: { id: customer.id },
-            data: {
-              products: existingProducts,
-              updatedAt: new Date(),
-            },
-          });
-        }
       }
       // ─────────────────────────────────────────────────────────────
 
@@ -2474,6 +2655,21 @@ export async function addLeadProductsAdmin(req: Request, res: Response) {
           });
         }
       }
+
+      // Replace the manual customer sync loop with:
+      
+      // for (const lp of currentProducts) {
+      //   if (lp.cost !== undefined && lp.cost !== null) {
+      //     await syncProductCostToEntities(tx, {
+      //       leadId: id,
+      //       customerId: lead.customerId,
+      //       productId: lp.id ?? null,
+      //       productSlug: lp.slug ?? null,
+      //       productTitle: lp.title ?? null,
+      //       newCost: Number(lp.cost),
+      //     });
+      //   }
+      // }
 
       /* 3. Activity log */
       await tx.leadActivityLog.create({

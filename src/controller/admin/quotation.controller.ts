@@ -847,42 +847,7 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
    DELETE /admin/quotations/:id
    Soft delete
 ───────────────────────────────────────────── */
-// export async function deleteQuotationAdmin(req: Request, res: Response) {
-//   try {
-//     const performerAccountId = req.user?.accountId;
-//     if (!performerAccountId)
-//       return sendErrorResponse(res, 401, "Invalid session user");
 
-//     const { id } = req.params;
-//     const existing = await prisma.quotation.findFirst({
-//       where: { id, deletedAt: null },
-//       select: { id: true, status: true, quotationNumber: true },
-//     });
-//     if (!existing) return sendErrorResponse(res, 404, "Quotation not found");
-
-//     if (existing.status === "CONVERTED")
-//       return sendErrorResponse(res, 400, "Cannot delete a converted quotation");
-
-//     await prisma.$transaction(async (tx) => {
-//       await tx.quotation.update({
-//         where: { id },
-//         data: { deletedAt: new Date(), status: "CANCELLED" },
-//       });
-//       await tx.quotationActivity.create({
-//         data: {
-//           quotationId: id,
-//           action: "CANCELLED",
-//           performedBy: performerAccountId,
-//           meta: { reason: "Deleted by admin" },
-//         },
-//       });
-//     });
-
-//     return sendSuccessResponse(res, 200, "Quotation deleted");
-//   } catch (err: any) {
-//     return sendErrorResponse(res, 500, err?.message ?? "Failed to delete quotation");
-//   }
-// }
 
 /* ─────────────────────────────────────────────
    DELETE /admin/quotations/:id
