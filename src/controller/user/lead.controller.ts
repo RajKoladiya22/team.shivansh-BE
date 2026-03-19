@@ -460,6 +460,7 @@ export async function listMyLeads(req: Request, res: Response) {
         {
           OR: [
             { customerName: { contains: search, mode: "insensitive" } },
+            { customerCompanyName: { contains: search, mode: "insensitive" } },
             { mobileNumber: { contains: search } },
             { productTitle: { contains: search, mode: "insensitive" } },
           ],
