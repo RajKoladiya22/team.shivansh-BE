@@ -619,6 +619,7 @@ export async function listMyLeads(req: Request, res: Response) {
               mobile: true,
               customerCompanyName: true,
               products: true,
+              customerCategory: true,
             },
           },
           followUps: {
@@ -1025,6 +1026,7 @@ export async function getMyLeadById(req: Request, res: Response) {
             mobile: true,
             customerCompanyName: true,
             products: true,
+            customerCategory: true,
           },
         },
       },

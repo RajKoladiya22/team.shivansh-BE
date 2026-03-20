@@ -35,6 +35,10 @@ export async function getCustomerList(req: Request, res: Response) {
       toJoiningDate,
       productName,
       hasActiveProduct,
+      missingEmail,
+      missingPhone,
+      missingCompanyName,
+      missingTallySerial,
     } = req.query as Record<string, string>;
 
     /* ────────────────────────────────────────────────
@@ -46,6 +50,37 @@ export async function getCustomerList(req: Request, res: Response) {
     /* ── isActive ── */
     if (isActive !== undefined) {
       andConditions.push({ isActive: isActive === "true" });
+    }
+
+    if (missingEmail === "true") {
+      andConditions.push({
+        OR: [{ email: null }, { email: "" }],
+      });
+    }
+
+    if (missingPhone === "true") {
+      const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id
+    FROM "Customer"
+    WHERE phones IS NULL
+       OR phones::text = '[]'
+  `;
+
+      andConditions.push({
+        id: { in: rows.length ? rows.map((r) => r.id) : ["__no_match__"] },
+      });
+    }
+
+    if (missingCompanyName === "true") {
+      andConditions.push({
+        OR: [{ customerCompanyName: null }, { customerCompanyName: "" }],
+      });
+    }
+
+    if (missingTallySerial === "true") {
+      andConditions.push({
+        OR: [{ tallySerial: null }, { tallySerial: "" }],
+      });
     }
 
     /* ── Full-text search ──────────────────────────
@@ -177,7 +212,7 @@ export async function getCustomerList(req: Request, res: Response) {
           isActive: true,
           createdAt: true,
           _count: { select: { leads: true } },
-          leads : true
+          leads: true,
         },
       }),
       prisma.customer.count({ where }),

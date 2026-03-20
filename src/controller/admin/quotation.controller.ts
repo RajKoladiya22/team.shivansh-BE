@@ -13,6 +13,7 @@ import {
   quotationFullSelect,
   LineItemInput,
   toNullableNumber,
+  trySendQuotationEmail,
 } from "../../services/quotation";
 
 /* ─────────────────────────────────────────────
@@ -530,6 +531,10 @@ export async function sendQuotationAdmin(req: Request, res: Response) {
       return q;
     });
 
+    console.log("\n\n\n\n\n\n\n\n\n\n\nsend updated", updated,  "\n\n\n");
+
+    void trySendQuotationEmail(updated, false);
+
     return sendSuccessResponse(res, 200, "Quotation marked as sent", updated);
   } catch (err: any) {
     return sendErrorResponse(
@@ -584,7 +589,8 @@ export async function remindQuotationAdmin(req: Request, res: Response) {
             },
           ],
         },
-        select: { id: true, quotationNumber: true, reminderSentAt: true },
+        // select: { id: true, quotationNumber: true, reminderSentAt: true },
+        select: quotationFullSelect,
       });
 
       await tx.quotationActivity.create({
@@ -598,6 +604,11 @@ export async function remindQuotationAdmin(req: Request, res: Response) {
 
       return q;
     });
+
+    console.log("\n\n\n\n\n\n\n\n\n\n\nremind updated", updated,  "\n\n\n");
+    
+
+    void trySendQuotationEmail(updated, true);
 
     return sendSuccessResponse(res, 200, "Reminder logged", updated);
   } catch (err: any) {

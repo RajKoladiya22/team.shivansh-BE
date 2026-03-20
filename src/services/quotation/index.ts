@@ -1,5 +1,11 @@
 // src/services/quotation/index.ts
+import {
+  QuotationEmailData,
+  quotationEmailHtml,
+  quotationEmailText,
+} from "../../core/mailer/quotationEmail";
 import { prisma } from "../../config/database.config";
+import { sendMail } from "../../core/mailer";
 
 /* ─────────────────────────────────────────────
    Types
@@ -24,16 +30,16 @@ export interface LineItemInput {
 
 export interface LineItemComputed extends LineItemInput {
   position: number;
-  discountedPrice: number;   // per unit after discount
-  taxAmount: number;         // tax on discounted * qty
-  totalPrice: number;        // final per line
+  discountedPrice: number; // per unit after discount
+  taxAmount: number; // tax on discounted * qty
+  totalPrice: number; // final per line
 }
 
 export interface QuotationFinancials {
-  subtotal: number;          // sum of (discountedPrice * qty)
-  totalDiscount: number;     // sum of all discounts
-  totalTax: number;          // sum of all tax
-  grandTotal: number;        // after extra discount
+  subtotal: number; // sum of (discountedPrice * qty)
+  totalDiscount: number; // sum of all discounts
+  totalTax: number; // sum of all tax
+  grandTotal: number; // after extra discount
 }
 
 /* ─────────────────────────────────────────────
@@ -62,9 +68,7 @@ export async function generateQuotationNumber(): Promise<string> {
    Compute line items + financials
 ───────────────────────────────────────────── */
 
-export function computeLineItems(
-  raw: LineItemInput[],
-): LineItemComputed[] {
+export function computeLineItems(raw: LineItemInput[]): LineItemComputed[] {
   return raw.map((item, idx) => {
     const qty = Math.max(Number(item.qty) || 1, 1);
     const basePrice = Math.max(Number(item.basePrice) || 0, 0);
@@ -262,7 +266,6 @@ export const quotationFullSelect = {
   },
 };
 
-
 export function toNullableNumber(value: unknown): number | undefined {
   if (value === null || value === undefined) return undefined;
   const n = Number(value);
@@ -272,4 +275,114 @@ export function toNullableNumber(value: unknown): number | undefined {
 export function parsePositiveInt(raw: unknown, fallback: number): number {
   const n = parseInt(String(raw), 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+
+
+
+const QUOTATION_BASE_URL = "https://shivanshinfosys.in/quotation";
+
+function quotationUrl(id: string): string {
+  return `${QUOTATION_BASE_URL}/${id}`;
+}
+
+
+function extractCustomerEmail(q: any): string | undefined {
+  return (
+    q?.customer?.email ??
+    q?.customerSnapshot?.email ??
+    undefined
+  );
+}
+ 
+/**
+ * Maps the full Prisma quotation record to QuotationEmailData.
+ * All field names verified against logged DB output.
+ */
+function buildEmailData(q: any, isReminder: boolean): QuotationEmailData {
+  // ── Preparer: prefer preparedByAcc, fall back to createdByAcc ──
+  const preparer = q.preparedByAcc ?? q.createdByAcc ?? null;
+  const preparedByName = preparer
+    ? `${preparer.firstName ?? ""} ${preparer.lastName ?? ""}`.trim() || undefined
+    : undefined;
+  const preparedByDesignation = preparer?.designation ?? undefined;
+  const preparedByPhone = preparer?.contactPhone ?? preparer?.mobile ?? undefined;
+ 
+  // ── Line items ──
+  const items = ((q.lineItems ?? []) as any[]).map((item: any) => ({
+    title:         item.name ?? "—",
+    type:          item.unit ?? undefined,
+    qty:           Number(item.qty ?? 1),
+    rate:          Number(item.discountedPrice ?? item.basePrice ?? 0),
+    baseRate:      item.basePrice != null ? Number(item.basePrice) : undefined,
+    discountType:  item.discountType ?? undefined,
+    discountValue: item.discountValue != null ? Number(item.discountValue) : undefined,
+    taxPercent:    item.taxPercent != null ? Number(item.taxPercent) : undefined,
+    amount:        Number(item.totalPrice ?? 0),
+  }));
+ 
+  // ── Customer info ──
+  const customerName =
+    q.customer?.name ?? q.customerSnapshot?.name ?? "Valued Customer";
+  const customerCompanyName =
+    q.customer?.customerCompanyName ?? q.customerSnapshot?.companyName ?? undefined;
+ 
+  return {
+    quotationNumber:    q.quotationNumber,
+    quotationUrl:       quotationUrl(q.id),
+    subject:            q.subject ?? undefined,
+    customerName,
+    customerCompanyName,
+    customerCity:       q.customer?.city ?? q.customerSnapshot?.city ?? undefined,
+    customerState:      q.customer?.state ?? q.customerSnapshot?.state ?? undefined,
+    customerGstin:      q.customerGstin ?? undefined,
+    companyGstin:       q.gstin ?? undefined,
+    companyName:        "Shivansh Infosys",
+    preparedByName,
+    preparedByDesignation,
+    preparedByPhone,
+    grandTotal:         Number(q.grandTotal ?? 0),
+    subtotal:           Number(q.subtotal ?? 0),
+    taxAmount:          Number(q.totalTax ?? 0),
+    totalDiscount:      q.totalDiscount ? Number(q.totalDiscount) : undefined,
+    extraDiscountType:  q.extraDiscountType ?? undefined,
+    extraDiscountValue: q.extraDiscountValue != null ? Number(q.extraDiscountValue) : undefined,
+    extraDiscountNote:  q.extraDiscountNote ?? undefined,
+    taxLabel:           q.taxType ?? "GST",
+    currency:           q.currency ?? "INR",
+    createdAt:
+      q.quotationDate?.toISOString?.() ??
+      q.createdAt?.toISOString?.() ??
+      new Date().toISOString(),
+    validUntil:      q.validUntil?.toISOString?.() ?? undefined,
+    isReminder,
+    items,
+    introNote:       q.introNote ?? undefined,
+    termsNote:       q.termsNote ?? undefined,
+    footerNote:      q.footerNote ?? undefined,
+    paymentTerms:    q.paymentTerms ?? undefined,
+    paymentDueDays:  q.paymentDueDays != null ? Number(q.paymentDueDays) : undefined,
+    deliveryScope:   q.deliveryScope ?? undefined,
+    deliveryDays:    q.deliveryDays != null ? Number(q.deliveryDays) : undefined,
+  };
+}
+ 
+export async function trySendQuotationEmail(q: any, isReminder: boolean): Promise<void> {
+  const email = extractCustomerEmail(q);
+  if (!email) {
+    console.info(`[quotation-email] No email for ${q.quotationNumber} — skipping`);
+    return;
+  }
+ 
+  const data = buildEmailData(q, isReminder);
+  const subject = isReminder
+    ? `Reminder: Quotation ${data.quotationNumber} from Shivansh Infosys`
+    : `Your Quotation ${data.quotationNumber} from Shivansh Infosys`;
+ 
+  try {
+    await sendMail(email, subject, quotationEmailHtml(data), quotationEmailText(data));
+    console.info(`[quotation-email] ${isReminder ? "Reminder" : "Sent"} ${data.quotationNumber} → ${email} ✓`);
+  } catch (err: any) {
+    console.error(`[quotation-email] Failed → ${email}:`, err?.message ?? err);
+  }
 }
