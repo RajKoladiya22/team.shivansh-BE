@@ -440,6 +440,20 @@ export async function addCustomerProduct(req: Request, res: Response) {
     if (!name || !price)
       return sendErrorResponse(res, 400, "Product name & price required");
 
+    let normalizedPurchaseAt: string | null = null;
+    if (purchaseAt) {
+      const d = new Date(purchaseAt);
+      if (isNaN(d.getTime()))
+        return sendErrorResponse(res, 400, "Invalid purchaseAt date");
+      if (d > new Date())
+        return sendErrorResponse(
+          res,
+          400,
+          "purchaseAt cannot be a future date",
+        );
+      normalizedPurchaseAt = d.toISOString();
+    }
+
     const customer = await prisma.customer.findUnique({ where: { id } });
     if (!customer) return sendErrorResponse(res, 404, "Customer not found");
 
@@ -453,8 +467,8 @@ export async function addCustomerProduct(req: Request, res: Response) {
       name,
       price,
       status: "ACTIVE",
-      addedAt: new Date(),
-      purchaseAt: purchaseAt ?? "",
+       addedAt: new Date().toISOString(),
+      purchaseAt: normalizedPurchaseAt,
     };
 
     if (!Array.isArray(existingProducts.active)) existingProducts.active = [];
