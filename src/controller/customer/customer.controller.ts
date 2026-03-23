@@ -399,6 +399,7 @@ export async function updateCustomer(req: Request, res: Response) {
       where: { id },
       data: {
         ...req.body,
+        normalizedMobile: req.body.mobile || req.body.normalizedMobile,
         joiningDate: req.body.joiningDate
           ? new Date(req.body.joiningDate)
           : undefined,

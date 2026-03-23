@@ -654,6 +654,8 @@ export async function createLeadAdmin(req: Request, res: Response) {
     } = await prisma.$transaction(async (tx) => {
       // ── 1. Customer upsert ──────────────────────────────────────────────────
       let customer = await tx.customer.findUnique({ where: { normalizedMobile } });
+
+      
  
       if (customer) {
         // Merge new products into existing customer.products.active
