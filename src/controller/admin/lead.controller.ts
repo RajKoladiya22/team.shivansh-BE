@@ -9,7 +9,11 @@ import { randomUUID } from "crypto";
 import { triggerAssignmentNotification } from "../../services/notifications";
 import { getIo } from "../../core/utils/socket";
 import { Lead_Status } from "@prisma/client";
-import { buildCustomerProductEntries, deriveLeadScalars, normalizeIncomingProducts } from "../../core/utils/leadProducts";
+import {
+  buildCustomerProductEntries,
+  deriveLeadScalars,
+  normalizeIncomingProducts,
+} from "../../core/utils/leadProducts";
 
 interface LeadProductItem {
   id: string;
@@ -20,10 +24,6 @@ interface LeadProductItem {
   cost?: number | null;
   isPrimary?: boolean;
 }
-
-
-
-
 
 /**
  * Helper: get accountId from req.user.id (user table -> accountId)
@@ -612,57 +612,70 @@ export async function createLeadAdmin(req: Request, res: Response) {
     const creatorAccountId = req.user?.accountId;
     if (!creatorAccountId)
       return sendErrorResponse(res, 401, "Invalid session user");
- 
+
     const {
       source,
       type,
       customerName,
       mobileNumber,
       customerCompanyName,
-      cost,       // kept for backward-compat; overridden when products carry costs
+      cost, // kept for backward-compat; overridden when products carry costs
       remark,
       accountId: assigneeAccountId,
       teamId: assigneeTeamId,
       demoDate,
       followUps,
     } = req.body as Record<string, any>;
- 
+
     if (!source || !type)
       return sendErrorResponse(res, 400, "Lead source and type are required");
     if (!customerName || !mobileNumber)
-      return sendErrorResponse(res, 400, "Customer name and mobile are required");
+      return sendErrorResponse(
+        res,
+        400,
+        "Customer name and mobile are required",
+      );
     if (!assigneeAccountId && !assigneeTeamId)
       return sendErrorResponse(res, 400, "Assign to account or team");
     if (assigneeAccountId && assigneeTeamId)
-      return sendErrorResponse(res, 400, "Provide either accountId or teamId, not both");
- 
+      return sendErrorResponse(
+        res,
+        400,
+        "Provide either accountId or teamId, not both",
+      );
+
     const normalizedMobile = normalizeMobile(mobileNumber);
- 
+
     // ── Normalise products (handles all three input shapes) ──────────────────
     const products = normalizeIncomingProducts(req.body);
     const { productTitle, totalCost } = deriveLeadScalars(products, cost);
- 
+
     const initialAssignee = await resolveAssigneeSnapshot({
       accountId: assigneeAccountId,
       teamId: assigneeTeamId,
     });
- 
+
     const {
       lead,
       recipients,
       followUps: createdFollowUps,
     } = await prisma.$transaction(async (tx) => {
       // ── 1. Customer upsert ──────────────────────────────────────────────────
-      let customer = await tx.customer.findUnique({ where: { normalizedMobile } });
+      let customer = await tx.customer.findUnique({
+        where: { normalizedMobile },
+      });
 
-      
- 
       if (customer) {
         // Merge new products into existing customer.products.active
-        const existingProducts: any = customer.products ?? { active: [], history: [] };
-        if (!Array.isArray(existingProducts.active)) existingProducts.active = [];
-        if (!Array.isArray(existingProducts.history)) existingProducts.history = [];
- 
+        const existingProducts: any = customer.products ?? {
+          active: [],
+          history: [],
+        };
+        if (!Array.isArray(existingProducts.active))
+          existingProducts.active = [];
+        if (!Array.isArray(existingProducts.history))
+          existingProducts.history = [];
+
         if (products && products.length > 0) {
           for (const entry of buildCustomerProductEntries(products)) {
             const alreadyExists = existingProducts.active.some(
@@ -673,12 +686,13 @@ export async function createLeadAdmin(req: Request, res: Response) {
             }
           }
         }
- 
+
         customer = await tx.customer.update({
           where: { id: customer.id },
           data: {
             name: customerName || customer.name,
-            customerCompanyName: customerCompanyName || customer.customerCompanyName,
+            customerCompanyName:
+              customerCompanyName || customer.customerCompanyName,
             products: existingProducts,
             updatedAt: new Date(),
           },
@@ -692,7 +706,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
                 history: [],
               }
             : undefined;
- 
+
         customer = await tx.customer.create({
           data: {
             name: customerName,
@@ -704,7 +718,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
           },
         });
       }
- 
+
       // ── 2. Create Lead ──────────────────────────────────────────────────────
       //
       // lead.product stores the full normalised array (or single object for
@@ -720,7 +734,9 @@ export async function createLeadAdmin(req: Request, res: Response) {
           mobileNumber: normalizedMobile,
           // Store full product array — downstream reads normalizeProducts()
           product: (products && products.length > 0
-            ? (products.length === 1 ? products[0] : products)
+            ? products.length === 1
+              ? products[0]
+              : products
             : undefined) as any,
           productTitle: productTitle ?? undefined,
           cost: totalCost ?? undefined,
@@ -731,13 +747,17 @@ export async function createLeadAdmin(req: Request, res: Response) {
           demoMeta: demoDate
             ? {
                 history: [
-                  { type: "SCHEDULED", at: new Date(demoDate), by: creatorAccountId },
+                  {
+                    type: "SCHEDULED",
+                    at: new Date(demoDate),
+                    by: creatorAccountId,
+                  },
                 ],
               }
             : undefined,
         },
       });
- 
+
       // ── 3. Assignment ───────────────────────────────────────────────────────
       await tx.leadAssignment.create({
         data: {
@@ -751,7 +771,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
           unassignedAt: null,
         },
       });
- 
+
       // ── 4. Activity log ─────────────────────────────────────────────────────
       await tx.leadActivityLog.create({
         data: {
@@ -767,7 +787,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
           },
         },
       });
- 
+
       // ── 5. Recipients ───────────────────────────────────────────────────────
       let recipientAccountIds: string[] = [];
       if (assigneeAccountId) {
@@ -779,14 +799,14 @@ export async function createLeadAdmin(req: Request, res: Response) {
         });
         recipientAccountIds = members.map((m) => m.accountId);
       }
- 
+
       // ── 6. Follow-ups ───────────────────────────────────────────────────────
       let createdFollowUps: any[] = [];
- 
+
       if (Array.isArray(followUps) && followUps.length > 0) {
         const invalid = followUps.some((f) => !f.scheduledAt);
         if (invalid) throw new Error("Each follow-up must have a scheduledAt");
- 
+
         await tx.leadFollowUp.createMany({
           data: followUps.map((f) => ({
             leadId: created.id,
@@ -797,12 +817,12 @@ export async function createLeadAdmin(req: Request, res: Response) {
             createdBy: creatorAccountId,
           })),
         });
- 
+
         createdFollowUps = await tx.leadFollowUp.findMany({
           where: { leadId: created.id },
           orderBy: { scheduledAt: "asc" },
         });
- 
+
         await tx.lead.update({
           where: { id: created.id },
           data: {
@@ -810,7 +830,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
             nextFollowUpAt: createdFollowUps[0].scheduledAt,
           },
         });
- 
+
         await tx.leadActivityLog.create({
           data: {
             leadId: created.id,
@@ -827,17 +847,21 @@ export async function createLeadAdmin(req: Request, res: Response) {
           },
         });
       }
- 
-      return { lead: created, recipients: recipientAccountIds, followUps: createdFollowUps };
+
+      return {
+        lead: created,
+        recipients: recipientAccountIds,
+        followUps: createdFollowUps,
+      };
     });
- 
+
     // ── Notifications + Socket ────────────────────────────────────────────────
     void triggerAssignmentNotification({
       leadId: lead.id,
       assigneeAccountId: assigneeAccountId ?? null,
       assigneeTeamId: assigneeTeamId ?? null,
     });
- 
+
     try {
       const io = getIo();
       const socketPayload = {
@@ -855,7 +879,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
     } catch {
       console.warn("Socket emit skipped");
     }
- 
+
     return sendSuccessResponse(res, 201, "Lead created successfully", {
       ...lead,
       followUps: createdFollowUps,
@@ -1882,6 +1906,48 @@ export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
       // --- Inside transaction (add BEFORE deleting lead) ---
 
       // 🧹 Remove this lead's product from customer
+      // if (existing.customerId) {
+      //   const customer = await tx.customer.findUnique({
+      //     where: { id: existing.customerId },
+      //     select: { id: true, products: true },
+      //   });
+
+      //   const customerProducts: any = customer?.products ?? {
+      //     active: [],
+      //     history: [],
+      //   };
+      //   if (
+      //     Array.isArray(customerProducts.active) &&
+      //     customerProducts.active.length
+      //   ) {
+      //     const oldTitle =
+      //       (existing.product as any)?.title ?? existing.productTitle;
+      //     const oldCost = existing.cost;
+
+      //     const filteredActive = customerProducts.active.filter((p: any) => {
+      //       const titleMatch = oldTitle && p.name === oldTitle;
+      //       const costMatch =
+      //         oldCost !== undefined &&
+      //         oldCost !== null &&
+      //         String(p.price) === String(oldCost);
+
+      //       // ❌ remove only matching product
+      //       return !(titleMatch || costMatch);
+      //     });
+
+      //     await tx.customer.update({
+      //       where: { id: existing.customerId },
+      //       data: {
+      //         products: {
+      //           ...customerProducts,
+      //           active: filteredActive,
+      //         },
+      //         updatedAt: new Date(),
+      //       },
+      //     });
+      //   }
+      // }
+      // 🧹 Remove this lead's product from customer — safely
       if (existing.customerId) {
         const customer = await tx.customer.findUnique({
           where: { id: existing.customerId },
@@ -1892,32 +1958,67 @@ export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
           active: [],
           history: [],
         };
+
         if (
           Array.isArray(customerProducts.active) &&
           customerProducts.active.length
         ) {
-          const oldTitle =
-            (existing.product as any)?.title ?? existing.productTitle;
-          const oldCost = existing.cost;
+          // Normalise this lead's product into an array regardless of storage shape
+          const leadProducts: any[] = Array.isArray(existing.product)
+            ? existing.product
+            : existing.product
+              ? [existing.product]
+              : [];
+
+          const leadProductIds = leadProducts
+            .map((p: any) => p?.id)
+            .filter(Boolean) as string[];
+          const leadProductTitles = [
+            ...leadProducts.map((p: any) => p?.title).filter(Boolean),
+            ...(existing.productTitle ? [existing.productTitle] : []),
+          ] as string[];
+
+          // ✅ Check which IDs/titles are still in use by OTHER leads of this customer
+          const otherLeads = await tx.lead.findMany({
+            where: { customerId: existing.customerId, id: { not: id } },
+            select: { product: true, productTitle: true },
+          });
+
+          const stillUsedIds = new Set<string>();
+          const stillUsedTitles = new Set<string>();
+
+          for (const lead of otherLeads) {
+            const lps: any[] = Array.isArray(lead.product)
+              ? lead.product
+              : lead.product
+                ? [lead.product]
+                : [];
+            lps.forEach((p: any) => {
+              if (p?.id) stillUsedIds.add(p.id);
+              if (p?.title) stillUsedTitles.add(p.title);
+            });
+            if (lead.productTitle) stillUsedTitles.add(lead.productTitle);
+          }
 
           const filteredActive = customerProducts.active.filter((p: any) => {
-            const titleMatch = oldTitle && p.name === oldTitle;
-            const costMatch =
-              oldCost !== undefined &&
-              oldCost !== null &&
-              String(p.price) === String(oldCost);
+            const idMatch = p.id && leadProductIds.includes(p.id);
+            const titleMatch =
+              !idMatch && p.name && leadProductTitles.includes(p.name);
 
-            // ❌ remove only matching product
-            return !(titleMatch || costMatch);
+            // Not related to this lead at all → keep
+            if (!idMatch && !titleMatch) return true;
+
+            // Related to this lead — only remove if no other lead still uses it
+            if (idMatch && stillUsedIds.has(p.id)) return true;
+            if (titleMatch && stillUsedTitles.has(p.name)) return true;
+
+            return false; // safe to remove
           });
 
           await tx.customer.update({
             where: { id: existing.customerId },
             data: {
-              products: {
-                ...customerProducts,
-                active: filteredActive,
-              },
+              products: { ...customerProducts, active: filteredActive },
               updatedAt: new Date(),
             },
           });
@@ -2926,7 +3027,7 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
 //       }
 
 //       // Replace the manual customer sync loop with:
-      
+
 //       // for (const lp of currentProducts) {
 //       //   if (lp.cost !== undefined && lp.cost !== null) {
 //       //     await syncProductCostToEntities(tx, {
@@ -3090,14 +3191,18 @@ export async function addLeadProductsAdmin(req: Request, res: Response) {
     // ── Derive scalar fields ─────────────────────────────────────
     // productTitle = all product names joined (for search + display)
     const productTitle =
-      currentProducts.map((p) => p.title).filter(Boolean).join(", ") || null;
+      currentProducts
+        .map((p) => p.title)
+        .filter(Boolean)
+        .join(", ") || null;
 
     // totalCost = sum of all product costs
     const productCostSum = currentProducts.reduce<number | null>((acc, p) => {
       if (p.cost == null) return acc;
       return (acc ?? 0) + Number(p.cost);
     }, null);
-    const derivedCost = productCostSum ?? (existing.cost != null ? Number(existing.cost) : null);
+    const derivedCost =
+      productCostSum ?? (existing.cost != null ? Number(existing.cost) : null);
 
     /* ── Transaction ────────────────────────────────────────────── */
     const updated = await prisma.$transaction(async (tx) => {
@@ -3106,9 +3211,10 @@ export async function addLeadProductsAdmin(req: Request, res: Response) {
         where: { id },
         data: {
           // Store array if multiple, single object if one (backward compat)
-          product: currentProducts.length === 1
-            ? currentProducts[0]
-            : (currentProducts as any),
+          product:
+            currentProducts.length === 1
+              ? currentProducts[0]
+              : (currentProducts as any),
           productTitle: productTitle ?? undefined,
           cost: derivedCost ?? undefined,
         },
@@ -3150,10 +3256,14 @@ export async function addLeadProductsAdmin(req: Request, res: Response) {
             const previousIds = new Set(previousProducts.map((p) => p.id));
 
             // Products removed from the lead → move to history
-            const removedIds = [...previousIds].filter((pid) => !currentIds.has(pid));
+            const removedIds = [...previousIds].filter(
+              (pid) => !currentIds.has(pid),
+            );
 
             for (const removedId of removedIds) {
-              const activeIdx = cp.active.findIndex((p: any) => p.id === removedId);
+              const activeIdx = cp.active.findIndex(
+                (p: any) => p.id === removedId,
+              );
               if (activeIdx !== -1) {
                 const [removed] = cp.active.splice(activeIdx, 1);
                 // Move to history with a removedAt timestamp
@@ -3205,13 +3315,15 @@ export async function addLeadProductsAdmin(req: Request, res: Response) {
           leadId: id,
           action: "UPDATED",
           performedBy: performerAccountId,
-          meta: JSON.parse(JSON.stringify({
-            type: "PRODUCTS_UPDATED",
-            mode,
-            previous: previousProducts,
-            current: currentProducts,
-            productTitle,
-          })),
+          meta: JSON.parse(
+            JSON.stringify({
+              type: "PRODUCTS_UPDATED",
+              mode,
+              previous: previousProducts,
+              current: currentProducts,
+              productTitle,
+            }),
+          ),
         },
       });
 
@@ -3233,7 +3345,10 @@ export async function addLeadProductsAdmin(req: Request, res: Response) {
 
       const assignee = existing.assignments[0];
       if (assignee?.accountId) {
-        io.to(`leads:user:${assignee.accountId}`).emit("lead:patch", patchPayload);
+        io.to(`leads:user:${assignee.accountId}`).emit(
+          "lead:patch",
+          patchPayload,
+        );
       } else if (assignee?.teamId) {
         const members = await prisma.teamMember.findMany({
           where: { teamId: assignee.teamId, isActive: true },
