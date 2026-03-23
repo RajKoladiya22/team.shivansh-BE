@@ -7,6 +7,11 @@ import {
 } from "../../core/utils/httpResponse";
 import { getIo } from "../../core/utils/socket";
 import { randomUUID } from "node:crypto";
+import {
+  buildCustomerProductEntries,
+  deriveLeadScalars,
+  normalizeIncomingProducts,
+} from "../../core/utils/leadProducts";
 
 /**
  * Helpers (kept local so this file is self-contained)
@@ -176,6 +181,217 @@ async function stopWorkIfActive(tx: any, accountId: string, leadId: string) {
  * POST user/leads/my
  * User creates lead and auto-assigns to self
  */
+// export async function createMyLead(req: Request, res: Response) {
+//   try {
+//     const accountId = req.user?.accountId;
+//     if (!accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+//     const {
+//       source = "MANUAL",
+//       type = "LEAD",
+//       customerName,
+//       mobileNumber,
+//       product,
+//       productTitle,
+//       cost,
+//       remark,
+//       demoDate,
+//       followUps,
+//     } = req.body as Record<string, any>;
+
+//     if (!customerName || !mobileNumber)
+//       return sendErrorResponse(
+//         res,
+//         400,
+//         "Customer name and mobile are required",
+//       );
+
+//     const normalizedMobile = normalizeMobile(mobileNumber);
+
+//     const resolvedProduct = product
+//       ? {
+//           id: product.id || randomUUID(),
+//           slug: product.slug ?? null,
+//           link: product.link ?? null,
+//           title: product.title ?? null,
+//         }
+//       : undefined;
+
+//     const finalProductTitle = resolvedProduct?.title ?? productTitle ?? null;
+
+//     const now = new Date();
+
+//     const { newLead, createdFollowUps } = await prisma.$transaction(
+//       async (tx) => {
+//         /* -------------------------
+//      1️⃣ Upsert Customer
+//   ------------------------- */
+//         const customer = await tx.customer.upsert({
+//           where: { normalizedMobile },
+//           create: {
+//             name: customerName,
+//             mobile: mobileNumber,
+//             normalizedMobile,
+//             createdBy: accountId,
+//           },
+//           update: { name: customerName },
+//         });
+
+//         /* -------------------------
+//      2️⃣ Create Lead
+//   ------------------------- */
+//         const lead = await tx.lead.create({
+//           data: {
+//             source,
+//             type,
+//             customerId: customer.id,
+//             customerName,
+//             mobileNumber: normalizedMobile,
+//             product: resolvedProduct,
+//             productTitle: finalProductTitle,
+//             cost: cost ?? undefined,
+//             remark: remark ?? undefined,
+//             createdBy: accountId,
+//             demoScheduledAt: demoDate ? new Date(demoDate) : undefined,
+//             demoCount: demoDate ? 1 : 0,
+//             demoMeta: demoDate
+//               ? {
+//                   history: [
+//                     {
+//                       type: "SCHEDULED",
+//                       at: new Date(demoDate),
+//                       by: accountId,
+//                     },
+//                   ],
+//                 }
+//               : undefined,
+//           },
+//         });
+
+//         /* -------------------------
+//      3️⃣ Self Assignment
+//   ------------------------- */
+//         await tx.leadAssignment.create({
+//           data: {
+//             leadId: lead.id,
+//             type: "ACCOUNT",
+//             accountId,
+//             isActive: true,
+//             assignedBy: accountId,
+//             assignedAt: now,
+//           },
+//         });
+
+//         /* -------------------------
+//      4️⃣ Activity Log
+//   ------------------------- */
+//         const initialAssignee = await resolveAssigneeSnapshot({ accountId });
+
+//         await tx.leadActivityLog.create({
+//           data: {
+//             leadId: lead.id,
+//             action: "CREATED",
+//             performedBy: accountId,
+//             meta: {
+//               source,
+//               type,
+//               selfAssigned: true,
+//               initialAssignment: initialAssignee,
+//               demoScheduledAt: demoDate ?? null,
+//             },
+//           },
+//         });
+
+//         /* -------------------------
+//      5️⃣ Follow-ups
+//   ------------------------- */
+//         let createdFollowUps: any[] = [];
+
+//         if (Array.isArray(followUps) && followUps.length > 0) {
+//           const invalid = followUps.some((f) => !f.scheduledAt);
+//           if (invalid)
+//             throw new Error("Each follow-up must have a scheduledAt");
+
+//           await tx.leadFollowUp.createMany({
+//             data: followUps.map((f) => ({
+//               leadId: lead.id,
+//               type: f.type ?? "CALL",
+//               status: "PENDING" as const,
+//               scheduledAt: new Date(f.scheduledAt),
+//               remark: f.remark ?? null,
+//               createdBy: accountId,
+//             })),
+//           });
+
+//           createdFollowUps = await tx.leadFollowUp.findMany({
+//             where: { leadId: lead.id },
+//             orderBy: { scheduledAt: "asc" },
+//           });
+
+//           await tx.lead.update({
+//             where: { id: lead.id },
+//             data: {
+//               followUpCount: createdFollowUps.length,
+//               nextFollowUpAt: createdFollowUps[0].scheduledAt,
+//             },
+//           });
+
+//           await tx.leadActivityLog.create({
+//             data: {
+//               leadId: lead.id,
+//               action: "FOLLOW_UP_SCHEDULED",
+//               performedBy: accountId,
+//               meta: {
+//                 count: createdFollowUps.length,
+//                 followUps: createdFollowUps.map((f) => ({
+//                   id: f.id,
+//                   type: f.type,
+//                   scheduledAt: f.scheduledAt,
+//                 })),
+//               },
+//             },
+//           });
+//         }
+
+//         return { newLead: lead, createdFollowUps };
+//       },
+//     );
+
+//     /* -------------------------
+//        🔔 Socket Emit (Minimal)
+//     ------------------------- */
+
+//     try {
+//       const io = getIo();
+
+//       const payload = {
+//         id: newLead.id,
+//         customerName: newLead.customerName,
+//         status: newLead.status,
+//         demoScheduledAt: newLead.demoScheduledAt,
+//         createdAt: newLead.createdAt,
+//       };
+
+//       io.to(`leads:user:${accountId}`).emit("lead:created", payload);
+//       io.to("leads:admin").emit("lead:created", payload);
+//     } catch {
+//       console.warn("Socket emit skipped");
+//     }
+
+//     return sendSuccessResponse(res, 201, "Lead created and assigned to you", {
+//       ...newLead,
+//       followUps: createdFollowUps,
+//     });
+//   } catch (err: any) {
+//     console.error("Create my lead error:", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to create lead");
+//   }
+// }
+
+/**
+ * POST user/leads/my
+ * User creates lead and auto-assigns to self
+ */
 export async function createMyLead(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
@@ -186,8 +402,6 @@ export async function createMyLead(req: Request, res: Response) {
       type = "LEAD",
       customerName,
       mobileNumber,
-      product,
-      productTitle,
       cost,
       remark,
       demoDate,
@@ -203,38 +417,66 @@ export async function createMyLead(req: Request, res: Response) {
 
     const normalizedMobile = normalizeMobile(mobileNumber);
 
-    const resolvedProduct = product
-      ? {
-          id: product.id || randomUUID(),
-          slug: product.slug ?? null,
-          link: product.link ?? null,
-          title: product.title ?? null,
-        }
-      : undefined;
-
-    const finalProductTitle = resolvedProduct?.title ?? productTitle ?? null;
+    // ── Normalise products ────────────────────────────────────────────────────
+    const products = normalizeIncomingProducts(req.body);
+    const { productTitle, totalCost } = deriveLeadScalars(products, cost);
 
     const now = new Date();
 
     const { newLead, createdFollowUps } = await prisma.$transaction(
       async (tx) => {
-        /* -------------------------
-     1️⃣ Upsert Customer
-  ------------------------- */
-        const customer = await tx.customer.upsert({
+        // ── 1. Upsert Customer ──────────────────────────────────────────────────
+        let customer = await tx.customer.findUnique({
           where: { normalizedMobile },
-          create: {
-            name: customerName,
-            mobile: mobileNumber,
-            normalizedMobile,
-            createdBy: accountId,
-          },
-          update: { name: customerName },
         });
 
-        /* -------------------------
-     2️⃣ Create Lead
-  ------------------------- */
+        if (customer) {
+          const existingProducts: any = customer.products ?? {
+            active: [],
+            history: [],
+          };
+          if (!Array.isArray(existingProducts.active))
+            existingProducts.active = [];
+
+          if (products && products.length > 0) {
+            for (const entry of buildCustomerProductEntries(products)) {
+              const alreadyExists = existingProducts.active.some(
+                (p: any) => p.id === entry.id || p.name === entry.name,
+              );
+              if (!alreadyExists) existingProducts.active.push(entry);
+            }
+            customer = await tx.customer.update({
+              where: { id: customer.id },
+              data: {
+                name: customerName || customer.name,
+                products: existingProducts,
+                updatedAt: new Date(),
+              },
+            });
+          } else {
+            customer = await tx.customer.update({
+              where: { id: customer.id },
+              data: { name: customerName },
+            });
+          }
+        } else {
+          const customerProducts =
+            products && products.length > 0
+              ? { active: buildCustomerProductEntries(products), history: [] }
+              : undefined;
+
+          customer = await tx.customer.create({
+            data: {
+              name: customerName,
+              mobile: mobileNumber,
+              normalizedMobile,
+              createdBy: accountId,
+              products: customerProducts,
+            },
+          });
+        }
+
+        // ── 2. Create Lead ──────────────────────────────────────────────────────
         const lead = await tx.lead.create({
           data: {
             source,
@@ -242,9 +484,13 @@ export async function createMyLead(req: Request, res: Response) {
             customerId: customer.id,
             customerName,
             mobileNumber: normalizedMobile,
-            product: resolvedProduct,
-            productTitle: finalProductTitle,
-            cost: cost ?? undefined,
+            product: (products && products.length > 0
+              ? products.length === 1
+                ? products[0]
+                : products
+              : undefined) as any,
+            productTitle: productTitle ?? undefined,
+            cost: totalCost ?? undefined,
             remark: remark ?? undefined,
             createdBy: accountId,
             demoScheduledAt: demoDate ? new Date(demoDate) : undefined,
@@ -263,9 +509,7 @@ export async function createMyLead(req: Request, res: Response) {
           },
         });
 
-        /* -------------------------
-     3️⃣ Self Assignment
-  ------------------------- */
+        // ── 3. Self-assignment ──────────────────────────────────────────────────
         await tx.leadAssignment.create({
           data: {
             leadId: lead.id,
@@ -277,11 +521,8 @@ export async function createMyLead(req: Request, res: Response) {
           },
         });
 
-        /* -------------------------
-     4️⃣ Activity Log
-  ------------------------- */
+        // ── 4. Activity log ─────────────────────────────────────────────────────
         const initialAssignee = await resolveAssigneeSnapshot({ accountId });
-
         await tx.leadActivityLog.create({
           data: {
             leadId: lead.id,
@@ -293,13 +534,12 @@ export async function createMyLead(req: Request, res: Response) {
               selfAssigned: true,
               initialAssignment: initialAssignee,
               demoScheduledAt: demoDate ?? null,
+              products: products ? JSON.parse(JSON.stringify(products)) : null,
             },
           },
         });
 
-        /* -------------------------
-     5️⃣ Follow-ups
-  ------------------------- */
+        // ── 5. Follow-ups ───────────────────────────────────────────────────────
         let createdFollowUps: any[] = [];
 
         if (Array.isArray(followUps) && followUps.length > 0) {
@@ -352,21 +592,17 @@ export async function createMyLead(req: Request, res: Response) {
       },
     );
 
-    /* -------------------------
-       🔔 Socket Emit (Minimal)
-    ------------------------- */
-
+    // ── Socket ────────────────────────────────────────────────────────────────
     try {
       const io = getIo();
-
       const payload = {
         id: newLead.id,
         customerName: newLead.customerName,
+        productTitle: newLead.productTitle,
         status: newLead.status,
         demoScheduledAt: newLead.demoScheduledAt,
         createdAt: newLead.createdAt,
       };
-
       io.to(`leads:user:${accountId}`).emit("lead:created", payload);
       io.to("leads:admin").emit("lead:created", payload);
     } catch {

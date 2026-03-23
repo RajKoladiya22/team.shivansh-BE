@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import { triggerAssignmentNotification } from "../../services/notifications";
 import { getIo } from "../../core/utils/socket";
 import { Lead_Status } from "@prisma/client";
+import { buildCustomerProductEntries, deriveLeadScalars, normalizeIncomingProducts } from "../../core/utils/leadProducts";
 
 interface LeadProductItem {
   id: string;
@@ -19,6 +20,10 @@ interface LeadProductItem {
   cost?: number | null;
   isPrimary?: boolean;
 }
+
+
+
+
 
 /**
  * Helper: get accountId from req.user.id (user table -> accountId)
@@ -267,134 +272,425 @@ async function syncProductCostToEntities(
 /**
  * POST /admin/leads
  */
+// export async function createLeadAdmin(req: Request, res: Response) {
+//   try {
+//     const creatorAccountId = req.user?.accountId;
+
+//     // const creatorAccountId = await getAccountIdFromReqUser(adminUserId);
+//     if (!creatorAccountId)
+//       return sendErrorResponse(res, 401, "Invalid session user");
+
+//     // Destructure with different name to avoid shadowing creator accountId
+//     const {
+//       source,
+//       type,
+//       customerName,
+//       mobileNumber,
+//       customerCompanyName,
+//       product,
+//       cost,
+//       remark,
+//       accountId: assigneeAccountId,
+//       teamId: assigneeTeamId,
+//       demoDate,
+//       followUps,
+//     } = req.body as Record<string, any>;
+
+//     // console.log("\n\n\n\ndemoDate:", demoDate);
+
+//     if (!source || !type)
+//       return sendErrorResponse(res, 400, "Lead source and type are required");
+//     if (!customerName || !mobileNumber)
+//       return sendErrorResponse(
+//         res,
+//         400,
+//         "Customer name and mobile are required",
+//       );
+
+//     // XOR: either account or team must be provided (not both)
+//     if (!assigneeAccountId && !assigneeTeamId)
+//       return sendErrorResponse(res, 400, "Assign to account or team");
+//     if (assigneeAccountId && assigneeTeamId)
+//       return sendErrorResponse(
+//         res,
+//         400,
+//         "Provide either accountId or teamId, not both",
+//       );
+
+//     // normalize
+//     const normalizedMobile = normalizeMobile(mobileNumber);
+
+//     const resolvedProduct = product
+//       ? {
+//           id: product.id || randomUUID(),
+//           slug: product.slug ?? null,
+//           link: product.link ?? null,
+//           title: product.title ?? null,
+//         }
+//       : undefined;
+//     const productTitle =
+//       resolvedProduct?.title ?? req.body.productTitle ?? null;
+
+//     const initialAssignee = await resolveAssigneeSnapshot({
+//       accountId: assigneeAccountId,
+//       teamId: assigneeTeamId,
+//     });
+
+//     // Create lead + initial assignment + CREATED activity in single transaction
+//     const {
+//       lead,
+//       recipients,
+//       followUps: createdFollowUps,
+//     } = await prisma.$transaction(async (tx) => {
+//       // 1️⃣ find existing customer first
+//       let customer = await tx.customer.findUnique({
+//         where: { normalizedMobile },
+//       });
+
+//       // 2️⃣ prepare product object
+//       const newProduct =
+//         resolvedProduct?.title || cost
+//           ? {
+//               id: randomUUID(),
+//               name: resolvedProduct?.title ?? productTitle ?? "Unknown Product",
+//               price: cost ?? null,
+//               addedAt: new Date(),
+//               status: "ACTIVE",
+//             }
+//           : null;
+
+//       // 3️⃣ if customer exists → update products JSON
+//       if (customer) {
+//         let existingProducts: any = customer.products ?? {
+//           active: [],
+//           history: [],
+//         };
+
+//         // ensure structure
+//         if (!existingProducts.active) existingProducts.active = [];
+//         if (!existingProducts.history) existingProducts.history = [];
+
+//         // if (newProduct) {
+//         //   // set new active product
+//         //   existingProducts.active = [newProduct];
+//         // }
+//         if (newProduct) {
+//           if (!existingProducts.active) {
+//             existingProducts.active = [];
+//           }
+
+//           const alreadyExists = existingProducts.active.some(
+//             (p: any) => p.id === newProduct.id,
+//           );
+
+//           if (!alreadyExists) {
+//             existingProducts.active.push(newProduct);
+//           }
+//         }
+
+//         customer = await tx.customer.update({
+//           where: { id: customer.id },
+//           data: {
+//             name: customerName || customer.name,
+//             customerCompanyName:
+//               customerCompanyName || customer.customerCompanyName,
+//             products: existingProducts,
+//             updatedAt: new Date(),
+//           },
+//         });
+//       } else {
+//         // 4️⃣ create new customer
+//         customer = await tx.customer.create({
+//           data: {
+//             name: customerName,
+//             mobile: mobileNumber,
+//             customerCompanyName: customerCompanyName,
+//             normalizedMobile,
+//             createdBy: creatorAccountId,
+//             products: newProduct
+//               ? {
+//                   active: [newProduct],
+//                   history: [],
+//                 }
+//               : undefined,
+//           },
+//         });
+
+//         // console.log("\n\n\n\ncustomer", customer, "\n\n\n\n\n\n\n\n\n\n\n\n");
+//       }
+//       // const customer = await tx.customer.upsert({
+//       //   where: { normalizedMobile },
+//       //   create: {
+//       //     name: customerName,
+//       //     mobile: mobileNumber,
+//       //     normalizedMobile,
+//       //     createdBy: creatorAccountId,
+//       //   },
+//       //   update: {
+//       //     name: customerName || undefined,
+//       //     updatedAt: new Date(),
+//       //   },
+//       // });
+
+//       const created = await tx.lead.create({
+//         data: {
+//           source,
+//           type,
+//           customerId: customer.id,
+//           customerName: customer.name,
+//           customerCompanyName: customer.customerCompanyName,
+//           mobileNumber: normalizedMobile,
+//           product: resolvedProduct,
+//           productTitle,
+//           cost: cost ?? undefined,
+//           remark: remark ?? undefined,
+//           createdBy: creatorAccountId,
+//           demoScheduledAt: demoDate ? new Date(demoDate) : undefined,
+//           demoCount: demoDate ? 1 : 0,
+//           demoMeta: demoDate
+//             ? {
+//                 history: [
+//                   {
+//                     type: "SCHEDULED",
+//                     at: new Date(demoDate),
+//                     by: creatorAccountId,
+//                   },
+//                 ],
+//               }
+//             : undefined,
+//         },
+//       });
+
+//       const assignment = await tx.leadAssignment.create({
+//         data: {
+//           leadId: created.id,
+//           type: assigneeAccountId ? "ACCOUNT" : "TEAM",
+//           accountId: assigneeAccountId ?? null,
+//           teamId: assigneeTeamId ?? null,
+//           isActive: true,
+//           assignedBy: creatorAccountId,
+//           assignedAt: new Date(),
+//           unassignedAt: null,
+//         },
+//       });
+
+//       await tx.leadActivityLog.create({
+//         data: {
+//           leadId: created.id,
+//           action: "CREATED",
+//           performedBy: creatorAccountId,
+//           meta: {
+//             source,
+//             type,
+//             initialAssignment: initialAssignee,
+//             demoScheduledAt: demoDate ?? null,
+//           },
+//         },
+//       });
+
+//       let recipientAccountIds: string[] = [];
+
+//       if (assigneeAccountId) {
+//         recipientAccountIds = [assigneeAccountId];
+//       } else if (assigneeTeamId) {
+//         const members = await tx.teamMember.findMany({
+//           where: { teamId: assigneeTeamId, isActive: true },
+//           select: { accountId: true },
+//         });
+//         recipientAccountIds = members.map((m) => m.accountId);
+//       }
+
+//       // After tx.leadAssignment.create(...)
+
+//       // ── Follow-ups ────────────────────────────────────────────────
+//       let createdFollowUps: any[] = [];
+
+//       if (Array.isArray(followUps) && followUps.length > 0) {
+//         // validate: all must have scheduledAt
+//         const invalid = followUps.some((f) => !f.scheduledAt);
+//         if (invalid) throw new Error("Each follow-up must have a scheduledAt");
+
+//         const data = followUps.map((f) => ({
+//           leadId: created.id,
+//           type: f.type ?? "CALL",
+//           status: "PENDING" as const,
+//           scheduledAt: new Date(f.scheduledAt),
+//           remark: f.remark ?? null,
+//           createdBy: creatorAccountId, // or `accountId` in createMyLead
+//         }));
+
+//         await tx.leadFollowUp.createMany({ data });
+
+//         createdFollowUps = await tx.leadFollowUp.findMany({
+//           where: { leadId: created.id },
+//           orderBy: { scheduledAt: "asc" },
+//         });
+
+//         // sync aggregates on lead
+//         const earliest = createdFollowUps[0];
+//         await tx.lead.update({
+//           where: { id: created.id },
+//           data: {
+//             followUpCount: createdFollowUps.length,
+//             nextFollowUpAt: earliest.scheduledAt,
+//           },
+//         });
+
+//         // single activity log for all scheduled follow-ups
+//         await tx.leadActivityLog.create({
+//           data: {
+//             leadId: created.id,
+//             action: "FOLLOW_UP_SCHEDULED",
+//             performedBy: creatorAccountId, // or `accountId`
+//             meta: {
+//               count: createdFollowUps.length,
+//               followUps: createdFollowUps.map((f) => ({
+//                 id: f.id,
+//                 type: f.type,
+//                 scheduledAt: f.scheduledAt,
+//               })),
+//             },
+//           },
+//         });
+//       }
+
+//       // ── return from transaction ───────────────────────────────────
+//       return {
+//         lead: created,
+//         recipients: recipientAccountIds,
+//         followUps: createdFollowUps,
+//       };
+
+//       // return { lead: created, recipients: recipientAccountIds };
+//     });
+
+//     void triggerAssignmentNotification({
+//       leadId: lead.id,
+//       assigneeAccountId: assigneeAccountId ?? null,
+//       assigneeTeamId: assigneeTeamId ?? null,
+//     });
+
+//     try {
+//       const io = getIo();
+
+//       const socketPayload = {
+//         id: lead.id,
+//         customerName: lead.customerName,
+//         productTitle: lead.productTitle,
+//         status: lead.status,
+//         demoScheduledAt: lead.demoScheduledAt,
+//         demoCount: lead.demoCount,
+//         createdAt: lead.createdAt,
+//       };
+
+//       recipients.forEach((accountId) => {
+//         io.to(`leads:user:${accountId}`).emit("lead:created", socketPayload);
+//       });
+
+//       // optional admin dashboard room
+//       // io.to("leads:admin").emit("lead:created", socketPayload);
+//     } catch (e) {
+//       console.warn("Socket emit skipped");
+//     }
+
+//     return sendSuccessResponse(res, 201, "Lead created successfully", {
+//       ...lead,
+//       followUps: createdFollowUps,
+//     });
+//   } catch (err: any) {
+//     console.error("Create lead error:", err);
+//     // Prisma common error handling
+//     if (err?.code === "P2002") {
+//       return sendErrorResponse(res, 400, "Duplicate customer/mobile");
+//     }
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to create lead");
+//   }
+// }
+
 export async function createLeadAdmin(req: Request, res: Response) {
   try {
     const creatorAccountId = req.user?.accountId;
-
-    // const creatorAccountId = await getAccountIdFromReqUser(adminUserId);
     if (!creatorAccountId)
       return sendErrorResponse(res, 401, "Invalid session user");
-
-    // Destructure with different name to avoid shadowing creator accountId
+ 
     const {
       source,
       type,
       customerName,
       mobileNumber,
       customerCompanyName,
-      product,
-      cost,
+      cost,       // kept for backward-compat; overridden when products carry costs
       remark,
       accountId: assigneeAccountId,
       teamId: assigneeTeamId,
       demoDate,
       followUps,
     } = req.body as Record<string, any>;
-
-    // console.log("\n\n\n\ndemoDate:", demoDate);
-
+ 
     if (!source || !type)
       return sendErrorResponse(res, 400, "Lead source and type are required");
     if (!customerName || !mobileNumber)
-      return sendErrorResponse(
-        res,
-        400,
-        "Customer name and mobile are required",
-      );
-
-    // XOR: either account or team must be provided (not both)
+      return sendErrorResponse(res, 400, "Customer name and mobile are required");
     if (!assigneeAccountId && !assigneeTeamId)
       return sendErrorResponse(res, 400, "Assign to account or team");
     if (assigneeAccountId && assigneeTeamId)
-      return sendErrorResponse(
-        res,
-        400,
-        "Provide either accountId or teamId, not both",
-      );
-
-    // normalize
+      return sendErrorResponse(res, 400, "Provide either accountId or teamId, not both");
+ 
     const normalizedMobile = normalizeMobile(mobileNumber);
-
-    const resolvedProduct = product
-      ? {
-          id: product.id || randomUUID(),
-          slug: product.slug ?? null,
-          link: product.link ?? null,
-          title: product.title ?? null,
-        }
-      : undefined;
-    const productTitle =
-      resolvedProduct?.title ?? req.body.productTitle ?? null;
-
+ 
+    // ── Normalise products (handles all three input shapes) ──────────────────
+    const products = normalizeIncomingProducts(req.body);
+    const { productTitle, totalCost } = deriveLeadScalars(products, cost);
+ 
     const initialAssignee = await resolveAssigneeSnapshot({
       accountId: assigneeAccountId,
       teamId: assigneeTeamId,
     });
-
-    // Create lead + initial assignment + CREATED activity in single transaction
+ 
     const {
       lead,
       recipients,
       followUps: createdFollowUps,
     } = await prisma.$transaction(async (tx) => {
-      // 1️⃣ find existing customer first
-      let customer = await tx.customer.findUnique({
-        where: { normalizedMobile },
-      });
-
-      // 2️⃣ prepare product object
-      const newProduct =
-        resolvedProduct?.title || cost
-          ? {
-              id: randomUUID(),
-              name: resolvedProduct?.title ?? productTitle ?? "Unknown Product",
-              price: cost ?? null,
-              addedAt: new Date(),
-              status: "ACTIVE",
-            }
-          : null;
-
-      // 3️⃣ if customer exists → update products JSON
+      // ── 1. Customer upsert ──────────────────────────────────────────────────
+      let customer = await tx.customer.findUnique({ where: { normalizedMobile } });
+ 
       if (customer) {
-        let existingProducts: any = customer.products ?? {
-          active: [],
-          history: [],
-        };
-
-        // ensure structure
-        if (!existingProducts.active) existingProducts.active = [];
-        if (!existingProducts.history) existingProducts.history = [];
-
-        // if (newProduct) {
-        //   // set new active product
-        //   existingProducts.active = [newProduct];
-        // }
-        if (newProduct) {
-          if (!existingProducts.active) {
-            existingProducts.active = [];
-          }
-
-          const alreadyExists = existingProducts.active.some(
-            (p: any) => p.id === newProduct.id,
-          );
-
-          if (!alreadyExists) {
-            existingProducts.active.push(newProduct);
+        // Merge new products into existing customer.products.active
+        const existingProducts: any = customer.products ?? { active: [], history: [] };
+        if (!Array.isArray(existingProducts.active)) existingProducts.active = [];
+        if (!Array.isArray(existingProducts.history)) existingProducts.history = [];
+ 
+        if (products && products.length > 0) {
+          for (const entry of buildCustomerProductEntries(products)) {
+            const alreadyExists = existingProducts.active.some(
+              (p: any) => p.id === entry.id || p.name === entry.name,
+            );
+            if (!alreadyExists) {
+              existingProducts.active.push(entry);
+            }
           }
         }
-
+ 
         customer = await tx.customer.update({
           where: { id: customer.id },
           data: {
             name: customerName || customer.name,
-            customerCompanyName:
-              customerCompanyName || customer.customerCompanyName,
+            customerCompanyName: customerCompanyName || customer.customerCompanyName,
             products: existingProducts,
             updatedAt: new Date(),
           },
         });
       } else {
-        // 4️⃣ create new customer
+        // Create new customer with product entries
+        const customerProducts =
+          products && products.length > 0
+            ? {
+                active: buildCustomerProductEntries(products),
+                history: [],
+              }
+            : undefined;
+ 
         customer = await tx.customer.create({
           data: {
             name: customerName,
@@ -402,31 +698,16 @@ export async function createLeadAdmin(req: Request, res: Response) {
             customerCompanyName: customerCompanyName,
             normalizedMobile,
             createdBy: creatorAccountId,
-            products: newProduct
-              ? {
-                  active: [newProduct],
-                  history: [],
-                }
-              : undefined,
+            products: customerProducts,
           },
         });
-
-        // console.log("\n\n\n\ncustomer", customer, "\n\n\n\n\n\n\n\n\n\n\n\n");
       }
-      // const customer = await tx.customer.upsert({
-      //   where: { normalizedMobile },
-      //   create: {
-      //     name: customerName,
-      //     mobile: mobileNumber,
-      //     normalizedMobile,
-      //     createdBy: creatorAccountId,
-      //   },
-      //   update: {
-      //     name: customerName || undefined,
-      //     updatedAt: new Date(),
-      //   },
-      // });
-
+ 
+      // ── 2. Create Lead ──────────────────────────────────────────────────────
+      //
+      // lead.product stores the full normalised array (or single object for
+      // backward compat if only one product). This is what LeadProductSection
+      // reads back.
       const created = await tx.lead.create({
         data: {
           source,
@@ -435,9 +716,12 @@ export async function createLeadAdmin(req: Request, res: Response) {
           customerName: customer.name,
           customerCompanyName: customer.customerCompanyName,
           mobileNumber: normalizedMobile,
-          product: resolvedProduct,
-          productTitle,
-          cost: cost ?? undefined,
+          // Store full product array — downstream reads normalizeProducts()
+          product: (products && products.length > 0
+            ? (products.length === 1 ? products[0] : products)
+            : undefined) as any,
+          productTitle: productTitle ?? undefined,
+          cost: totalCost ?? undefined,
           remark: remark ?? undefined,
           createdBy: creatorAccountId,
           demoScheduledAt: demoDate ? new Date(demoDate) : undefined,
@@ -445,18 +729,15 @@ export async function createLeadAdmin(req: Request, res: Response) {
           demoMeta: demoDate
             ? {
                 history: [
-                  {
-                    type: "SCHEDULED",
-                    at: new Date(demoDate),
-                    by: creatorAccountId,
-                  },
+                  { type: "SCHEDULED", at: new Date(demoDate), by: creatorAccountId },
                 ],
               }
             : undefined,
         },
       });
-
-      const assignment = await tx.leadAssignment.create({
+ 
+      // ── 3. Assignment ───────────────────────────────────────────────────────
+      await tx.leadAssignment.create({
         data: {
           leadId: created.id,
           type: assigneeAccountId ? "ACCOUNT" : "TEAM",
@@ -468,7 +749,8 @@ export async function createLeadAdmin(req: Request, res: Response) {
           unassignedAt: null,
         },
       });
-
+ 
+      // ── 4. Activity log ─────────────────────────────────────────────────────
       await tx.leadActivityLog.create({
         data: {
           leadId: created.id,
@@ -479,12 +761,13 @@ export async function createLeadAdmin(req: Request, res: Response) {
             type,
             initialAssignment: initialAssignee,
             demoScheduledAt: demoDate ?? null,
+            products: products ? JSON.parse(JSON.stringify(products)) : null,
           },
         },
       });
-
+ 
+      // ── 5. Recipients ───────────────────────────────────────────────────────
       let recipientAccountIds: string[] = [];
-
       if (assigneeAccountId) {
         recipientAccountIds = [assigneeAccountId];
       } else if (assigneeTeamId) {
@@ -494,49 +777,43 @@ export async function createLeadAdmin(req: Request, res: Response) {
         });
         recipientAccountIds = members.map((m) => m.accountId);
       }
-
-      // After tx.leadAssignment.create(...)
-
-      // ── Follow-ups ────────────────────────────────────────────────
+ 
+      // ── 6. Follow-ups ───────────────────────────────────────────────────────
       let createdFollowUps: any[] = [];
-
+ 
       if (Array.isArray(followUps) && followUps.length > 0) {
-        // validate: all must have scheduledAt
         const invalid = followUps.some((f) => !f.scheduledAt);
         if (invalid) throw new Error("Each follow-up must have a scheduledAt");
-
-        const data = followUps.map((f) => ({
-          leadId: created.id,
-          type: f.type ?? "CALL",
-          status: "PENDING" as const,
-          scheduledAt: new Date(f.scheduledAt),
-          remark: f.remark ?? null,
-          createdBy: creatorAccountId, // or `accountId` in createMyLead
-        }));
-
-        await tx.leadFollowUp.createMany({ data });
-
+ 
+        await tx.leadFollowUp.createMany({
+          data: followUps.map((f) => ({
+            leadId: created.id,
+            type: f.type ?? "CALL",
+            status: "PENDING" as const,
+            scheduledAt: new Date(f.scheduledAt),
+            remark: f.remark ?? null,
+            createdBy: creatorAccountId,
+          })),
+        });
+ 
         createdFollowUps = await tx.leadFollowUp.findMany({
           where: { leadId: created.id },
           orderBy: { scheduledAt: "asc" },
         });
-
-        // sync aggregates on lead
-        const earliest = createdFollowUps[0];
+ 
         await tx.lead.update({
           where: { id: created.id },
           data: {
             followUpCount: createdFollowUps.length,
-            nextFollowUpAt: earliest.scheduledAt,
+            nextFollowUpAt: createdFollowUps[0].scheduledAt,
           },
         });
-
-        // single activity log for all scheduled follow-ups
+ 
         await tx.leadActivityLog.create({
           data: {
             leadId: created.id,
             action: "FOLLOW_UP_SCHEDULED",
-            performedBy: creatorAccountId, // or `accountId`
+            performedBy: creatorAccountId,
             meta: {
               count: createdFollowUps.length,
               followUps: createdFollowUps.map((f) => ({
@@ -548,26 +825,19 @@ export async function createLeadAdmin(req: Request, res: Response) {
           },
         });
       }
-
-      // ── return from transaction ───────────────────────────────────
-      return {
-        lead: created,
-        recipients: recipientAccountIds,
-        followUps: createdFollowUps,
-      };
-
-      // return { lead: created, recipients: recipientAccountIds };
+ 
+      return { lead: created, recipients: recipientAccountIds, followUps: createdFollowUps };
     });
-
+ 
+    // ── Notifications + Socket ────────────────────────────────────────────────
     void triggerAssignmentNotification({
       leadId: lead.id,
       assigneeAccountId: assigneeAccountId ?? null,
       assigneeTeamId: assigneeTeamId ?? null,
     });
-
+ 
     try {
       const io = getIo();
-
       const socketPayload = {
         id: lead.id,
         customerName: lead.customerName,
@@ -577,27 +847,21 @@ export async function createLeadAdmin(req: Request, res: Response) {
         demoCount: lead.demoCount,
         createdAt: lead.createdAt,
       };
-
       recipients.forEach((accountId) => {
         io.to(`leads:user:${accountId}`).emit("lead:created", socketPayload);
       });
-
-      // optional admin dashboard room
-      // io.to("leads:admin").emit("lead:created", socketPayload);
-    } catch (e) {
+    } catch {
       console.warn("Socket emit skipped");
     }
-
+ 
     return sendSuccessResponse(res, 201, "Lead created successfully", {
       ...lead,
       followUps: createdFollowUps,
     });
   } catch (err: any) {
     console.error("Create lead error:", err);
-    // Prisma common error handling
-    if (err?.code === "P2002") {
+    if (err?.code === "P2002")
       return sendErrorResponse(res, 400, "Duplicate customer/mobile");
-    }
     return sendErrorResponse(res, 500, err?.message ?? "Failed to create lead");
   }
 }
@@ -2153,7 +2417,7 @@ export async function updateLeadProductAdmin(req: Request, res: Response) {
     const resolvedProductTitle = resolvedProduct?.title ?? productTitle ?? null;
 
     const updateData: Record<string, any> = {};
-    if (resolvedProduct) updateData.product = resolvedProduct;
+    if (resolvedProduct) updateData.product = resolvedProduct as any;
     if (resolvedProductTitle) updateData.productTitle = resolvedProductTitle;
     if (cost !== undefined) updateData.cost = cost;
 
