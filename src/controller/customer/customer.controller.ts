@@ -435,7 +435,7 @@ export async function deleteCustomer(req: Request, res: Response) {
 export async function addCustomerProduct(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { name, price } = req.body;
+    const { name, price, purchaseAt } = req.body;
 
     if (!name || !price)
       return sendErrorResponse(res, 400, "Product name & price required");
@@ -454,6 +454,7 @@ export async function addCustomerProduct(req: Request, res: Response) {
       price,
       status: "ACTIVE",
       addedAt: new Date(),
+      purchaseAt: purchaseAt ?? "",
     };
 
     if (!Array.isArray(existingProducts.active)) existingProducts.active = [];
