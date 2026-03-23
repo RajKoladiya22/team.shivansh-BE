@@ -23,9 +23,20 @@ export async function getDashboardStats(req: Request, res: Response) {
 
     const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const endOfLastMonth   = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+    const endOfLastMonth = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      0,
+      23,
+      59,
+      59,
+    );
 
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
 
     /* ─── Lead scope ─── */
     const leadScope = isAdmin
@@ -55,13 +66,16 @@ export async function getDashboardStats(req: Request, res: Response) {
       leadValueGrouped,
 
       // Demo stats
-      upcomingDemos,
-      overdueDemos,
+      // upcomingDemos,
+      // overdueDemos,
+
+      upcomingFollowUps,
+      overdueFollowUps,
 
       // Conversion
       convertedLeads,
       convertedLeadsLastMonth,
-    
+
       // ── Today's leads ──
       todayLeads,
 
@@ -80,36 +94,56 @@ export async function getDashboardStats(req: Request, res: Response) {
         : prisma.customer.count({
             where: {
               isActive: true,
-              leads: { some: { assignments: { some: { accountId, isActive: true } } } },
+              leads: {
+                some: { assignments: { some: { accountId, isActive: true } } },
+              },
             },
           }),
 
       isAdmin
-        ? prisma.customer.count({ where: { isActive: true, createdAt: { gte: startOfThisMonth } } })
+        ? prisma.customer.count({
+            where: { isActive: true, createdAt: { gte: startOfThisMonth } },
+          })
         : prisma.customer.count({
             where: {
               isActive: true,
               createdAt: { gte: startOfThisMonth },
-              leads: { some: { assignments: { some: { accountId, isActive: true } } } },
+              leads: {
+                some: { assignments: { some: { accountId, isActive: true } } },
+              },
             },
           }),
 
       isAdmin
-        ? prisma.customer.count({ where: { isActive: true, createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } } })
+        ? prisma.customer.count({
+            where: {
+              isActive: true,
+              createdAt: { gte: startOfLastMonth, lte: endOfLastMonth },
+            },
+          })
         : prisma.customer.count({
             where: {
               isActive: true,
               createdAt: { gte: startOfLastMonth, lte: endOfLastMonth },
-              leads: { some: { assignments: { some: { accountId, isActive: true } } } },
+              leads: {
+                some: { assignments: { some: { accountId, isActive: true } } },
+              },
             },
           }),
 
       // ── Leads ──
       prisma.lead.count({ where: { ...leadScope } }),
 
-      prisma.lead.count({ where: { ...leadScope, createdAt: { gte: startOfThisMonth } } }),
+      prisma.lead.count({
+        where: { ...leadScope, createdAt: { gte: startOfThisMonth } },
+      }),
 
-      prisma.lead.count({ where: { ...leadScope, createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } } }),
+      prisma.lead.count({
+        where: {
+          ...leadScope,
+          createdAt: { gte: startOfLastMonth, lte: endOfLastMonth },
+        },
+      }),
 
       // ── Lead status breakdown ──
       prisma.lead.groupBy({
@@ -126,27 +160,67 @@ export async function getDashboardStats(req: Request, res: Response) {
         _count: { _all: true },
       }),
 
-      // ── Upcoming demos (next 7 days) ──
-      prisma.lead.count({
+      // // ── Upcoming demos (next 7 days) ──
+      // prisma.lead.count({
+      //   where: {
+      //     ...leadScope,
+      //     demoScheduledAt: {
+      //       gte: now,
+      //       lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+      //     },
+      //     demoDoneAt: null,
+      //   },
+      // }),
+
+      // // ── Overdue demos ──
+      // prisma.lead.count({
+      //   where: {
+      //     ...leadScope,
+      //     demoScheduledAt: { lt: now },
+      //     demoDoneAt: null,
+      //   },
+      // }),
+
+      // ── Upcoming follow-ups (next 7 days) ──
+      prisma.leadFollowUp.count({
         where: {
-          ...leadScope,
-          demoScheduledAt: { gte: now, lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) },
-          demoDoneAt: null,
+          status: "PENDING",
+          scheduledAt: {
+            gte: now,
+            lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+          },
+          ...(isAdmin
+            ? {}
+            : {
+                lead: {
+                  assignments: { some: { accountId, isActive: true } },
+                },
+              }),
         },
       }),
 
-      // ── Overdue demos ──
-      prisma.lead.count({
+      // ── Overdue follow-ups ──
+      prisma.leadFollowUp.count({
         where: {
-          ...leadScope,
-          demoScheduledAt: { lt: now },
-          demoDoneAt: null,
+          status: "PENDING",
+          scheduledAt: { lt: now },
+          ...(isAdmin
+            ? {}
+            : {
+                lead: {
+                  assignments: { some: { accountId, isActive: true } },
+                },
+              }),
         },
       }),
 
       // ── Converted this month ──
       prisma.lead.count({
-        where: { ...leadScope, status: "CONVERTED", updatedAt: { gte: startOfThisMonth } },
+        where: {
+          ...leadScope,
+          status: "CONVERTED",
+          updatedAt: { gte: startOfThisMonth },
+        },
       }),
 
       // ── Converted last month ──
@@ -160,15 +234,13 @@ export async function getDashboardStats(req: Request, res: Response) {
 
       // ── Today's leads ──
       isAdmin
-       ?
-       prisma.lead.count({
-        where: {
-          ...leadScope,
-          createdAt: { gte: startOfToday },
-        },
-      })
-      : Promise.resolve(null)
-      ,
+        ? prisma.lead.count({
+            where: {
+              ...leadScope,
+              createdAt: { gte: startOfToday },
+            },
+          })
+        : Promise.resolve(null),
       // ── Active employees ──
       isAdmin
         ? prisma.account.count({ where: { isActive: true } })
@@ -188,7 +260,15 @@ export async function getDashboardStats(req: Request, res: Response) {
     ]);
 
     /* ─── Normalize lead status counts ─── */
-    const STATUS_LIST = ["PENDING", "IN_PROGRESS", "FOLLOW_UPS", "DEMO_DONE", "INTERESTED", "CONVERTED", "CLOSED"] as const;
+    const STATUS_LIST = [
+      "PENDING",
+      "IN_PROGRESS",
+      "FOLLOW_UPS",
+      "DEMO_DONE",
+      "INTERESTED",
+      "CONVERTED",
+      "CLOSED",
+    ] as const;
 
     const leadStatusCounts = STATUS_LIST.reduce(
       (acc, status) => {
@@ -198,7 +278,10 @@ export async function getDashboardStats(req: Request, res: Response) {
       },
       {} as Record<string, number>,
     );
-    leadStatusCounts["TOTAL"] = Object.values(leadStatusCounts).reduce((a, b) => a + b, 0);
+    leadStatusCounts["TOTAL"] = Object.values(leadStatusCounts).reduce(
+      (a, b) => a + b,
+      0,
+    );
 
     /* ─── Normalize lead value ─── */
     const leadValueByStatus = STATUS_LIST.reduce(
@@ -243,17 +326,24 @@ export async function getDashboardStats(req: Request, res: Response) {
         total: totalLeadValue,
         byStatus: leadValueByStatus,
       },
-      demos: {
-        upcoming: upcomingDemos,
-        overdue: overdueDemos,
+      // demos: {
+      //   upcoming: upcomingDemos,
+      //   overdue: overdueDemos,
+      // },
+      followUps: {
+        upcoming: upcomingFollowUps,
+        overdue: overdueFollowUps,
       },
       conversions: {
         thisMonth: convertedLeads,
         lastMonth: convertedLeadsLastMonth,
         growth: growthPct(convertedLeads, convertedLeadsLastMonth),
-        rate: totalLeads > 0
-          ? Math.round((leadStatusCounts["CONVERTED"] / totalLeads) * 100 * 10) / 10
-          : 0,
+        rate:
+          totalLeads > 0
+            ? Math.round(
+                (leadStatusCounts["CONVERTED"] / totalLeads) * 100 * 10,
+              ) / 10
+            : 0,
       },
     };
 
@@ -266,12 +356,16 @@ export async function getDashboardStats(req: Request, res: Response) {
       data.teams = {
         total: totalTeams,
       };
-      data.todayLeads  = todayLeads;
+      data.todayLeads = todayLeads;
     }
 
     return sendSuccessResponse(res, 200, "Dashboard stats fetched", data);
   } catch (err: any) {
     console.error("Dashboard stats error:", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch dashboard stats");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch dashboard stats",
+    );
   }
 }
