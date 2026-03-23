@@ -944,24 +944,56 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
     // console.log("\n\n\nisTerminalStatus\n", isTerminalStatus);
 
     // verify access: ensure the lead is currently assigned to this user (directly or via team)
+    // const lead = await prisma.lead.findFirst({
+    //   where: {
+    //     id,
+    //     assignments: {
+    //       some: {
+    //         isActive: true,
+    //         OR: [
+    //           { accountId: accountId },
+    //           {
+    //             team: {
+    //               members: {
+    //                 some: { accountId: accountId },
+    //               },
+    //             },
+    //           },
+    //         ],
+    //       },
+    //     },
+    //   },
+    // });
     const lead = await prisma.lead.findFirst({
       where: {
         id,
-        assignments: {
-          some: {
-            isActive: true,
-            OR: [
-              { accountId: accountId },
-              {
-                team: {
-                  members: {
-                    some: { accountId: accountId },
+        OR: [
+          {
+            assignments: {
+              some: {
+                isActive: true,
+                OR: [
+                  { accountId },
+                  {
+                    team: {
+                      members: {
+                        some: { accountId },
+                      },
+                    },
                   },
-                },
+                ],
               },
-            ],
+            },
           },
-        },
+          {
+            leadHelpers: {
+              some: {
+                isActive: true,
+                accountId,
+              },
+            },
+          },
+        ],
       },
     });
 
@@ -1290,24 +1322,63 @@ export async function getMyLeadActivity(req: Request, res: Response) {
     if (!accountId || !id)
       return sendErrorResponse(res, 401, "Invalid session user");
 
+    // const hasAccess = await prisma.lead.findFirst({
+    //   where: {
+    //     id,
+    //     assignments: {
+    //       some: {
+    //         isActive: true,
+    //         OR: [
+    //           { accountId: accountId },
+    //           {
+    //             team: {
+    //               members: {
+    //                 some: { accountId: accountId },
+    //               },
+    //             },
+    //           },
+    //         ],
+    //       },
+    //     },
+    //     leadHelpers: {
+    //       some: {
+    //         isActive: true,
+    //         accountId,
+    //       },
+    //     },
+    //   },
+    //   select: { id: true },
+    // });
     const hasAccess = await prisma.lead.findFirst({
       where: {
         id,
-        assignments: {
-          some: {
-            isActive: true,
-            OR: [
-              { accountId: accountId },
-              {
-                team: {
-                  members: {
-                    some: { accountId: accountId },
+        OR: [
+          {
+            assignments: {
+              some: {
+                isActive: true,
+                OR: [
+                  { accountId },
+                  {
+                    team: {
+                      members: {
+                        some: { accountId },
+                      },
+                    },
                   },
-                },
+                ],
               },
-            ],
+            },
           },
-        },
+          {
+            leadHelpers: {
+              some: {
+                isActive: true,
+                accountId,
+              },
+            },
+          },
+        ],
       },
       select: { id: true },
     });

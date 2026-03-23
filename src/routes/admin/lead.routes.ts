@@ -57,6 +57,8 @@ const router = Router();
 //   listLeadsAdmin,
 // );
 
+router.patch("/leads/:id/product", requireAuth, updateLeadProductAdmin);
+
 router
   .route("/leads")
   .post(
@@ -173,7 +175,6 @@ router.delete(
 );
 
 router.patch("/leads/:id/customer", requireAuth, updateLeadCustomerAdmin);
-router.patch("/leads/:id/product", requireAuth, updateLeadProductAdmin);
 
 /**
  * Lead Status Stats
