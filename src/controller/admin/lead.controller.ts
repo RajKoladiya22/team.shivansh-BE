@@ -1367,6 +1367,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
           customerName: true,
           mobileNumber: true,
           productTitle: true,
+          product: true,
           cost: true,
           remark: true,
           isWorking: true,
