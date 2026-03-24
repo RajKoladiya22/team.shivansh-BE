@@ -761,9 +761,12 @@ export async function deleteTaskAdmin(req: Request, res: Response) {
     const recipients = await resolveTaskRecipients(id);
 
     await prisma.$transaction(async (tx) => {
-      await tx.task.update({
+      // await tx.task.update({
+      //   where: { id },
+      //   data: { deletedAt: new Date(), deletedBy: adminAccountId },
+      // });
+      await tx.task.delete({
         where: { id },
-        data: { deletedAt: new Date(), deletedBy: adminAccountId },
       });
 
       await tx.activityLog.create({
