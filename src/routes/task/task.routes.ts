@@ -12,6 +12,7 @@ import {
   getTaskActivityAdmin,
   getTaskStatsAdmin,
   // User
+  createSelfTaskUser,
   getMyTasksUser,
   getTaskByIdUser,
   updateTaskStatusUser,
@@ -33,32 +34,36 @@ router.use(requireAuth);
 ═══════════════════════════════════════════════════════════════ */
 
 // Stats must be registered before /:id to avoid route shadowing
-router.get(  "/admin/tasks/stats",        requireRole("ADMIN"), getTaskStatsAdmin);
+router.get("/admin/tasks/stats", requireRole("ADMIN"), getTaskStatsAdmin);
 
-router.post( "/admin/tasks",              requireRole("ADMIN"), createTaskAdmin);
-router.get(  "/admin/tasks",              requireRole("ADMIN"), listTasksAdmin);
-router.get(  "/admin/tasks/:id",          requireRole("ADMIN"), getTaskByIdAdmin);
-router.patch("/admin/tasks/:id",          requireRole("ADMIN"), updateTaskAdmin);
-router.delete("/admin/tasks/:id",         requireRole("ADMIN"), deleteTaskAdmin);
+router.post("/admin/tasks", requireRole("ADMIN"), createTaskAdmin);
+router.get("/admin/tasks", requireRole("ADMIN"), listTasksAdmin);
+router.get("/admin/tasks/:id", requireRole("ADMIN"), getTaskByIdAdmin);
+router.patch("/admin/tasks/:id", requireRole("ADMIN"), updateTaskAdmin);
+router.delete("/admin/tasks/:id", requireRole("ADMIN"), deleteTaskAdmin);
 
-router.post( "/admin/tasks/:id/assign",   requireRole("ADMIN"), assignTaskAdmin);
-router.get(  "/admin/tasks/:id/activity", requireRole("ADMIN"), getTaskActivityAdmin);
+router.post("/admin/tasks/:id/assign", requireRole("ADMIN"), assignTaskAdmin);
+router.get(
+  "/admin/tasks/:id/activity",
+  requireRole("ADMIN"),
+  getTaskActivityAdmin,
+);
 
 /* ═══════════════════════════════════════════════════════════════
    USER ROUTES  —  /user/tasks/*
    Accessible to any authenticated user.
    Each handler enforces isAssignedToTask() internally.
 ═══════════════════════════════════════════════════════════════ */
+router.post("/user/tasks", createSelfTaskUser);
+router.get("/user/tasks", getMyTasksUser);
+router.get("/user/tasks/:id", getTaskByIdUser);
 
-router.get( "/user/tasks",                 getMyTasksUser);
-router.get( "/user/tasks/:id",             getTaskByIdUser);
+router.patch("/user/tasks/:id/status", updateTaskStatusUser);
+router.post("/user/tasks/:id/complete", completeTaskUser);
 
-router.patch("/user/tasks/:id/status",     updateTaskStatusUser);
-router.post( "/user/tasks/:id/complete",   completeTaskUser);
+router.get("/user/tasks/:id/activity", getTaskActivityUser);
 
-router.get(  "/user/tasks/:id/activity",   getTaskActivityUser);
-
-router.post( "/user/tasks/:id/comments",   addCommentUser);
-router.get(  "/user/tasks/:id/comments",   getTaskCommentsUser);
+router.post("/user/tasks/:id/comments", addCommentUser);
+router.get("/user/tasks/:id/comments", getTaskCommentsUser);
 
 export default router;

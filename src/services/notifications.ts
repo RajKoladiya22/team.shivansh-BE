@@ -32,6 +32,23 @@ export type ServerNotificationPayload = {
   createdAt: string;
 };
 
+// Add these new types at the top alongside ServerNotificationPayload
+export type TaskNotificationEvent =
+  | "CREATED"
+  | "ASSIGNED"
+  | "UPDATED"
+  | "STATUS_CHANGED"
+  | "COMPLETED"
+  | "REMINDER";
+
+type TaskNotificationArgs = {
+  taskId: string;
+  event: TaskNotificationEvent;
+  performedByAccountId: string;
+  // Pass recipients directly — already resolved in the controller
+  recipientAccountIds: string[];
+};
+
 export async function triggerAssignmentNotification({
   leadId,
   assigneeAccountId = null,
@@ -545,5 +562,183 @@ export async function triggerPublicLeadNotification({
     });
   } catch (err) {
     console.error("triggerPublicLeadNotification failed:", err);
+  }
+}
+
+
+export async function triggerTaskNotification({
+  taskId,
+  event,
+  performedByAccountId,
+  recipientAccountIds,
+}: TaskNotificationArgs) {
+  try {
+    if (recipientAccountIds.length === 0) return;
+
+    // 1. Fetch task + performer
+    const [task, performer] = await Promise.all([
+      prisma.task.findUnique({
+        where: { id: taskId },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          priority: true,
+          dueDate: true,
+          projectId: true,
+          project: { select: { name: true } },
+        },
+      }),
+      prisma.account.findUnique({
+        where: { id: performedByAccountId },
+        select: { firstName: true, lastName: true },
+      }),
+    ]);
+
+    if (!task) return;
+
+    const performerName = performer
+      ? `${performer.firstName} ${performer.lastName}`.trim()
+      : "Someone";
+
+    // 2. Build title/body per event type
+    const copy: Record<TaskNotificationEvent, { title: string; body: string }> = {
+      CREATED: {
+        title: "New task assigned",
+        body: `${performerName} assigned you: ${task.title}`,
+      },
+      ASSIGNED: {
+        title: "Task reassigned",
+        body: `${performerName} reassigned "${task.title}" to you`,
+      },
+      UPDATED: {
+        title: "Task updated",
+        body: `${performerName} updated "${task.title}"`,
+      },
+      STATUS_CHANGED: {
+        title: "Task status changed",
+        body: `"${task.title}" is now ${task.status.toLowerCase().replace("_", " ")}`,
+      },
+      COMPLETED: {
+        title: "Task completed",
+        body: `"${task.title}" was marked complete by ${performerName}`,
+      },
+      REMINDER: {
+        title: "Task reminder",
+        body: task.dueDate
+          ? `"${task.title}" is due soon`
+          : `Don't forget: "${task.title}"`,
+      },
+    };
+
+    const { title, body } = copy[event];
+    const actionUrl = `/tasks/${task.id}`;
+
+    // 3. Persist notifications (upsert via dedupeKey)
+    const notifications = await Promise.all(
+      recipientAccountIds
+        .filter((id) => id !== performedByAccountId) // don't notify the actor
+        .map(async (accountId) => {
+          const dedupeKey = `task:${task.id}:${event}:${accountId}`;
+
+          const existing = await prisma.notification.findFirst({
+            where: { dedupeKey },
+            select: { id: true },
+          });
+
+          if (existing) {
+            return prisma.notification.update({
+              where: { id: existing.id },
+              data: {
+                sentAt: null,
+                createdAt: new Date(),
+                payload: {
+                  taskId: task.id,
+                  taskTitle: task.title,
+                  status: task.status,
+                  event,
+                  performedBy: performerName,
+                },
+              },
+            });
+          }
+
+          return prisma.notification.create({
+            data: {
+              accountId,
+              category: "TASK",
+              level: event === "REMINDER" ? "WARNING" : "INFO",
+              title,
+              body,
+              actionUrl,
+              dedupeKey,
+              deliveryChannels: ["web", "chrome"],
+              payload: {
+                taskId: task.id,
+                taskTitle: task.title,
+                status: task.status,
+                event,
+                performedBy: performerName,
+                projectName: task.project?.name ?? null,
+              },
+            },
+          });
+        }),
+    );
+
+    // 4. Socket emit
+    let io: ReturnType<typeof getIo> | null = null;
+    try { io = getIo(); } catch { /* no-op */ }
+
+    if (io) {
+      notifications.forEach((n) => {
+        if (!n.accountId) return;
+        const payload: ServerNotificationPayload = {
+          id: n.id,
+          category: n.category as any,
+          level: n.level as any,
+          title: n.title,
+          body: n.body,
+          actionUrl: n.actionUrl ?? undefined,
+          payload: n.payload as any,
+          createdAt: n.createdAt.toISOString(),
+        };
+        io!.to(`notif:${n.accountId}`).emit("notification", payload);
+      });
+    }
+
+    // 5. Web push (Chrome)
+    const subscriptions = await prisma.notificationSubscription.findMany({
+      where: { accountId: { in: recipientAccountIds } },
+    });
+
+    for (const sub of subscriptions) {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          JSON.stringify({
+            title,
+            body,
+            icon: "/favicon.png",
+            badge: "/favicon.png",
+            data: { actionUrl },
+          }),
+        );
+      } catch (err: any) {
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          await prisma.notificationSubscription
+            .delete({ where: { id: sub.id } })
+            .catch(() => {});
+        }
+      }
+    }
+
+    // 6. Mark sent
+    await prisma.notification.updateMany({
+      where: { id: { in: notifications.map((n) => n.id) } },
+      data: { sentAt: new Date() },
+    });
+  } catch (err) {
+    console.error("triggerTaskNotification failed:", err);
   }
 }

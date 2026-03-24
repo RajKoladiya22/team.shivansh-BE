@@ -7,6 +7,7 @@ import {
 } from "../../core/utils/httpResponse";
 import { getIo } from "../../core/utils/socket";
 import { TaskStatus, TaskPriority, AssignmentType } from "@prisma/client";
+import { triggerTaskNotification } from "../../services/notifications";
 
 /* ═══════════════════════════════════════════════════════════════
    SNAPSHOT HELPERS  (mirrors lead.controller.ts pattern)
@@ -18,14 +19,14 @@ async function resolveAssigneeSnapshot(input: {
 }) {
   if (input.accountId) {
     const acc = await prisma.account.findUnique({
-      where:  { id: input.accountId },
+      where: { id: input.accountId },
       select: { id: true, firstName: true, lastName: true, designation: true },
     });
     return acc
       ? {
-          type:        "ACCOUNT" as const,
-          id:          acc.id,
-          name:        `${acc.firstName} ${acc.lastName}`,
+          type: "ACCOUNT" as const,
+          id: acc.id,
+          name: `${acc.firstName} ${acc.lastName}`,
           designation: acc.designation ?? null,
         }
       : null;
@@ -33,7 +34,7 @@ async function resolveAssigneeSnapshot(input: {
 
   if (input.teamId) {
     const team = await prisma.team.findUnique({
-      where:  { id: input.teamId },
+      where: { id: input.teamId },
       select: { id: true, name: true },
     });
     return team
@@ -46,13 +47,13 @@ async function resolveAssigneeSnapshot(input: {
 
 async function resolvePerformerSnapshot(accountId: string) {
   const acc = await prisma.account.findUnique({
-    where:  { id: accountId },
+    where: { id: accountId },
     select: { id: true, firstName: true, lastName: true, designation: true },
   });
   if (!acc) return null;
   return {
-    id:          acc.id,
-    name:        `${acc.firstName} ${acc.lastName}`,
+    id: acc.id,
+    name: `${acc.firstName} ${acc.lastName}`,
     designation: acc.designation ?? null,
   };
 }
@@ -73,7 +74,7 @@ async function resolvePerformerSnapshot(accountId: string) {
  */
 async function resolveTaskRecipients(taskId: string): Promise<string[]> {
   const assignments = await prisma.taskAssignment.findMany({
-    where:  { taskId },
+    where: { taskId },
     select: { accountId: true, teamId: true },
   });
 
@@ -84,7 +85,7 @@ async function resolveTaskRecipients(taskId: string): Promise<string[]> {
       ids.add(a.accountId);
     } else if (a.teamId) {
       const members = await prisma.teamMember.findMany({
-        where:  { teamId: a.teamId, isActive: true },
+        where: { teamId: a.teamId, isActive: true },
         select: { accountId: true },
       });
       members.forEach((m) => ids.add(m.accountId));
@@ -107,12 +108,12 @@ function emitTaskCreated(recipients: string[], task: Record<string, unknown>) {
 }
 
 function emitTaskPatch(
-  taskId:     string,
+  taskId: string,
   recipients: string[],
-  patch:      Record<string, unknown>,
+  patch: Record<string, unknown>,
 ) {
   try {
-    const io      = getIo();
+    const io = getIo();
     const payload = { id: taskId, patch };
     recipients.forEach((accountId) => {
       io.to(`tasks:user:${accountId}`).emit("task:patch", payload);
@@ -140,24 +141,24 @@ function assertAdmin(req: Request, res: Response): boolean {
  * any team that is assigned to this task.
  */
 async function isAssignedToTask(
-  taskId:    string,
+  taskId: string,
   accountId: string,
 ): Promise<boolean> {
   const direct = await prisma.taskAssignment.findFirst({
-    where:  { taskId, accountId },
+    where: { taskId, accountId },
     select: { id: true },
   });
   if (direct) return true;
 
   const teamAssignments = await prisma.taskAssignment.findMany({
-    where:  { taskId, teamId: { not: null } },
+    where: { taskId, teamId: { not: null } },
     select: { teamId: true },
   });
 
   for (const { teamId } of teamAssignments) {
     if (!teamId) continue;
     const member = await prisma.teamMember.findFirst({
-      where:  { teamId, accountId, isActive: true },
+      where: { teamId, accountId, isActive: true },
       select: { id: true },
     });
     if (member) return true;
@@ -173,34 +174,37 @@ async function isAssignedToTask(
 ═══════════════════════════════════════════════════════════════ */
 
 const TASK_LIST_SELECT = {
-  id:          true,
-  title:       true,
+  id: true,
+  title: true,
   description: true,
-  status:      true,
-  priority:    true,
-  dueDate:     true,
-  startDate:   true,
-  startedAt:   true,
+  status: true,
+  priority: true,
+  dueDate: true,
+  startDate: true,
+  startedAt: true,
   completedAt: true,
-  isSelfTask:  true,
-  sortOrder:   true,
-  createdAt:   true,
-  updatedAt:   true,
+  isSelfTask: true,
+  sortOrder: true,
+  createdAt: true,
+  updatedAt: true,
 
   project: { select: { id: true, name: true, status: true } },
-  step:    { select: { id: true, name: true, order: true, color: true } },
+  step: { select: { id: true, name: true, order: true, color: true } },
 
   assignments: {
     select: {
-      id:         true,
-      type:       true,
-      status:     true,
-      note:       true,
+      id: true,
+      type: true,
+      status: true,
+      note: true,
       assignedAt: true,
       account: {
         select: {
-          id: true, firstName: true, lastName: true,
-          avatar: true, designation: true,
+          id: true,
+          firstName: true,
+          lastName: true,
+          avatar: true,
+          designation: true,
         },
       },
       team: { select: { id: true, name: true } },
@@ -208,7 +212,7 @@ const TASK_LIST_SELECT = {
   },
 
   checklist: {
-    select:  { id: true, title: true, status: true, order: true },
+    select: { id: true, title: true, status: true, order: true },
     orderBy: { order: "asc" as const },
   },
 
@@ -225,24 +229,35 @@ const TASK_DETAIL_SELECT = {
   ...TASK_LIST_SELECT,
 
   estimatedMinutes: true,
-  loggedMinutes:    true,
-  isRecurring:      true,
-  recurrenceType:   true,
+  loggedMinutes: true,
+  isRecurring: true,
+  recurrenceType: true,
 
   parentTaskId: true,
-  parentTask:   { select: { id: true, title: true, status: true } },
+  parentTask: { select: { id: true, title: true, status: true } },
 
   subTasks: {
-    where:   { deletedAt: null },
-    select:  { id: true, title: true, status: true, priority: true, dueDate: true },
+    where: { deletedAt: null },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      priority: true,
+      dueDate: true,
+    },
     orderBy: { sortOrder: "asc" as const },
   },
 
   attachments: {
-    where:   { deletedAt: null },
-    select:  {
-      id: true, name: true, source: true,
-      url: true, mimeType: true, sizeBytes: true, createdAt: true,
+    where: { deletedAt: null },
+    select: {
+      id: true,
+      name: true,
+      source: true,
+      url: true,
+      mimeType: true,
+      sizeBytes: true,
+      createdAt: true,
     },
     orderBy: { createdAt: "desc" as const },
   },
@@ -287,18 +302,21 @@ export async function createTaskAdmin(req: Request, res: Response) {
     const {
       title,
       description,
-      priority       = "NONE",
+      priority = "NONE",
       projectId,
       stepId,
       dueDate,
       startDate,
       estimatedMinutes,
-      isSelfTask     = false,
+      isSelfTask = false,
       parentTaskId,
-      labels         = [],
-      note,                              // assignment handoff note
+      labels = [],
+      note, // assignment handoff note
       accountId: assigneeAccountId,
-      teamId:    assigneeTeamId,
+      teamId: assigneeTeamId,
+      isRecurring = false,
+      recurrenceType = "ONE_TIME",
+      recurrenceRule = null,
     } = req.body as Record<string, any>;
 
     // ── Validation ─────────────────────────────────────────────
@@ -307,55 +325,63 @@ export async function createTaskAdmin(req: Request, res: Response) {
 
     if (!assigneeAccountId && !assigneeTeamId && !isSelfTask)
       return sendErrorResponse(
-        res, 400,
+        res,
+        400,
         "Assign to an account, a team, or mark as self task",
       );
 
     if (assigneeAccountId && assigneeTeamId)
       return sendErrorResponse(
-        res, 400, "Provide either accountId or teamId, not both",
+        res,
+        400,
+        "Provide either accountId or teamId, not both",
       );
 
     if (!Object.values(TaskPriority).includes(priority))
       return sendErrorResponse(
-        res, 400,
+        res,
+        400,
         `Invalid priority. Must be one of: ${Object.values(TaskPriority).join(", ")}`,
       );
 
     // stepId must belong to the given project
     if (stepId && projectId) {
       const step = await prisma.pipelineStep.findFirst({
-        where:  { id: stepId, pipeline: { projectId } },
+        where: { id: stepId, pipeline: { projectId } },
         select: { id: true },
       });
       if (!step)
         return sendErrorResponse(
-          res, 400, "Step does not belong to the specified project",
+          res,
+          400,
+          "Step does not belong to the specified project",
         );
     }
 
     const initialAssignee = await resolveAssigneeSnapshot({
       accountId: assigneeAccountId,
-      teamId:    assigneeTeamId,
+      teamId: assigneeTeamId,
     });
 
     // ── Transaction ────────────────────────────────────────────
     const { task, recipientIds } = await prisma.$transaction(async (tx) => {
-
       const created = await tx.task.create({
         data: {
-          title:            title.trim(),
-          description:      description      ?? null,
-          priority:         priority as TaskPriority,
-          projectId:        projectId        ?? null,
-          stepId:           stepId           ?? null,
-          dueDate:          dueDate          ? new Date(dueDate)   : null,
-          startDate:        startDate        ? new Date(startDate) : null,
+          title: title.trim(),
+          description: description ?? null,
+          priority: priority as TaskPriority,
+          projectId: projectId ?? null,
+          stepId: stepId ?? null,
+          dueDate: dueDate ? new Date(dueDate) : null,
+          startDate: startDate ? new Date(startDate) : null,
           estimatedMinutes: estimatedMinutes ?? null,
-          isSelfTask:       Boolean(isSelfTask),
-          parentTaskId:     parentTaskId     ?? null,
-          createdBy:        creatorAccountId,
-          status:           TaskStatus.PENDING,
+          isSelfTask: Boolean(isSelfTask),
+          parentTaskId: parentTaskId ?? null,
+          createdBy: creatorAccountId,
+          status: TaskStatus.PENDING,
+          isRecurring: Boolean(isRecurring),
+          recurrenceType: isRecurring ? recurrenceType : "ONE_TIME",
+          recurrenceRule: isRecurring && recurrenceRule ? recurrenceRule : null,
         },
         select: TASK_LIST_SELECT,
       });
@@ -364,15 +390,15 @@ export async function createTaskAdmin(req: Request, res: Response) {
       if (assigneeAccountId || assigneeTeamId) {
         await tx.taskAssignment.create({
           data: {
-            taskId:     created.id,
-            type:       assigneeAccountId
+            taskId: created.id,
+            type: assigneeAccountId
               ? AssignmentType.ACCOUNT
               : AssignmentType.TEAM,
-            accountId:  assigneeAccountId ?? null,
-            teamId:     assigneeTeamId    ?? null,
+            accountId: assigneeAccountId ?? null,
+            teamId: assigneeTeamId ?? null,
             assignedBy: creatorAccountId,
-            note:       note              ?? null,
-            status:     TaskStatus.PENDING,
+            note: note ?? null,
+            status: TaskStatus.PENDING,
           },
         });
       }
@@ -381,7 +407,7 @@ export async function createTaskAdmin(req: Request, res: Response) {
       if (labels.length > 0) {
         await tx.taskLabel.createMany({
           data: labels.map((labelId: string) => ({
-            taskId:  created.id,
+            taskId: created.id,
             labelId,
             addedBy: creatorAccountId,
           })),
@@ -392,21 +418,21 @@ export async function createTaskAdmin(req: Request, res: Response) {
       // ── Activity: CREATED ───────────────────────────────────
       await tx.activityLog.create({
         data: {
-          entityType:  "TASK",
-          entityId:    created.id,
-          action:      "CREATED",
+          entityType: "TASK",
+          entityId: created.id,
+          action: "CREATED",
           performedBy: creatorAccountId,
-          projectId:   projectId  ?? null,
-          taskId:      created.id,
+          projectId: projectId ?? null,
+          taskId: created.id,
           toState: {
             title,
             priority,
-            dueDate:  dueDate  ?? null,
+            dueDate: dueDate ?? null,
             assignee: initialAssignee,
           },
           meta: {
             assignedTo: initialAssignee,
-            note:       note ?? null,
+            note: note ?? null,
           },
         },
       });
@@ -417,7 +443,7 @@ export async function createTaskAdmin(req: Request, res: Response) {
         recipientIds = [assigneeAccountId];
       } else if (assigneeTeamId) {
         const members = await tx.teamMember.findMany({
-          where:  { teamId: assigneeTeamId, isActive: true },
+          where: { teamId: assigneeTeamId, isActive: true },
           select: { accountId: true },
         });
         recipientIds = members.map((m) => m.accountId);
@@ -428,11 +454,17 @@ export async function createTaskAdmin(req: Request, res: Response) {
 
     // Re-fetch with assignment rows hydrated
     const fullTask = await prisma.task.findUnique({
-      where:  { id: task.id },
+      where: { id: task.id },
       select: TASK_LIST_SELECT,
     });
 
     emitTaskCreated(recipientIds, fullTask as Record<string, unknown>);
+    await triggerTaskNotification({
+      taskId: task.id,
+      event: "CREATED",
+      performedByAccountId: creatorAccountId,
+      recipientAccountIds: recipientIds,
+    });
 
     return sendSuccessResponse(res, 201, "Task created successfully", fullTask);
   } catch (err: any) {
@@ -461,9 +493,9 @@ export async function assignTaskAdmin(req: Request, res: Response) {
       note,
       replaceExisting = true,
     } = req.body as {
-      accountId?:       string;
-      teamId?:          string;
-      note?:            string;
+      accountId?: string;
+      teamId?: string;
+      note?: string;
       replaceExisting?: boolean;
     };
 
@@ -471,22 +503,26 @@ export async function assignTaskAdmin(req: Request, res: Response) {
       return sendErrorResponse(res, 400, "Provide accountId or teamId");
 
     if (accountId && teamId)
-      return sendErrorResponse(res, 400, "Provide either accountId or teamId, not both");
+      return sendErrorResponse(
+        res,
+        400,
+        "Provide either accountId or teamId, not both",
+      );
 
     const task = await prisma.task.findUnique({
-      where:  { id: taskId, deletedAt: null },
+      where: { id: taskId, deletedAt: null },
       select: { id: true, projectId: true },
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
 
     // Snapshot previous for activity log
     const previousAssignments = await prisma.taskAssignment.findMany({
-      where:  { taskId },
+      where: { taskId },
       select: {
         accountId: true,
-        teamId:    true,
-        account:   { select: { id: true, firstName: true, lastName: true } },
-        team:      { select: { id: true, name: true } },
+        teamId: true,
+        account: { select: { id: true, firstName: true, lastName: true } },
+        team: { select: { id: true, name: true } },
       },
     });
 
@@ -494,7 +530,7 @@ export async function assignTaskAdmin(req: Request, res: Response) {
       a.account
         ? {
             type: "ACCOUNT",
-            id:   a.account.id,
+            id: a.account.id,
             name: `${a.account.firstName} ${a.account.lastName}`,
           }
         : { type: "TEAM", id: a.team!.id, name: a.team!.name },
@@ -503,7 +539,6 @@ export async function assignTaskAdmin(req: Request, res: Response) {
     const toSnapshot = await resolveAssigneeSnapshot({ accountId, teamId });
 
     const { recipientIds } = await prisma.$transaction(async (tx) => {
-
       if (replaceExisting) {
         await tx.taskAssignment.deleteMany({ where: { taskId } });
       } else if (accountId) {
@@ -514,26 +549,26 @@ export async function assignTaskAdmin(req: Request, res: Response) {
       await tx.taskAssignment.create({
         data: {
           taskId,
-          type:       accountId ? AssignmentType.ACCOUNT : AssignmentType.TEAM,
-          accountId:  accountId ?? null,
-          teamId:     teamId    ?? null,
+          type: accountId ? AssignmentType.ACCOUNT : AssignmentType.TEAM,
+          accountId: accountId ?? null,
+          teamId: teamId ?? null,
           assignedBy: performerAccountId,
-          note:       note      ?? null,
-          status:     TaskStatus.PENDING,
+          note: note ?? null,
+          status: TaskStatus.PENDING,
         },
       });
 
       await tx.activityLog.create({
         data: {
-          entityType:  "TASK",
-          entityId:    taskId,
-          action:      "ASSIGNED",
+          entityType: "TASK",
+          entityId: taskId,
+          action: "ASSIGNED",
           performedBy: performerAccountId,
-          projectId:   task.projectId,
+          projectId: task.projectId,
           taskId,
-          fromState:   { assignees: fromSnapshot },
-          toState:     { assignee:  toSnapshot },
-          meta:        { note: note ?? null, replaceExisting },
+          fromState: { assignees: fromSnapshot },
+          toState: { assignee: toSnapshot },
+          meta: { note: note ?? null, replaceExisting },
         },
       });
 
@@ -542,7 +577,7 @@ export async function assignTaskAdmin(req: Request, res: Response) {
         newRecipients = [accountId];
       } else if (teamId) {
         const members = await tx.teamMember.findMany({
-          where:  { teamId, isActive: true },
+          where: { teamId, isActive: true },
           select: { accountId: true },
         });
         newRecipients = members.map((m) => m.accountId);
@@ -560,7 +595,13 @@ export async function assignTaskAdmin(req: Request, res: Response) {
 
     emitTaskPatch(taskId, recipientIds, {
       assignment: toSnapshot,
-      updatedAt:  new Date(),
+      updatedAt: new Date(),
+    });
+    await triggerTaskNotification({
+      taskId,
+      event: "ASSIGNED",
+      performedByAccountId: performerAccountId,
+      recipientAccountIds: recipientIds,
     });
 
     return sendSuccessResponse(res, 200, "Task assigned successfully", {
@@ -590,24 +631,31 @@ export async function updateTaskAdmin(req: Request, res: Response) {
     const { id } = req.params;
 
     const existing = await prisma.task.findUnique({
-      where:  { id, deletedAt: null },
+      where: { id, deletedAt: null },
       select: {
-        id:          true,
-        status:      true,
-        priority:    true,
-        dueDate:     true,
-        stepId:      true,
-        projectId:   true,
-        startedAt:   true,
+        id: true,
+        status: true,
+        priority: true,
+        dueDate: true,
+        stepId: true,
+        projectId: true,
+        startedAt: true,
         completedAt: true,
       },
     });
     if (!existing) return sendErrorResponse(res, 404, "Task not found");
 
     const ALLOWED_FIELDS = [
-      "title", "description", "priority", "status",
-      "dueDate", "startDate", "estimatedMinutes",
-      "stepId", "sortOrder", "parentTaskId",
+      "title",
+      "description",
+      "priority",
+      "status",
+      "dueDate",
+      "startDate",
+      "estimatedMinutes",
+      "stepId",
+      "sortOrder",
+      "parentTaskId",
     ];
 
     const data: Record<string, any> = {};
@@ -633,34 +681,34 @@ export async function updateTaskAdmin(req: Request, res: Response) {
       data.completedAt = null;
     }
 
-    if (data.dueDate)   data.dueDate   = new Date(data.dueDate);
+    if (data.dueDate) data.dueDate = new Date(data.dueDate);
     if (data.startDate) data.startDate = new Date(data.startDate);
 
     const fromState = {
-      status:   existing.status,
+      status: existing.status,
       priority: existing.priority,
-      dueDate:  existing.dueDate,
-      stepId:   existing.stepId,
+      dueDate: existing.dueDate,
+      stepId: existing.stepId,
     };
 
     const updated = await prisma.$transaction(async (tx) => {
       const task = await tx.task.update({
-        where:  { id },
+        where: { id },
         data,
         select: TASK_DETAIL_SELECT,
       });
 
       await tx.activityLog.create({
         data: {
-          entityType:  "TASK",
-          entityId:    id,
-          action:      "UPDATED",
+          entityType: "TASK",
+          entityId: id,
+          action: "UPDATED",
           performedBy: adminAccountId,
-          projectId:   existing.projectId,
-          taskId:      id,
+          projectId: existing.projectId,
+          taskId: id,
           fromState,
-          toState:     data,
-          meta:        { updatedFields: Object.keys(data) },
+          toState: data,
+          meta: { updatedFields: Object.keys(data) },
         },
       });
 
@@ -670,11 +718,18 @@ export async function updateTaskAdmin(req: Request, res: Response) {
     const recipients = await resolveTaskRecipients(id);
 
     emitTaskPatch(id, recipients, {
-      status:      updated.status,
-      priority:    updated.priority,
-      dueDate:     updated.dueDate,
+      status: updated.status,
+      priority: updated.priority,
+      dueDate: updated.dueDate,
       completedAt: updated.completedAt,
-      updatedAt:   updated.updatedAt,
+      updatedAt: updated.updatedAt,
+    });
+
+    await triggerTaskNotification({
+      taskId: id,
+      event: "UPDATED",
+      performedByAccountId: adminAccountId,
+      recipientAccountIds: recipients,
     });
 
     return sendSuccessResponse(res, 200, "Task updated", updated);
@@ -698,7 +753,7 @@ export async function deleteTaskAdmin(req: Request, res: Response) {
     const { id } = req.params;
 
     const task = await prisma.task.findUnique({
-      where:  { id, deletedAt: null },
+      where: { id, deletedAt: null },
       select: { id: true, projectId: true },
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
@@ -708,17 +763,17 @@ export async function deleteTaskAdmin(req: Request, res: Response) {
     await prisma.$transaction(async (tx) => {
       await tx.task.update({
         where: { id },
-        data:  { deletedAt: new Date(), deletedBy: adminAccountId },
+        data: { deletedAt: new Date(), deletedBy: adminAccountId },
       });
 
       await tx.activityLog.create({
         data: {
-          entityType:  "TASK",
-          entityId:    id,
-          action:      "DELETED",
+          entityType: "TASK",
+          entityId: id,
+          action: "DELETED",
           performedBy: adminAccountId,
-          projectId:   task.projectId,
-          taskId:      id,
+          projectId: task.projectId,
+          taskId: id,
         },
       });
     });
@@ -752,39 +807,38 @@ export async function listTasksAdmin(req: Request, res: Response) {
       dueBefore,
       dueAfter,
       isSelfTask,
-      page  = "1",
+      page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
 
-    const pageNumber = Math.max(Number(page),  1);
-    const pageSize   = Math.min(Number(limit), 100);
-    const skip       = (pageNumber - 1) * pageSize;
+    const pageNumber = Math.max(Number(page), 1);
+    const pageSize = Math.min(Number(limit), 100);
+    const skip = (pageNumber - 1) * pageSize;
 
     const where: any = { deletedAt: null };
 
-    if (status)   where.status   = status   as TaskStatus;
+    if (status) where.status = status as TaskStatus;
     if (priority) where.priority = priority as TaskPriority;
     if (projectId) where.projectId = projectId;
-    if (stepId)    where.stepId    = stepId;
+    if (stepId) where.stepId = stepId;
 
-    if (isSelfTask !== undefined)
-      where.isSelfTask = isSelfTask === "true";
+    if (isSelfTask !== undefined) where.isSelfTask = isSelfTask === "true";
 
     if (fromDate || toDate) {
       where.createdAt = {};
       if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate)   where.createdAt.lte = new Date(toDate);
+      if (toDate) where.createdAt.lte = new Date(toDate);
     }
 
     if (dueBefore || dueAfter) {
       where.dueDate = {};
-      if (dueAfter)  where.dueDate.gte = new Date(dueAfter);
+      if (dueAfter) where.dueDate.gte = new Date(dueAfter);
       if (dueBefore) where.dueDate.lte = new Date(dueBefore);
     }
 
     if (search?.trim()) {
       where.OR = [
-        { title:       { contains: search.trim(), mode: "insensitive" } },
+        { title: { contains: search.trim(), mode: "insensitive" } },
         { description: { contains: search.trim(), mode: "insensitive" } },
       ];
     }
@@ -793,14 +847,14 @@ export async function listTasksAdmin(req: Request, res: Response) {
       where.assignments = {
         some: {
           ...(assignedToAccountId ? { accountId: assignedToAccountId } : {}),
-          ...(assignedToTeamId    ? { teamId:    assignedToTeamId    } : {}),
+          ...(assignedToTeamId ? { teamId: assignedToTeamId } : {}),
         },
       };
     }
 
     const orderBy = [
-      { priority:  "desc" as const },
-      { dueDate:   "asc"  as const },
+      { priority: "desc" as const },
+      { dueDate: "asc" as const },
       { createdAt: "desc" as const },
     ];
 
@@ -810,7 +864,7 @@ export async function listTasksAdmin(req: Request, res: Response) {
         where,
         orderBy,
         skip,
-        take:   pageSize,
+        take: pageSize,
         select: TASK_LIST_SELECT,
       }),
     ]);
@@ -818,12 +872,12 @@ export async function listTasksAdmin(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "Tasks fetched", {
       data: tasks,
       meta: {
-        page:       pageNumber,
-        limit:      pageSize,
+        page: pageNumber,
+        limit: pageSize,
         total,
         totalPages: Math.ceil(total / pageSize),
-        hasNext:    pageNumber * pageSize < total,
-        hasPrev:    pageNumber > 1,
+        hasNext: pageNumber * pageSize < total,
+        hasPrev: pageNumber > 1,
       },
     });
   } catch (err: any) {
@@ -841,7 +895,7 @@ export async function getTaskByIdAdmin(req: Request, res: Response) {
     if (!id) return sendErrorResponse(res, 400, "Task ID is required");
 
     const task = await prisma.task.findUnique({
-      where:  { id, deletedAt: null },
+      where: { id, deletedAt: null },
       select: TASK_DETAIL_SELECT,
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
@@ -862,11 +916,11 @@ export async function getTaskActivityAdmin(req: Request, res: Response) {
     if (!assertAdmin(req, res)) return;
 
     const { id } = req.params;
-    const page  = Math.max(Number(req.query.page  ?? 1), 1);
+    const page = Math.max(Number(req.query.page ?? 1), 1);
     const limit = Math.min(Number(req.query.limit ?? 50), 100);
 
     const task = await prisma.task.findUnique({
-      where:  { id },
+      where: { id },
       select: { id: true },
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
@@ -874,18 +928,18 @@ export async function getTaskActivityAdmin(req: Request, res: Response) {
     const [total, activity] = await Promise.all([
       prisma.activityLog.count({ where: { taskId: id } }),
       prisma.activityLog.findMany({
-        where:   { taskId: id },
+        where: { taskId: id },
         orderBy: { createdAt: "desc" },
-        skip:    (page - 1) * limit,
-        take:    limit,
+        skip: (page - 1) * limit,
+        take: limit,
         select: {
-          id:          true,
-          action:      true,
-          entityType:  true,
-          meta:        true,
-          fromState:   true,
-          toState:     true,
-          createdAt:   true,
+          id: true,
+          action: true,
+          entityType: true,
+          meta: true,
+          fromState: true,
+          toState: true,
+          createdAt: true,
           performedBy: true,
         },
       }),
@@ -897,10 +951,13 @@ export async function getTaskActivityAdmin(req: Request, res: Response) {
       ),
     ];
     const actors = await prisma.account.findMany({
-      where:  { id: { in: actorIds } },
+      where: { id: { in: actorIds } },
       select: {
-        id: true, firstName: true, lastName: true,
-        designation: true, avatar: true,
+        id: true,
+        firstName: true,
+        lastName: true,
+        designation: true,
+        avatar: true,
       },
     });
     const actorMap = Object.fromEntries(actors.map((a) => [a.id, a]));
@@ -913,7 +970,7 @@ export async function getTaskActivityAdmin(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "Task activity fetched", {
       taskId: id,
       total,
-      data:   enriched,
+      data: enriched,
       meta: {
         page,
         limit,
@@ -922,7 +979,11 @@ export async function getTaskActivityAdmin(req: Request, res: Response) {
     });
   } catch (err: any) {
     console.error("[getTaskActivityAdmin]", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch activity");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch activity",
+    );
   }
 }
 
@@ -943,7 +1004,7 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
     if (fromDate || toDate) {
       where.createdAt = {};
       if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate)   where.createdAt.lte = new Date(toDate);
+      if (toDate) where.createdAt.lte = new Date(toDate);
     }
 
     if (assignedToAccountId) {
@@ -951,32 +1012,32 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
     }
 
     const grouped = await prisma.task.groupBy({
-      by:     ["status"],
+      by: ["status"],
       where,
       _count: { _all: true },
     });
 
     const stats: Record<string, number> = {
-      PENDING:     0,
+      PENDING: 0,
       IN_PROGRESS: 0,
-      IN_REVIEW:   0,
-      BLOCKED:     0,
-      COMPLETED:   0,
-      CANCELLED:   0,
-      TOTAL:       0,
-      OVERDUE:     0,
+      IN_REVIEW: 0,
+      BLOCKED: 0,
+      COMPLETED: 0,
+      CANCELLED: 0,
+      TOTAL: 0,
+      OVERDUE: 0,
     };
 
     for (const row of grouped) {
-      stats[row.status]  = row._count._all;
-      stats.TOTAL       += row._count._all;
+      stats[row.status] = row._count._all;
+      stats.TOTAL += row._count._all;
     }
 
     stats.OVERDUE = await prisma.task.count({
       where: {
         ...where,
         dueDate: { lt: new Date() },
-        status:  { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] },
+        status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] },
       },
     });
 
@@ -987,18 +1048,135 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
   }
 }
 
-
-
-
-
-
-
-
-
-
 /* ═══════════════════════════════════════════════════════════════
    ░░░░░░░░░░░░░░░░  USER CONTROLLERS  ░░░░░░░░░░░░░░░░░░░░░░░░
 ═══════════════════════════════════════════════════════════════ */
+
+export async function createSelfTaskUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const {
+      title,
+      description,
+      priority = "NONE",
+      dueDate,
+      startDate,
+      estimatedMinutes,
+      labels = [],
+      isRecurring = false,
+      recurrenceType = "ONE_TIME",
+      recurrenceRule = null,
+    } = req.body as Record<string, any>;
+
+    if (!title?.trim())
+      return sendErrorResponse(res, 400, "Task title is required");
+
+    if (!Object.values(TaskPriority).includes(priority))
+      return sendErrorResponse(
+        res,
+        400,
+        `Invalid priority. Must be one of: ${Object.values(TaskPriority).join(", ")}`,
+      );
+
+    if (isRecurring && recurrenceType === "ONE_TIME")
+      return sendErrorResponse(
+        res,
+        400,
+        "recurrenceType cannot be ONE_TIME when isRecurring is true",
+      );
+
+    const task = await prisma.$transaction(async (tx) => {
+      // ── Create task (always isSelfTask = true) ──────────────────────────
+      const created = await tx.task.create({
+        data: {
+          title: title.trim(),
+          description: description ?? null,
+          priority: priority as TaskPriority,
+          dueDate: dueDate ? new Date(dueDate) : null,
+          startDate: startDate ? new Date(startDate) : null,
+          estimatedMinutes: estimatedMinutes ?? null,
+          isSelfTask: true,
+          createdBy: accountId,
+          status: TaskStatus.PENDING,
+          isRecurring: Boolean(isRecurring),
+          recurrenceType: isRecurring ? recurrenceType : "ONE_TIME",
+          recurrenceRule: isRecurring && recurrenceRule ? recurrenceRule : null,
+        },
+        select: TASK_LIST_SELECT,
+      });
+
+      // ── Auto-assign to the creating user so it appears in their task list ─
+      await tx.taskAssignment.create({
+        data: {
+          taskId: created.id,
+          type: AssignmentType.ACCOUNT,
+          accountId,
+          assignedBy: accountId,
+          status: TaskStatus.PENDING,
+        },
+      });
+
+      // ── Labels ────────────────────────────────────────────────────────────
+      if (labels.length > 0) {
+        await tx.taskLabel.createMany({
+          data: labels.map((labelId: string) => ({
+            taskId: created.id,
+            labelId,
+            addedBy: accountId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      // ── Activity ──────────────────────────────────────────────────────────
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: created.id,
+          action: "CREATED",
+          performedBy: accountId,
+          taskId: created.id,
+          toState: {
+            title,
+            priority,
+            dueDate: dueDate ?? null,
+            isRecurring,
+            recurrenceType,
+          },
+          meta: { isSelfTask: true, source: "user_self_create" },
+        },
+      });
+
+      return created;
+    });
+
+    // Re-fetch with assignment hydrated
+    const fullTask = await prisma.task.findUnique({
+      where: { id: task.id },
+      select: TASK_LIST_SELECT,
+    });
+
+    // Notify self (user's own socket room)
+    try {
+      const io = getIo();
+      io.to(`tasks:user:${accountId}`).emit("task:created", fullTask);
+      io.to("tasks:admin").emit("task:created", fullTask);
+    } catch {
+      console.warn("[createSelfTaskUser] Socket emit skipped");
+    }
+
+    return sendSuccessResponse(res, 201, "Self task created", fullTask);
+  } catch (err: any) {
+    console.error("[createSelfTaskUser]", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to create self task",
+    );
+  }
+}
 
 /* ─────────────────────────────────────────────────────────────
    GET /user/tasks
@@ -1016,23 +1194,23 @@ export async function getMyTasksUser(req: Request, res: Response) {
       search,
       dueBefore,
       dueAfter,
-      page  = "1",
+      page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
 
-    const pageNumber = Math.max(Number(page),  1);
-    const pageSize   = Math.min(Number(limit), 100);
-    const skip       = (pageNumber - 1) * pageSize;
+    const pageNumber = Math.max(Number(page), 1);
+    const pageSize = Math.min(Number(limit), 100);
+    const skip = (pageNumber - 1) * pageSize;
 
     // Expand team memberships
     const teamMemberships = await prisma.teamMember.findMany({
-      where:  { accountId, isActive: true },
+      where: { accountId, isActive: true },
       select: { teamId: true },
     });
     const teamIds = teamMemberships.map((m) => m.teamId);
 
     const where: any = {
-      deletedAt:   null,
+      deletedAt: null,
       assignments: {
         some: {
           OR: [
@@ -1043,28 +1221,30 @@ export async function getMyTasksUser(req: Request, res: Response) {
       },
     };
 
-    if (status)    where.status    = status    as TaskStatus;
-    if (priority)  where.priority  = priority  as TaskPriority;
+    if (status) where.status = status as TaskStatus;
+    if (priority) where.priority = priority as TaskPriority;
     if (projectId) where.projectId = projectId;
 
     if (search?.trim()) {
-      where.AND = [{
-        OR: [
-          { title:       { contains: search.trim(), mode: "insensitive" } },
-          { description: { contains: search.trim(), mode: "insensitive" } },
-        ],
-      }];
+      where.AND = [
+        {
+          OR: [
+            { title: { contains: search.trim(), mode: "insensitive" } },
+            { description: { contains: search.trim(), mode: "insensitive" } },
+          ],
+        },
+      ];
     }
 
     if (dueBefore || dueAfter) {
       where.dueDate = {};
-      if (dueAfter)  where.dueDate.gte = new Date(dueAfter);
+      if (dueAfter) where.dueDate.gte = new Date(dueAfter);
       if (dueBefore) where.dueDate.lte = new Date(dueBefore);
     }
 
     const orderBy = [
-      { priority:  "desc" as const },
-      { dueDate:   "asc"  as const },
+      { priority: "desc" as const },
+      { dueDate: "asc" as const },
       { updatedAt: "desc" as const },
     ];
 
@@ -1074,7 +1254,7 @@ export async function getMyTasksUser(req: Request, res: Response) {
         where,
         orderBy,
         skip,
-        take:   pageSize,
+        take: pageSize,
         select: TASK_LIST_SELECT,
       }),
     ]);
@@ -1082,12 +1262,12 @@ export async function getMyTasksUser(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "My tasks fetched", {
       data: tasks,
       meta: {
-        page:       pageNumber,
-        limit:      pageSize,
+        page: pageNumber,
+        limit: pageSize,
         total,
         totalPages: Math.ceil(total / pageSize),
-        hasNext:    pageNumber * pageSize < total,
-        hasPrev:    pageNumber > 1,
+        hasNext: pageNumber * pageSize < total,
+        hasPrev: pageNumber > 1,
       },
     });
   } catch (err: any) {
@@ -1108,7 +1288,7 @@ export async function getTaskByIdUser(req: Request, res: Response) {
     const { id } = req.params;
 
     const task = await prisma.task.findUnique({
-      where:  { id, deletedAt: null },
+      where: { id, deletedAt: null },
       select: TASK_DETAIL_SELECT,
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
@@ -1146,7 +1326,8 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
 
     if (!status || !Object.values(TaskStatus).includes(status))
       return sendErrorResponse(
-        res, 400,
+        res,
+        400,
         `status must be one of: ${Object.values(TaskStatus).join(", ")}`,
       );
 
@@ -1159,7 +1340,7 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
       return sendErrorResponse(res, 403, "You are not assigned to this task");
 
     const task = await prisma.task.findUnique({
-      where:  { id, deletedAt: null },
+      where: { id, deletedAt: null },
       select: { id: true, status: true, projectId: true, startedAt: true },
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
@@ -1177,14 +1358,17 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
     if (status === TaskStatus.COMPLETED) {
       timestamps.completedAt = new Date();
     }
-    if (status === TaskStatus.IN_PROGRESS && fromStatus === TaskStatus.COMPLETED) {
+    if (
+      status === TaskStatus.IN_PROGRESS &&
+      fromStatus === TaskStatus.COMPLETED
+    ) {
       timestamps.completedAt = null;
     }
 
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.task.update({
-        where:  { id },
-        data:   { status, ...timestamps },
+        where: { id },
+        data: { status, ...timestamps },
         select: TASK_LIST_SELECT,
       });
 
@@ -1193,23 +1377,23 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
         where: { taskId: id, accountId },
         data: {
           status,
-          note:      note      ?? undefined,
+          note: note ?? undefined,
           updatedAt: new Date(),
         },
       });
 
       await tx.activityLog.create({
         data: {
-          entityType:  "TASK",
-          entityId:    id,
-          action:      "STATUS_CHANGED",
+          entityType: "TASK",
+          entityId: id,
+          action: "STATUS_CHANGED",
           performedBy: accountId,
-          projectId:   task.projectId,
-          taskId:      id,
-          fromState:   { status: fromStatus },
-          toState:     { status, ...timestamps },
+          projectId: task.projectId,
+          taskId: id,
+          fromState: { status: fromStatus },
+          toState: { status, ...timestamps },
           meta: {
-            note:      note ?? null,
+            note: note ?? null,
             changedBy: accountId,
           },
         },
@@ -1221,22 +1405,32 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
     const recipients = await resolveTaskRecipients(id);
 
     emitTaskPatch(id, recipients, {
-      status:      updated.status,
+      status: updated.status,
       completedAt: updated.completedAt,
-      updatedAt:   updated.updatedAt,
-      changedBy:   accountId,
-      note:        note ?? null,
+      updatedAt: updated.updatedAt,
+      changedBy: accountId,
+      note: note ?? null,
+    });
+    await triggerTaskNotification({
+      taskId: id,
+      event: "STATUS_CHANGED",
+      performedByAccountId: accountId,
+      recipientAccountIds: recipients,
     });
 
     return sendSuccessResponse(res, 200, "Task status updated", {
-      id:          updated.id,
-      status:      updated.status,
+      id: updated.id,
+      status: updated.status,
       completedAt: updated.completedAt,
-      updatedAt:   updated.updatedAt,
+      updatedAt: updated.updatedAt,
     });
   } catch (err: any) {
     console.error("[updateTaskStatusUser]", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to update status");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to update status",
+    );
   }
 }
 
@@ -1258,13 +1452,13 @@ export async function completeTaskUser(req: Request, res: Response) {
       return sendErrorResponse(res, 403, "You are not assigned to this task");
 
     const task = await prisma.task.findUnique({
-      where:  { id, deletedAt: null },
+      where: { id, deletedAt: null },
       select: {
-        id:        true,
-        status:    true,
+        id: true,
+        status: true,
         projectId: true,
         checklist: {
-          where:  { status: "PENDING" },
+          where: { status: "PENDING" },
           select: { id: true },
         },
       },
@@ -1277,36 +1471,36 @@ export async function completeTaskUser(req: Request, res: Response) {
       return sendErrorResponse(res, 409, "Cancelled tasks cannot be completed");
 
     const pendingChecklistCount = task.checklist.length;
-    const completedAt           = new Date();
+    const completedAt = new Date();
 
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.task.update({
-        where:  { id },
-        data:   { status: TaskStatus.COMPLETED, completedAt },
+        where: { id },
+        data: { status: TaskStatus.COMPLETED, completedAt },
         select: TASK_LIST_SELECT,
       });
 
       await tx.taskAssignment.updateMany({
         where: { taskId: id, accountId },
         data: {
-          status:    TaskStatus.COMPLETED,
-          note:      note      ?? undefined,
+          status: TaskStatus.COMPLETED,
+          note: note ?? undefined,
           updatedAt: new Date(),
         },
       });
 
       await tx.activityLog.create({
         data: {
-          entityType:  "TASK",
-          entityId:    id,
-          action:      "COMPLETED",
+          entityType: "TASK",
+          entityId: id,
+          action: "COMPLETED",
           performedBy: accountId,
-          projectId:   task.projectId,
-          taskId:      id,
-          fromState:   { status: task.status },
-          toState:     { status: TaskStatus.COMPLETED, completedAt },
+          projectId: task.projectId,
+          taskId: id,
+          fromState: { status: task.status },
+          toState: { status: TaskStatus.COMPLETED, completedAt },
           meta: {
-            note:                 note ?? null,
+            note: note ?? null,
             pendingChecklistCount,
           },
         },
@@ -1318,22 +1512,32 @@ export async function completeTaskUser(req: Request, res: Response) {
     const recipients = await resolveTaskRecipients(id);
 
     emitTaskPatch(id, recipients, {
-      status:      TaskStatus.COMPLETED,
+      status: TaskStatus.COMPLETED,
       completedAt,
-      updatedAt:   updated.updatedAt,
+      updatedAt: updated.updatedAt,
       completedBy: accountId,
-      note:        note ?? null,
+      note: note ?? null,
+    });
+    await triggerTaskNotification({
+      taskId: id,
+      event: "COMPLETED",
+      performedByAccountId: accountId,
+      recipientAccountIds: recipients,
     });
 
     return sendSuccessResponse(res, 200, "Task completed", {
-      id:                   updated.id,
-      status:               updated.status,
+      id: updated.id,
+      status: updated.status,
       completedAt,
       pendingChecklistCount, // client: "3 checklist items still open" if > 0
     });
   } catch (err: any) {
     console.error("[completeTaskUser]", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to complete task");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to complete task",
+    );
   }
 }
 
@@ -1353,23 +1557,23 @@ export async function getTaskActivityUser(req: Request, res: Response) {
       return sendErrorResponse(res, 403, "You are not assigned to this task");
 
     const task = await prisma.task.findUnique({
-      where:  { id, deletedAt: null },
+      where: { id, deletedAt: null },
       select: { id: true },
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
 
     const activity = await prisma.activityLog.findMany({
-      where:   { taskId: id },
+      where: { taskId: id },
       orderBy: { createdAt: "desc" },
-      take:    100,
+      take: 100,
       select: {
-        id:          true,
-        action:      true,
-        meta:        true,
-        toState:     true,
-        fromState:   true,
+        id: true,
+        action: true,
+        meta: true,
+        toState: true,
+        fromState: true,
         performedBy: true,
-        createdAt:   true,
+        createdAt: true,
       },
     });
 
@@ -1379,10 +1583,13 @@ export async function getTaskActivityUser(req: Request, res: Response) {
       ),
     ];
     const actors = await prisma.account.findMany({
-      where:  { id: { in: actorIds } },
+      where: { id: { in: actorIds } },
       select: {
-        id: true, firstName: true, lastName: true,
-        designation: true, avatar: true,
+        id: true,
+        firstName: true,
+        lastName: true,
+        designation: true,
+        avatar: true,
       },
     });
     const actorMap = Object.fromEntries(actors.map((a) => [a.id, a]));
@@ -1394,12 +1601,16 @@ export async function getTaskActivityUser(req: Request, res: Response) {
 
     return sendSuccessResponse(res, 200, "Task activity fetched", {
       taskId: id,
-      total:  enriched.length,
-      data:   enriched,
+      total: enriched.length,
+      data: enriched,
     });
   } catch (err: any) {
     console.error("[getTaskActivityUser]", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch activity");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch activity",
+    );
   }
 }
 
@@ -1417,9 +1628,9 @@ export async function addCommentUser(req: Request, res: Response) {
       parentCommentId,
       mentions = [],
     } = req.body as {
-      content:          string;
+      content: string;
       parentCommentId?: string;
-      mentions?:        string[];
+      mentions?: string[];
     };
 
     if (!content?.trim())
@@ -1430,7 +1641,7 @@ export async function addCommentUser(req: Request, res: Response) {
       return sendErrorResponse(res, 403, "You are not assigned to this task");
 
     const task = await prisma.task.findUnique({
-      where:  { id: taskId, deletedAt: null },
+      where: { id: taskId, deletedAt: null },
       select: { id: true, projectId: true },
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
@@ -1439,18 +1650,21 @@ export async function addCommentUser(req: Request, res: Response) {
       const created = await tx.taskComment.create({
         data: {
           taskId,
-          authorId:        accountId,
-          content:         content.trim(),
+          authorId: accountId,
+          content: content.trim(),
           parentCommentId: parentCommentId ?? null,
         },
         select: {
-          id:              true,
-          content:         true,
-          createdAt:       true,
+          id: true,
+          content: true,
+          createdAt: true,
           parentCommentId: true,
           author: {
             select: {
-              id: true, firstName: true, lastName: true, avatar: true,
+              id: true,
+              firstName: true,
+              lastName: true,
+              avatar: true,
             },
           },
         },
@@ -1468,14 +1682,14 @@ export async function addCommentUser(req: Request, res: Response) {
 
       await tx.activityLog.create({
         data: {
-          entityType:  "TASK",
-          entityId:    taskId,
-          action:      "COMMENTED",
+          entityType: "TASK",
+          entityId: taskId,
+          action: "COMMENTED",
           performedBy: accountId,
-          projectId:   task.projectId,
+          projectId: task.projectId,
           taskId,
           meta: {
-            commentId:       created.id,
+            commentId: created.id,
             parentCommentId: parentCommentId ?? null,
             mentions,
           },
@@ -1487,12 +1701,12 @@ export async function addCommentUser(req: Request, res: Response) {
 
     // Notify assignees + mentioned accounts (skip the author)
     const taskRecipients = await resolveTaskRecipients(taskId);
-    const allRecipients  = [
-      ...new Set([...taskRecipients, ...mentions]),
-    ].filter((id) => id !== accountId);
+    const allRecipients = [...new Set([...taskRecipients, ...mentions])].filter(
+      (id) => id !== accountId,
+    );
 
     try {
-      const io      = getIo();
+      const io = getIo();
       const payload = { taskId, comment };
       allRecipients.forEach((recipientId) => {
         io.to(`tasks:user:${recipientId}`).emit("task:comment", payload);
@@ -1525,37 +1739,43 @@ export async function getTaskCommentsUser(req: Request, res: Response) {
       return sendErrorResponse(res, 403, "You are not assigned to this task");
 
     const task = await prisma.task.findUnique({
-      where:  { id: taskId, deletedAt: null },
+      where: { id: taskId, deletedAt: null },
       select: { id: true },
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
 
     const comments = await prisma.taskComment.findMany({
-      where:   { taskId, parentCommentId: null, deletedAt: null },
+      where: { taskId, parentCommentId: null, deletedAt: null },
       orderBy: { createdAt: "asc" },
       select: {
-        id:        true,
-        content:   true,
+        id: true,
+        content: true,
         reactions: true,
-        editedAt:  true,
+        editedAt: true,
         createdAt: true,
         author: {
           select: {
-            id: true, firstName: true, lastName: true, avatar: true,
+            id: true,
+            firstName: true,
+            lastName: true,
+            avatar: true,
           },
         },
         replies: {
-          where:   { deletedAt: null },
+          where: { deletedAt: null },
           orderBy: { createdAt: "asc" },
           select: {
-            id:        true,
-            content:   true,
+            id: true,
+            content: true,
             reactions: true,
-            editedAt:  true,
+            editedAt: true,
             createdAt: true,
             author: {
               select: {
-                id: true, firstName: true, lastName: true, avatar: true,
+                id: true,
+                firstName: true,
+                lastName: true,
+                avatar: true,
               },
             },
           },
@@ -1566,10 +1786,14 @@ export async function getTaskCommentsUser(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "Comments fetched", {
       taskId,
       total: comments.length,
-      data:  comments,
+      data: comments,
     });
   } catch (err: any) {
     console.error("[getTaskCommentsUser]", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch comments");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch comments",
+    );
   }
 }
