@@ -2083,6 +2083,10 @@ model QuotationSequence {
   @@unique([year, month])
 }
 
+
+
+
+
 // enum DailyStatusSection {
 //   WORKED_ON // Completed work
 //   IN_PROGRESS // Started but not completed
