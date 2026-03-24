@@ -769,16 +769,16 @@ export async function deleteTaskAdmin(req: Request, res: Response) {
         where: { id },
       });
 
-      await tx.activityLog.create({
-        data: {
-          entityType: "TASK",
-          entityId: id,
-          action: "DELETED",
-          performedBy: adminAccountId,
-          projectId: task.projectId,
-          taskId: id,
-        },
-      });
+      // await tx.activityLog.create({
+      //   data: {
+      //     entityType: "TASK",
+      //     entityId: id,
+      //     action: "DELETED",
+      //     performedBy: adminAccountId,
+      //     projectId: task.projectId,
+      //     taskId: id,
+      //   },
+      // });
     });
 
     emitTaskPatch(id, recipients, { deletedAt: new Date() });
