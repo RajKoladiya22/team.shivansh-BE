@@ -632,7 +632,7 @@ export async function triggerTaskNotification({
     };
 
     const { title, body } = copy[event];
-    const actionUrl = `/tasks/${task.id}`;
+    const actionUrl = `/tasks/user/${task.id}`;
 
     // 3. Persist notifications (upsert via dedupeKey)
     const notifications = await Promise.all(
