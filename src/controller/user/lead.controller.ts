@@ -1276,6 +1276,7 @@ export async function getMyLeadById(req: Request, res: Response) {
           where: { isActive: true },
           select: {
             role: true,
+            remark: true,
             addedAt: true,
             account: {
               select: {
@@ -2169,6 +2170,12 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
           OR: [{ accountId }, { team: { members: { some: { accountId } } } }],
         },
       },
+      // leadHelpers: {
+      //   some: {
+      //     isActive: true,
+      //     accountId,
+      //   },
+      // },
 
       ...(source && { source: source as any }),
 

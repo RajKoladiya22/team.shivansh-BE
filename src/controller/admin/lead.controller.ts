@@ -6,7 +6,10 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { randomUUID } from "crypto";
-import { triggerAssignmentNotification, triggerHelperNotification } from "../../services/notifications";
+import {
+  triggerAssignmentNotification,
+  triggerHelperNotification,
+} from "../../services/notifications";
 import { getIo } from "../../core/utils/socket";
 import { Lead_Status } from "@prisma/client";
 import {
@@ -52,7 +55,7 @@ async function resolveAssigneeSnapshot(input: {
   if (input.accountId) {
     const acc = await prisma.account.findUnique({
       where: { id: input.accountId },
-      select: { id: true, firstName: true, lastName: true },
+      select: { id: true, firstName: true, avatar: true, lastName: true },
     });
     return acc
       ? {
@@ -86,6 +89,7 @@ async function resolvePerformerSnapshot(accountId: string) {
     select: {
       id: true,
       firstName: true,
+      avatar: true,
       lastName: true,
       designation: true,
     },
@@ -1431,6 +1435,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
                   firstName: true,
                   lastName: true,
                   contactPhone: true,
+                  avatar: true,
                 },
               },
               team: {
@@ -1454,6 +1459,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
                   lastName: true,
                   designation: true,
                   contactPhone: true,
+                  avatar: true,
                 },
               },
             },
@@ -1677,6 +1683,7 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
                 id: true,
                 firstName: true,
                 lastName: true,
+                avatar: true,
                 designation: true,
                 contactPhone: true,
               },
@@ -1698,6 +1705,7 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
           where: { isActive: true },
           select: {
             role: true,
+            remark: true,
             addedAt: true,
             isActive: true,
 
@@ -1706,6 +1714,7 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
                 id: true,
                 firstName: true,
                 lastName: true,
+                avatar: true,
                 designation: true,
                 contactPhone: true,
               },
@@ -2094,6 +2103,7 @@ export async function getLeadActivityTimelineAdmin(
           select: {
             id: true,
             firstName: true,
+            avatar: true,
             lastName: true,
             designation: true,
             contactPhone: true,
@@ -2137,7 +2147,7 @@ export async function addLeadHelperAdmin(req: Request, res: Response) {
       where: { id: leadId },
       select: {
         id: true,
-        customerName: true,      
+        customerName: true,
         productTitle: true,
         assignments: {
           where: { isActive: true },
@@ -2238,7 +2248,7 @@ export async function addLeadHelperAdmin(req: Request, res: Response) {
     console.error(err);
     return sendErrorResponse(res, 500, "Failed to add helper");
   }
-} 
+}
 
 /**
  * DELETE /admin/leads/:id/helpers/:accountId"
@@ -2327,7 +2337,8 @@ export async function removeLeadHelperAdmin(req: Request, res: Response) {
     }
 
     return sendSuccessResponse(res, 200, "Helper removed", {
-      leadId, accountId
+      leadId,
+      accountId,
     });
   } catch (err) {
     return sendErrorResponse(res, 500, "Failed to remove helper");
@@ -3819,7 +3830,7 @@ export async function listFollowUps(req: Request, res: Response) {
                 where: { isActive: true },
                 select: {
                   account: {
-                    select: { id: true, firstName: true, lastName: true },
+                    select: { id: true, firstName: true, avatar: true, lastName: true },
                   },
                   team: { select: { id: true, name: true } },
                 },
@@ -3827,10 +3838,10 @@ export async function listFollowUps(req: Request, res: Response) {
             },
           },
           createdByAcc: {
-            select: { id: true, firstName: true, lastName: true },
+            select: { id: true, firstName: true, avatar: true, lastName: true },
           },
           doneByAcc: {
-            select: { id: true, firstName: true, lastName: true },
+            select: { id: true, firstName: true, avatar: true, lastName: true },
           },
         },
       }),
