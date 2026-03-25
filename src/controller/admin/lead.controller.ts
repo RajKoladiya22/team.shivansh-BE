@@ -2326,7 +2326,9 @@ export async function removeLeadHelperAdmin(req: Request, res: Response) {
       console.warn("Socket emit skipped");
     }
 
-    return sendSuccessResponse(res, 200, "Helper removed");
+    return sendSuccessResponse(res, 200, "Helper removed", {
+      leadId, accountId
+    });
   } catch (err) {
     return sendErrorResponse(res, 500, "Failed to remove helper");
   }
