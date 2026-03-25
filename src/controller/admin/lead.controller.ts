@@ -6,7 +6,7 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { randomUUID } from "crypto";
-import { triggerAssignmentNotification } from "../../services/notifications";
+import { triggerAssignmentNotification, triggerHelperNotification } from "../../services/notifications";
 import { getIo } from "../../core/utils/socket";
 import { Lead_Status } from "@prisma/client";
 import {
@@ -2127,7 +2127,7 @@ export async function addLeadHelperAdmin(req: Request, res: Response) {
     if (!performerAccountId) return sendErrorResponse(res, 401, "Unauthorized");
 
     const { id: leadId } = req.params;
-    const { accountId, role = "EXPORT" } = req.body;
+    const { accountId, role = "EXPORT", remark } = req.body;
 
     if (!accountId) {
       return sendErrorResponse(res, 400, "accountId is required");
@@ -2137,6 +2137,8 @@ export async function addLeadHelperAdmin(req: Request, res: Response) {
       where: { id: leadId },
       select: {
         id: true,
+        customerName: true,      
+        productTitle: true,
         assignments: {
           where: { isActive: true },
           select: { accountId: true, teamId: true },
@@ -2157,12 +2159,14 @@ export async function addLeadHelperAdmin(req: Request, res: Response) {
           isActive: true,
           removedAt: null,
           role,
+          remark: remark ?? null,
         },
         create: {
           leadId,
           accountId,
           role,
           addedBy: performerAccountId,
+          remark: remark ?? null,
         },
       });
 
@@ -2178,6 +2182,7 @@ export async function addLeadHelperAdmin(req: Request, res: Response) {
           meta: {
             initialAssignment: initialAssignee,
             role,
+            remark: remark ?? null,
           },
         },
       });
@@ -2221,13 +2226,19 @@ export async function addLeadHelperAdmin(req: Request, res: Response) {
     } catch {
       console.warn("Socket emit skipped");
     }
+    void triggerHelperNotification({
+      leadId,
+      helperAccountId: accountId,
+      performerAccountId,
+      role,
+    });
 
     return sendSuccessResponse(res, 200, "Helper added to lead", helper);
   } catch (err: any) {
     console.error(err);
     return sendErrorResponse(res, 500, "Failed to add helper");
   }
-}
+} 
 
 /**
  * DELETE /admin/leads/:id/helpers/:accountId"

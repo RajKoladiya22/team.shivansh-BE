@@ -267,6 +267,143 @@ export async function triggerAssignmentNotification({
   }
 }
 
+interface HelperNotificationArgs {
+  leadId: string;
+  helperAccountId: string;
+  performerAccountId: string;
+  role: string;
+}
+
+export async function triggerHelperNotification({
+  leadId,
+  helperAccountId,
+  performerAccountId,
+  role,
+}: HelperNotificationArgs) {
+  try {
+    // 1. Fetch lead details
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: {
+        id: true,
+        customerName: true,
+        productTitle: true,
+        status: true,
+      },
+    });
+    if (!lead) return;
+
+    // 2. Fetch performer name (who added the helper)
+    const performer = await prisma.account.findUnique({
+      where: { id: performerAccountId },
+      select: { firstName: true, lastName: true },
+    });
+    const addedBy = performer
+      ? `${performer.firstName ?? ""} ${performer.lastName ?? ""}`.trim()
+      : "System";
+
+    // 3. Upsert notification for the helper
+    const dedupeKey = `lead:${leadId}:helper:${helperAccountId}`;
+
+    const existing = await prisma.notification.findFirst({
+      where: { dedupeKey },
+      select: { id: true },
+    });
+
+    const notification = existing
+      ? await prisma.notification.update({
+          where: { id: existing.id },
+          data: {
+            sentAt: null,
+            createdAt: new Date(),
+            payload: {
+              leadId: lead.id,
+              customerName: lead.customerName,
+              productTitle: lead.productTitle ?? null,
+              status: lead.status,
+              role,
+              addedBy,
+              addedAt: new Date().toISOString(),
+            },
+          },
+        })
+      : await prisma.notification.create({
+          data: {
+            accountId: helperAccountId,
+            category: "LEAD",
+            level: "INFO",
+            title: "You've been added as a helper",
+            body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""} (${role})`,
+            actionUrl: `/user/leads/${lead.id}`,
+            dedupeKey,
+            deliveryChannels: ["web", "chrome"],
+            payload: {
+              leadId: lead.id,
+              customerName: lead.customerName,
+              productTitle: lead.productTitle ?? null,
+              status: lead.status,
+              role,
+              addedBy,
+              addedAt: new Date().toISOString(),
+            },
+          },
+        });
+
+    // 4. Socket push to helper
+    try {
+      const io = getIo();
+      const socketPayload: ServerNotificationPayload = {
+        id: notification.id,
+        category: notification.category as any,
+        level: notification.level as any,
+        title: notification.title,
+        body: notification.body,
+        actionUrl: notification.actionUrl ?? undefined,
+        payload: notification.payload as any,
+        createdAt: notification.createdAt.toISOString(),
+      };
+      io.to(`notif:${helperAccountId}`).emit("notification", socketPayload);
+    } catch {
+      // socket not critical
+    }
+
+    // 5. Web push
+    const subscriptions = await prisma.notificationSubscription.findMany({
+      where: { accountId: helperAccountId },
+    });
+
+    for (const sub of subscriptions) {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          JSON.stringify({
+            title: "You've been added as a helper",
+            body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
+            actionUrl: `/user/leads/${lead.id}`,
+            data: {
+              actionUrl: `/user/leads/${lead.id}`,
+              payload: { leadId: lead.id, role, addedBy },
+            },
+          }),
+        );
+      } catch (pushError: any) {
+        console.warn("Helper push notification failed:", sub.endpoint, pushError?.statusCode);
+        if (pushError?.statusCode === 404 || pushError?.statusCode === 410) {
+          console.warn("Removing expired subscription:", sub.endpoint);
+        }
+      }
+    }
+
+    // 6. Mark sent
+    await prisma.notification.update({
+      where: { id: notification.id },
+      data: { sentAt: new Date() },
+    });
+  } catch (error) {
+    console.error("triggerHelperNotification failed:", error);
+  }
+}
+
 export async function triggerAdminRegistrationNotification({
   requestId,
   firstName,

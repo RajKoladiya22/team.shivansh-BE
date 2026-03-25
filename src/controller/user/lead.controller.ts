@@ -12,6 +12,7 @@ import {
   deriveLeadScalars,
   normalizeIncomingProducts,
 } from "../../core/utils/leadProducts";
+import { triggerHelperNotification } from "../../services/notifications";
 
 /**
  * Helpers (kept local so this file is self-contained)
@@ -1568,7 +1569,7 @@ export async function addLeadHelper(req: Request, res: Response) {
       return sendErrorResponse(res, 401, "Invalid session");
 
     const { id: leadId } = req.params;
-    const { accountId, role = "EXPORT" } = req.body;
+    const { accountId, role = "EXPORT", remark } = req.body;
 
     if (!leadId || !accountId) {
       return sendErrorResponse(res, 400, "Invalid parameters");
@@ -1579,6 +1580,8 @@ export async function addLeadHelper(req: Request, res: Response) {
       where: { id: leadId },
       select: {
         id: true,
+        customerName: true,   
+        productTitle: true,
         assignments: {
           where: { isActive: true },
           select: { accountId: true, teamId: true },
@@ -1600,11 +1603,13 @@ export async function addLeadHelper(req: Request, res: Response) {
         isActive: true,
         removedAt: null,
         role,
+        remark: remark ?? null,
       },
       create: {
         leadId,
         accountId,
         role,
+        remark: remark ?? null,
         addedBy: performerAccountId,
       },
     });
@@ -1619,6 +1624,7 @@ export async function addLeadHelper(req: Request, res: Response) {
         meta: {
           initialAssignment: helperSnapshot,
           role,
+          remark: remark ?? null,
         },
       },
     });
@@ -1662,6 +1668,13 @@ export async function addLeadHelper(req: Request, res: Response) {
     } catch {
       console.warn("Socket emit skipped");
     }
+
+    void triggerHelperNotification({
+      leadId,
+      helperAccountId: accountId,
+      performerAccountId,
+      role,
+    });
 
     return sendSuccessResponse(res, 200, "Helper added to Lead", helper);
   } catch (err: any) {

@@ -1288,6 +1288,7 @@ model LeadHelper {
   addedByAcc Account? @relation("HelperAddedBy", fields: [addedBy], references: [id])
 
   isActive Boolean @default(true)
+  remark              String?
 
   addedAt   DateTime  @default(now())
   removedAt DateTime?
