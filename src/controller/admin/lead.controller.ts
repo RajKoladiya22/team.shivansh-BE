@@ -27,7 +27,7 @@ interface LeadProductItem {
   cost?: number | null;
   isPrimary?: boolean;
 }
-
+ 
 /**
  * Helper: get accountId from req.user.id (user table -> accountId)
  */
