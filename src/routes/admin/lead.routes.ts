@@ -27,6 +27,7 @@ import {
   getLeadFollowUps,
   listFollowUps,
   deleteFollowUp,
+  sendLeadReminder,
 } from "../../controller/admin/lead.controller";
 
 const router = Router();
@@ -198,5 +199,7 @@ router.patch("/leads/:leadId/follow-ups/:id", requireAuth, updateFollowUp);
 router.get("/leads/:leadId/follow-ups", requireAuth, getLeadFollowUps);
 router.get("/leads/follow-ups", requireAuth, listFollowUps);
 router.delete("/leads/:leadId/follow-ups/:id", requireAuth, deleteFollowUp);
+
+router.post("/:leadId/remind", requireAuth, requireRole("ADMIN", "SALES"), sendLeadReminder);
 
 export default router;

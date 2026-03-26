@@ -1,12 +1,14 @@
 // src/controller/admin/lead.controller.ts
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
+import * as webpush from "web-push";
 import {
   sendErrorResponse,
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { randomUUID } from "crypto";
 import {
+  ServerNotificationPayload,
   triggerAssignmentNotification,
   triggerHelperNotification,
 } from "../../services/notifications";
@@ -1429,6 +1431,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
               type: true,
               isActive: true,
               assignedAt: true,
+              remark: true,
               account: {
                 select: {
                   id: true,
@@ -1452,6 +1455,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
             select: {
               role: true,
               isActive: true,
+              remark: true,
               account: {
                 select: {
                   id: true,
@@ -3922,5 +3926,221 @@ export async function deleteFollowUp(req: Request, res: Response) {
       500,
       err?.message ?? "Failed to delete follow-up",
     );
+  }
+}
+
+export async function sendLeadReminder(req: Request, res: Response) {
+  try {
+    const { leadId } = req.params;
+    const performerAccountId = req.user?.accountId;
+
+    if (!performerAccountId)
+      return sendErrorResponse(res, 401, "Invalid session");
+
+    // ── 1. Load lead + active assignment ────────────────────────────────────
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: {
+        id: true,
+        isActive: true,
+        customerName: true,
+        productTitle: true,
+        status: true,
+        cost: true,
+        assignments: {
+          where: { isActive: true },
+          select: {
+            id: true,
+            type: true,
+            accountId: true,
+            teamId: true,
+            remark: true,
+            account: {
+              select: { id: true, firstName: true, lastName: true, contactPhone: true },
+            },
+            team: {
+              select: { id: true, name: true },
+            },
+          },
+        },
+        createdByAcc: {
+          select: { firstName: true, lastName: true },
+        },
+      },
+    });
+
+    if (!lead) return sendErrorResponse(res, 404, "Lead not found");
+    if (!lead.isActive) return sendErrorResponse(res, 400, "Lead is closed");
+
+    const activeAssignment = lead.assignments[0];
+    if (!activeAssignment)
+      return sendErrorResponse(res, 400, "No active assignment found for this lead");
+
+    // ── 2. Resolve remark — body overrides stored assignment remark ──────────
+    const bodyRemark: string | undefined = req.body?.remark;
+    const storedRemark =
+      typeof activeAssignment.remark === "object" &&
+      activeAssignment.remark !== null &&
+      "text" in (activeAssignment.remark as any)
+        ? (activeAssignment.remark as any).text
+        : typeof activeAssignment.remark === "string"
+          ? activeAssignment.remark
+          : null;
+
+    const finalRemark: string =
+      bodyRemark?.trim() ||
+      storedRemark ||
+      "Please follow up on this lead.";
+
+    // ── 3. Resolve recipient account IDs ─────────────────────────────────────
+    let recipientAccountIds: string[] = [];
+
+    if (activeAssignment.type === "ACCOUNT" && activeAssignment.accountId) {
+      recipientAccountIds = [activeAssignment.accountId];
+    } else if (activeAssignment.type === "TEAM" && activeAssignment.teamId) {
+      const members = await prisma.teamMember.findMany({
+        where: { teamId: activeAssignment.teamId, isActive: true },
+        select: { accountId: true },
+      });
+      recipientAccountIds = members.map((m) => m.accountId);
+    }
+
+    if (recipientAccountIds.length === 0)
+      return sendErrorResponse(res, 400, "No recipients resolved for this assignment");
+
+    const performerAcc = await prisma.account.findUnique({
+      where: { id: performerAccountId },
+      select: { firstName: true, lastName: true },
+    });
+    const senderName = performerAcc
+      ? `${performerAcc.firstName} ${performerAcc.lastName}`.trim()
+      : "Admin";
+
+    // ── 4. Create notifications (upsert per recipient) ────────────────────────
+    const notifications = await Promise.all(
+      recipientAccountIds.map(async (accountId) => {
+        // Use timestamp in dedupeKey so each reminder is a fresh notification
+        const dedupeKey = `lead:${lead.id}:reminder:${accountId}:${Date.now()}`;
+
+        return prisma.notification.create({
+          data: {
+            accountId,
+            category: "LEAD",
+            level: "WARNING",
+            title: "Lead Reminder",
+            body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}: ${finalRemark}`,
+            actionUrl: `/user/leads/${lead.id}`,
+            dedupeKey,
+            deliveryChannels: ["web", "chrome"],
+            payload: {
+              leadId: lead.id,
+              customerName: lead.customerName,
+              productTitle: lead.productTitle ?? null,
+              status: lead.status,
+              remark: finalRemark,
+              sentBy: senderName,
+              sentAt: new Date().toISOString(),
+            },
+          },
+        });
+      }),
+    );
+
+    // ── 5. Activity log ───────────────────────────────────────────────────────
+    await prisma.leadActivityLog.create({
+      data: {
+        leadId: lead.id,
+        action: "REMINDER_SENT",
+        performedBy: performerAccountId,
+        meta: {
+          remark: finalRemark,
+          sentTo:
+            activeAssignment.type === "ACCOUNT"
+              ? {
+                  type: "ACCOUNT",
+                  accountId: activeAssignment.accountId,
+                  name: activeAssignment.account
+                    ? `${activeAssignment.account.firstName} ${activeAssignment.account.lastName}`.trim()
+                    : null,
+                }
+              : {
+                  type: "TEAM",
+                  teamId: activeAssignment.teamId,
+                  name: activeAssignment.team?.name ?? null,
+                  recipientCount: recipientAccountIds.length,
+                },
+          sentBy: {
+            id: performerAccountId,
+            name: senderName,
+          },
+          sentAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    // ── 6. Socket emit ────────────────────────────────────────────────────────
+    try {
+      const io = getIo();
+      notifications.forEach((n) => {
+        const socketPayload: ServerNotificationPayload = {
+          id: n.id,
+          category: n.category as any,
+          level: n.level as any,
+          title: n.title,
+          body: n.body,
+          actionUrl: n.actionUrl ?? undefined,
+          payload: n.payload as any,
+          createdAt: n.createdAt.toISOString(),
+        };
+        if (n.accountId) {
+          io.to(`notif:${n.accountId}`).emit("notification", socketPayload);
+        }
+      });
+    } catch {
+      console.warn("Socket emit skipped — IO not available");
+    }
+
+    // ── 7. Web push (best effort) ─────────────────────────────────────────────
+    const subscriptions = await prisma.notificationSubscription.findMany({
+      where: { accountId: { in: recipientAccountIds } },
+    });
+
+    for (const sub of subscriptions) {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          JSON.stringify({
+            title: "Lead Reminder",
+            body: `${lead.customerName}: ${finalRemark}`,
+            actionUrl: `/user/leads/${lead.id}`,
+            data: {
+              actionUrl: `/user/leads/${lead.id}`,
+              payload: { leadId: lead.id, remark: finalRemark, sentBy: senderName },
+            },
+          }),
+        );
+      } catch (pushError: any) {
+        console.warn("Push failed:", sub.endpoint, pushError?.statusCode);
+        if (pushError?.statusCode === 404 || pushError?.statusCode === 410) {
+          await prisma.notificationSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+        }
+      }
+    }
+
+    // ── 8. Mark sent ──────────────────────────────────────────────────────────
+    await prisma.notification.updateMany({
+      where: { id: { in: notifications.map((n) => n.id) } },
+      data: { sentAt: new Date() },
+    });
+
+    return sendSuccessResponse(res, 200, "Reminder sent successfully", {
+      leadId: lead.id,
+      recipientCount: recipientAccountIds.length,
+      remark: finalRemark,
+      sentBy: senderName,
+    });
+  } catch (err: any) {
+    console.error("sendLeadReminder error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to send reminder");
   }
 }

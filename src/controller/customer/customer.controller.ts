@@ -207,6 +207,7 @@ export async function getCustomerList(req: Request, res: Response) {
           customerCategory: true,
           businessCategory: true,
           tallySerial: true,
+          tallyVersion: true,
           joiningDate: true,
           products: true,
           isActive: true,

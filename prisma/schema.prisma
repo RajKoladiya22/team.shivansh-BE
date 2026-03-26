@@ -1157,6 +1157,7 @@ enum LeadActivityAction {
   FOLLOW_UP_DONE
   FOLLOW_UP_MISSED
   FOLLOW_UP_RESCHEDULED
+  REMINDER_SENT
 }
 
 enum FollowUpStatus {
