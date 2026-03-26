@@ -378,3 +378,48 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
   }
 }
 
+export async function updateUsername(req: Request, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { username } = req.body as { username?: string };
+
+    if (!username?.trim())
+      return sendErrorResponse(res, 400, "Username is required");
+
+    const cleaned = username.trim().toLowerCase();
+
+    // Basic format validation — alphanumeric, dots, underscores, @
+    if (!/^[a-z0-9@._]{3,30}$/.test(cleaned))
+      return sendErrorResponse(
+        res,
+        400,
+        "Username must be 3–30 characters and contain only letters, numbers, @, . or _",
+      );
+
+    // Check uniqueness (exclude self)
+    const existing = await prisma.user.findFirst({
+      where: { username: cleaned, NOT: { id: userId } },
+      select: { id: true },
+    });
+
+    if (existing)
+      return sendErrorResponse(res, 409, "Username is already taken");
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: { username: cleaned },
+      select: {
+        id: true,
+        username: true,
+        updatedAt: true,
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Username updated successfully", updated);
+  } catch (err: any) {
+    console.error("updateUsername error:", err);
+    return sendErrorResponse(res, 500, "Failed to update username");
+  }
+}

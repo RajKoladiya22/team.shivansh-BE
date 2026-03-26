@@ -18,14 +18,14 @@ async function main() {
       description: "Wildcard permission that grants access to everything",
     },
   });
-  console.log("Permission:", allPermission.key);
+  // console.log("Permission:", allPermission.key);
 
   const adminRole = await prisma.role.upsert({
     where: { name: "ADMIN" },
     update: {},
     create: { name: "ADMIN", description: "Administrator role" },
   });
-  console.log("Role:", adminRole.name);
+  // console.log("Role:", adminRole.name);
 
   await prisma.rolePermission.upsert({
     where: {

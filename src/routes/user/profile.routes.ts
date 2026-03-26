@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getProfile, updateMyBusyStatus, updateProfile } from "../../controller/user/user.controller";
+import { getProfile, updateMyBusyStatus, updateProfile, updateUsername } from "../../controller/user/user.controller";
 import { requireAuth } from "../../core/middleware/auth";
 import upload from "../../core/middleware/multer"; 
 
@@ -7,6 +7,8 @@ import upload from "../../core/middleware/multer";
 const router = Router();
 
 router.get("/profile", requireAuth, getProfile);
+
+router.patch("/username", requireAuth, updateUsername);
 
 router.put(
   "/profile",
