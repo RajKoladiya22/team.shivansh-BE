@@ -921,6 +921,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
       "product",
       "productTitle",
       "demoScheduledAt",
+      "source"
     ];
     const data: Record<string, any> = {};
     for (const f of allowedFields) {
@@ -940,6 +941,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
       select: {
         id: true,
         status: true,
+        source: true,
         statusMark: true,
         demoScheduledAt: true,
         demoDoneAt: true,
@@ -1131,6 +1133,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         id,
         patch: {
           status: updated.status,
+          source: updated.source,
           demoScheduledAt: updated.demoScheduledAt,
           demoDoneAt: updated.demoDoneAt,
           demoCount: updated.demoCount,
