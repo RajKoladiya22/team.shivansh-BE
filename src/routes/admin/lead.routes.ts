@@ -200,6 +200,6 @@ router.get("/leads/:leadId/follow-ups", requireAuth, getLeadFollowUps);
 router.get("/leads/follow-ups", requireAuth, listFollowUps);
 router.delete("/leads/:leadId/follow-ups/:id", requireAuth, deleteFollowUp);
 
-router.post("/:leadId/remind", requireAuth, requireRole("ADMIN", "SALES"), sendLeadReminder);
+router.post("/leads/:leadId/remind", requireAuth, requireRole("ADMIN", "SALES"), sendLeadReminder);
 
 export default router;
