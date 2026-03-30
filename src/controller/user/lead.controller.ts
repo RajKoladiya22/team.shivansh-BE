@@ -468,10 +468,15 @@ export async function createMyLead(req: Request, res: Response) {
       type = "LEAD",
       customerName,
       mobileNumber,
+      customerCompanyName,
       cost,
       remark,
       demoDate,
       followUps,
+      customerCategory,
+      businessCategory,
+      state,
+      city,
     } = req.body as Record<string, any>;
 
     if (!customerName || !mobileNumber)
@@ -515,6 +520,12 @@ export async function createMyLead(req: Request, res: Response) {
               where: { id: customer.id },
               data: {
                 name: customerName || customer.name,
+                customerCompanyName:
+                  customerCompanyName || customer.customerCompanyName,
+                ...(customerCategory && { customerCategory }),
+                ...(businessCategory && { businessCategory }),
+                ...(state && { state }),
+                ...(city && { city }),
                 products: existingProducts,
                 updatedAt: new Date(),
               },
@@ -522,7 +533,15 @@ export async function createMyLead(req: Request, res: Response) {
           } else {
             customer = await tx.customer.update({
               where: { id: customer.id },
-              data: { name: customerName },
+              data: {
+                name: customerName,
+                customerCompanyName:
+                  customerCompanyName || customer.customerCompanyName,
+                ...(customerCategory && { customerCategory }),
+                ...(businessCategory && { businessCategory }),
+                ...(state && { state }),
+                ...(city && { city }),
+              },
             });
           }
         } else {
@@ -535,9 +554,15 @@ export async function createMyLead(req: Request, res: Response) {
             data: {
               name: customerName,
               mobile: mobileNumber,
+              customerCompanyName: customerCompanyName,
               normalizedMobile,
               createdBy: accountId,
               products: customerProducts,
+              customerCategory: customerCategory ?? undefined,
+              businessCategory: businessCategory ?? undefined,
+              state: state ?? undefined,
+              city: city ?? undefined,
+              joiningDate: new Date(),
             },
           });
         }

@@ -696,6 +696,10 @@ export async function createLeadAdmin(req: Request, res: Response) {
       teamId: assigneeTeamId,
       demoDate,
       followUps,
+      customerCategory,
+      businessCategory,
+      state,
+      city,
     } = req.body as Record<string, any>;
 
     if (!source || !type)
@@ -765,6 +769,10 @@ export async function createLeadAdmin(req: Request, res: Response) {
             customerCompanyName:
               customerCompanyName || customer.customerCompanyName,
             products: existingProducts,
+            ...(customerCategory && { customerCategory }),    
+            ...(businessCategory && { businessCategory }),    
+            ...(state && { state }),                          
+            ...(city && { city }),
             updatedAt: new Date(),
           },
         });
@@ -786,6 +794,11 @@ export async function createLeadAdmin(req: Request, res: Response) {
             normalizedMobile,
             createdBy: creatorAccountId,
             products: customerProducts,
+            customerCategory: customerCategory ?? undefined,
+            businessCategory: businessCategory ?? undefined,
+            state: state ?? undefined,
+            city: city ?? undefined,
+            joiningDate: new Date(),
           },
         });
       }
@@ -1334,13 +1347,31 @@ export async function listLeadsAdmin(req: Request, res: Response) {
       }
     }
 
+    // if (search) {
+    //   where.OR = [
+    //     { customerName: { contains: search, mode: "insensitive" } },
+    //     { customerCompanyName: { contains: search, mode: "insensitive" } },
+    //     { mobileNumber: { contains: search } },
+    //     { productTitle: { contains: search, mode: "insensitive" } },
+    //   ];
+    // }
+
     if (search) {
-      where.OR = [
-        { customerName: { contains: search, mode: "insensitive" } },
-        { customerCompanyName: { contains: search, mode: "insensitive" } },
-        { mobileNumber: { contains: search } },
-        { productTitle: { contains: search, mode: "insensitive" } },
-      ];
+      const tokens = search
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+
+      const searchConditions = tokens.map((word) => ({
+        OR: [
+          { customerName: { contains: word, mode: "insensitive" } },
+          { customerCompanyName: { contains: word, mode: "insensitive" } },
+          { mobileNumber: { contains: word } },
+          { productTitle: { contains: word, mode: "insensitive" } },
+        ],
+      }));
+
+      where.AND = [...(where.AND || []), ...searchConditions];
     }
 
     if (assignedToAccountId || assignedToTeamId) {
