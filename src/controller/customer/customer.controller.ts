@@ -370,7 +370,7 @@ export async function createCustomer(req: Request, res: Response) {
         email,
         city,
         state,
-        joiningDate: joiningDate ? new Date(joiningDate) : undefined,
+        joiningDate: joiningDate ? new Date(joiningDate) : new Date(),
         customerCategory,
         businessCategory,
         tallySerial,
