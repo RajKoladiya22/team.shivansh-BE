@@ -36,6 +36,7 @@ export interface NormalizedProductItem {
   link: string | null;
   introVideoId: string | null;
   cost: number | null;
+  price?: number | null;
   isPrimary: boolean;
 }
 
@@ -136,7 +137,7 @@ export function buildCustomerProductEntries(
 ): Array<{
   id: string;
   name: string;
-  price: number | null;
+  price?: number | null;
   slug: string | null;
   addedAt: Date;
   status: string;
@@ -144,7 +145,7 @@ export function buildCustomerProductEntries(
   return products.map((p) => ({
     id: p.id,
     name: p.title,
-    price: p.cost,
+    price: p.cost || p.price,
     slug: p.slug,
     addedAt: new Date(),
     status: "ACTIVE",
