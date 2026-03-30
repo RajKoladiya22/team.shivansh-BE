@@ -29,7 +29,7 @@ interface LeadProductItem {
   cost?: number | null;
   isPrimary?: boolean;
 }
- 
+
 /**
  * Helper: get accountId from req.user.id (user table -> accountId)
  */
@@ -61,10 +61,10 @@ async function resolveAssigneeSnapshot(input: {
     });
     return acc
       ? {
-          type: "ACCOUNT",
-          id: acc.id,
-          name: `${acc.firstName} ${acc.lastName}`,
-        }
+        type: "ACCOUNT",
+        id: acc.id,
+        name: `${acc.firstName} ${acc.lastName}`,
+      }
       : null;
   }
 
@@ -75,10 +75,10 @@ async function resolveAssigneeSnapshot(input: {
     });
     return team
       ? {
-          type: "TEAM",
-          id: team.id,
-          name: team.name,
-        }
+        type: "TEAM",
+        id: team.id,
+        name: team.name,
+      }
       : null;
   }
 
@@ -268,6 +268,71 @@ async function syncProductCostToEntities(
         grandTotal: parseFloat(grandTotal.toFixed(2)),
       },
     });
+  }
+}
+
+async function closeFollowUpsOnStatusChange(
+  tx: any,
+  leadId: string,
+  newStatus: string,
+  accountId: string,
+): Promise<void> {
+  const now = new Date();
+
+  // DEMO_DONE → mark only DEMO-type follow-ups as done
+  if (newStatus === "DEMO_DONE") {
+    const pendingDemoFollowUps = await tx.leadFollowUp.findMany({
+      where: {
+        leadId,
+        status: "PENDING",
+        type: "DEMO",
+      },
+      select: { id: true, scheduledAt: true },
+    });
+
+    if (pendingDemoFollowUps.length > 0) {
+      await tx.leadFollowUp.updateMany({
+        where: {
+          leadId,
+          status: "PENDING",
+          type: "DEMO",
+        },
+        data: {
+          status: "DONE",
+          doneAt: now,
+          doneBy: accountId,
+          remark: "Auto-marked done: Lead status changed to DEMO_DONE",
+        },
+      });
+    }
+
+    return; // only demo follow-ups affected
+  }
+
+  // CLOSED or CONVERTED → mark ALL pending follow-ups as done
+  if (newStatus === "CLOSED" || newStatus === "CONVERTED") {
+    const pendingFollowUps = await tx.leadFollowUp.findMany({
+      where: {
+        leadId,
+        status: "PENDING",
+      },
+      select: { id: true },
+    });
+
+    if (pendingFollowUps.length > 0) {
+      await tx.leadFollowUp.updateMany({
+        where: {
+          leadId,
+          status: "PENDING",
+        },
+        data: {
+          status: "DONE",
+          doneAt: now,
+          doneBy: accountId,
+          remark: `Auto-marked done: Lead status changed to ${newStatus}`,
+        },
+      });
+    }
   }
 }
 
@@ -708,9 +773,9 @@ export async function createLeadAdmin(req: Request, res: Response) {
         const customerProducts =
           products && products.length > 0
             ? {
-                active: buildCustomerProductEntries(products),
-                history: [],
-              }
+              active: buildCustomerProductEntries(products),
+              history: [],
+            }
             : undefined;
 
         customer = await tx.customer.create({
@@ -752,14 +817,14 @@ export async function createLeadAdmin(req: Request, res: Response) {
           demoCount: demoDate ? 1 : 0,
           demoMeta: demoDate
             ? {
-                history: [
-                  {
-                    type: "SCHEDULED",
-                    at: new Date(demoDate),
-                    by: creatorAccountId,
-                  },
-                ],
-              }
+              history: [
+                {
+                  type: "SCHEDULED",
+                  at: new Date(demoDate),
+                  by: creatorAccountId,
+                },
+              ],
+            }
             : undefined,
         },
       });
@@ -1063,6 +1128,15 @@ export async function updateLeadAdmin(req: Request, res: Response) {
       //     },
       //   },
       // });
+
+      if (
+        data.status === "DEMO_DONE" ||
+        data.status === "CLOSED" ||
+        data.status === "CONVERTED"
+      ) {
+        await closeFollowUpsOnStatusChange(tx, id, data.status, performerAccountId);
+        await syncLeadFollowUpAggregates(tx, id);
+      }
 
       // --- Replace diff calculation ---
       const diff: Record<string, any> = {};
@@ -1530,15 +1604,15 @@ export async function assignLeadAdmin(req: Request, res: Response) {
     const fromSnapshot = previousAssignment
       ? previousAssignment.account
         ? {
-            type: "ACCOUNT",
-            id: previousAssignment.account.id,
-            name: `${previousAssignment.account.firstName} ${previousAssignment.account.lastName}`,
-          }
+          type: "ACCOUNT",
+          id: previousAssignment.account.id,
+          name: `${previousAssignment.account.firstName} ${previousAssignment.account.lastName}`,
+        }
         : {
-            type: "TEAM",
-            id: previousAssignment.team!.id,
-            name: previousAssignment.team!.name,
-          }
+          type: "TEAM",
+          id: previousAssignment.team!.id,
+          name: previousAssignment.team!.name,
+        }
       : null;
 
     const toSnapshot = await resolveAssigneeSnapshot({ accountId, teamId });
@@ -1808,6 +1882,9 @@ export async function closeLeadAdmin(req: Request, res: Response) {
           unassignedAt: new Date(),
         },
       });
+
+      await closeFollowUpsOnStatusChange(tx, id, "CLOSED", performerAccountId);
+      await syncLeadFollowUpAggregates(tx, id);
 
       await tx.leadActivityLog.create({
         data: {
@@ -2541,12 +2618,12 @@ export async function updateLeadProductAdmin(req: Request, res: Response) {
 
     const resolvedProduct = product
       ? {
-          id: product.id || randomUUID(),
-          slug: product.slug ?? null,
-          link: product.link ?? null,
-          title: product.title ?? null,
-          introVideoId: product.introVideoId ?? null,
-        }
+        id: product.id || randomUUID(),
+        slug: product.slug ?? null,
+        link: product.link ?? null,
+        title: product.title ?? null,
+        introVideoId: product.introVideoId ?? null,
+      }
       : undefined;
 
     const resolvedProductTitle = resolvedProduct?.title ?? productTitle ?? null;
@@ -2659,11 +2736,11 @@ export async function updateLeadProductAdmin(req: Request, res: Response) {
                 : {}),
               ...(resolvedProductTitle
                 ? {
-                    productTitle: {
-                      from: existing.productTitle,
-                      to: resolvedProductTitle,
-                    },
-                  }
+                  productTitle: {
+                    from: existing.productTitle,
+                    to: resolvedProductTitle,
+                  },
+                }
                 : {}),
               ...(cost !== undefined
                 ? { cost: { from: existing.cost, to: cost } }
@@ -3983,8 +4060,8 @@ export async function sendLeadReminder(req: Request, res: Response) {
     const bodyRemark: string | undefined = req.body?.remark;
     const storedRemark =
       typeof activeAssignment.remark === "object" &&
-      activeAssignment.remark !== null &&
-      "text" in (activeAssignment.remark as any)
+        activeAssignment.remark !== null &&
+        "text" in (activeAssignment.remark as any)
         ? (activeAssignment.remark as any).text
         : typeof activeAssignment.remark === "string"
           ? activeAssignment.remark
@@ -4060,18 +4137,18 @@ export async function sendLeadReminder(req: Request, res: Response) {
           sentTo:
             activeAssignment.type === "ACCOUNT"
               ? {
-                  type: "ACCOUNT",
-                  accountId: activeAssignment.accountId,
-                  name: activeAssignment.account
-                    ? `${activeAssignment.account.firstName} ${activeAssignment.account.lastName}`.trim()
-                    : null,
-                }
+                type: "ACCOUNT",
+                accountId: activeAssignment.accountId,
+                name: activeAssignment.account
+                  ? `${activeAssignment.account.firstName} ${activeAssignment.account.lastName}`.trim()
+                  : null,
+              }
               : {
-                  type: "TEAM",
-                  teamId: activeAssignment.teamId,
-                  name: activeAssignment.team?.name ?? null,
-                  recipientCount: recipientAccountIds.length,
-                },
+                type: "TEAM",
+                teamId: activeAssignment.teamId,
+                name: activeAssignment.team?.name ?? null,
+                recipientCount: recipientAccountIds.length,
+              },
           sentBy: {
             id: performerAccountId,
             name: senderName,
@@ -4125,7 +4202,7 @@ export async function sendLeadReminder(req: Request, res: Response) {
       } catch (pushError: any) {
         console.warn("Push failed:", sub.endpoint, pushError?.statusCode);
         if (pushError?.statusCode === 404 || pushError?.statusCode === 410) {
-          await prisma.notificationSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+          await prisma.notificationSubscription.delete({ where: { id: sub.id } }).catch(() => { });
         }
       }
     }

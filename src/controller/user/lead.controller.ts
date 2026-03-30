@@ -30,10 +30,10 @@ async function resolveAssigneeSnapshot(input: {
     });
     return acc
       ? {
-          type: "ACCOUNT",
-          id: acc.id,
-          name: `${acc.firstName} ${acc.lastName}`,
-        }
+        type: "ACCOUNT",
+        id: acc.id,
+        name: `${acc.firstName} ${acc.lastName}`,
+      }
       : null;
   }
 
@@ -172,6 +172,71 @@ async function stopWorkIfActive(tx: any, accountId: string, leadId: string) {
     isBusy: false,
     source: "WORK_ENDED",
   });
+}
+
+async function closeFollowUpsOnStatusChange(
+  tx: any,
+  leadId: string,
+  newStatus: string,
+  accountId: string,
+): Promise<void> {
+  const now = new Date();
+
+  // DEMO_DONE → mark only DEMO-type follow-ups as done
+  if (newStatus === "DEMO_DONE") {
+    const pendingDemoFollowUps = await tx.leadFollowUp.findMany({
+      where: {
+        leadId,
+        status: "PENDING",
+        type: "DEMO",
+      },
+      select: { id: true, scheduledAt: true },
+    });
+
+    if (pendingDemoFollowUps.length > 0) {
+      await tx.leadFollowUp.updateMany({
+        where: {
+          leadId,
+          status: "PENDING",
+          type: "DEMO",
+        },
+        data: {
+          status: "DONE",
+          doneAt: now,
+          doneBy: accountId,
+          remark: "Auto-marked done: Lead status changed to DEMO_DONE",
+        },
+      });
+    }
+
+    return; // only demo follow-ups affected
+  }
+
+  // CLOSED or CONVERTED → mark ALL pending follow-ups as done
+  if (newStatus === "CLOSED" || newStatus === "CONVERTED") {
+    const pendingFollowUps = await tx.leadFollowUp.findMany({
+      where: {
+        leadId,
+        status: "PENDING",
+      },
+      select: { id: true },
+    });
+
+    if (pendingFollowUps.length > 0) {
+      await tx.leadFollowUp.updateMany({
+        where: {
+          leadId,
+          status: "PENDING",
+        },
+        data: {
+          status: "DONE",
+          doneAt: now,
+          doneBy: accountId,
+          remark: `Auto-marked done: Lead status changed to ${newStatus}`,
+        },
+      });
+    }
+  }
 }
 
 /* ==========================
@@ -498,14 +563,14 @@ export async function createMyLead(req: Request, res: Response) {
             demoCount: demoDate ? 1 : 0,
             demoMeta: demoDate
               ? {
-                  history: [
-                    {
-                      type: "SCHEDULED",
-                      at: new Date(demoDate),
-                      by: accountId,
-                    },
-                  ],
-                }
+                history: [
+                  {
+                    type: "SCHEDULED",
+                    at: new Date(demoDate),
+                    by: accountId,
+                  },
+                ],
+              }
               : undefined,
           },
         });
@@ -913,13 +978,13 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
     const { status, remark, cost, customerName, demoScheduledAt } =
       req.body as {
         status?:
-          | "PENDING"
-          | "IN_PROGRESS"
-          | "CLOSED"
-          | "CONVERTED"
-          | "DEMO_DONE"
-          | "FOLLOW_UPS"
-          | "INTERESTED";
+        | "PENDING"
+        | "IN_PROGRESS"
+        | "CLOSED"
+        | "CONVERTED"
+        | "DEMO_DONE"
+        | "FOLLOW_UPS"
+        | "INTERESTED";
         remark?: string;
         cost?: number;
         customerName?: string;
@@ -1040,6 +1105,12 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
 
       if (isTerminalStatus) {
         await stopWorkIfActive(tx, accountId, id);
+        // close relevant follow-ups based on new status
+        if (status === "DEMO_DONE" || status === "CLOSED" || status === "CONVERTED") {
+          await closeFollowUpsOnStatusChange(tx, id, status, accountId);
+          // re-sync lead aggregates after bulk follow-up update
+          await syncLeadFollowUpAggregates(tx, id);
+        }
       }
 
       // ── demo scheduling / rescheduling ───────────────────────────────────
@@ -1581,7 +1652,7 @@ export async function addLeadHelper(req: Request, res: Response) {
       where: { id: leadId },
       select: {
         id: true,
-        customerName: true,   
+        customerName: true,
         productTitle: true,
         assignments: {
           where: { isActive: true },
@@ -2181,26 +2252,26 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
 
       ...(fromDate || toDate
         ? {
-            createdAt: {
-              ...(fromDate && {
-                gte: new Date(`${fromDate}T00:00:00.000+05:30`),
-              }),
-              ...(toDate && { lte: new Date(`${toDate}T23:59:59.999+05:30`) }),
-            },
-          }
+          createdAt: {
+            ...(fromDate && {
+              gte: new Date(`${fromDate}T00:00:00.000+05:30`),
+            }),
+            ...(toDate && { lte: new Date(`${toDate}T23:59:59.999+05:30`) }),
+          },
+        }
         : {}),
 
       ...(demoFromDate || demoToDate
         ? {
-            demoScheduledAt: {
-              ...(demoFromDate && {
-                gte: new Date(`${demoFromDate}T00:00:00.000+05:30`),
-              }),
-              ...(demoToDate && {
-                lte: new Date(`${demoToDate}T23:59:59.999+05:30`),
-              }),
-            },
-          }
+          demoScheduledAt: {
+            ...(demoFromDate && {
+              gte: new Date(`${demoFromDate}T00:00:00.000+05:30`),
+            }),
+            ...(demoToDate && {
+              lte: new Date(`${demoToDate}T23:59:59.999+05:30`),
+            }),
+          },
+        }
         : {}),
 
       ...(demoStatus === "overdue" && {
