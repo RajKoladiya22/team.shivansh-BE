@@ -700,6 +700,8 @@ export async function createLeadAdmin(req: Request, res: Response) {
       businessCategory,
       state,
       city,
+      tallySerial,
+      tallyVersion,
     } = req.body as Record<string, any>;
 
     if (!source || !type)
@@ -769,10 +771,12 @@ export async function createLeadAdmin(req: Request, res: Response) {
             customerCompanyName:
               customerCompanyName || customer.customerCompanyName,
             products: existingProducts,
-            ...(customerCategory && { customerCategory }),    
-            ...(businessCategory && { businessCategory }),    
-            ...(state && { state }),                          
+            ...(customerCategory && { customerCategory }),
+            ...(businessCategory && { businessCategory }),
+            ...(state && { state }),
             ...(city && { city }),
+            ...(tallySerial && { tallySerial }),
+            ...(tallyVersion && { tallyVersion }),
             updatedAt: new Date(),
           },
         });
@@ -794,6 +798,8 @@ export async function createLeadAdmin(req: Request, res: Response) {
             normalizedMobile,
             createdBy: creatorAccountId,
             products: customerProducts,
+            tallySerial: tallySerial ?? undefined,
+            tallyVersion: tallyVersion ?? undefined,
             customerCategory: customerCategory ?? undefined,
             businessCategory: businessCategory ?? undefined,
             state: state ?? undefined,
