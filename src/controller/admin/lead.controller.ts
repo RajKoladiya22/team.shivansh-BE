@@ -1072,6 +1072,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         customerId: true,
         product: true,
         productTitle: true,
+        isImportant: true,
         assignments: {
           where: { isActive: true },
           select: { accountId: true, teamId: true },
@@ -1259,6 +1260,11 @@ export async function updateLeadAdmin(req: Request, res: Response) {
           demoDoneAt: updated.demoDoneAt,
           demoCount: updated.demoCount,
           updatedAt: updated.updatedAt,
+          isImportant: updated.isImportant,
+          remark: updated.remark,
+          cost: updated.cost,
+          product: updated.product,
+          productTitle: updated.productTitle
         },
       };
 

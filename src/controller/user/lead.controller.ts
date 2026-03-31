@@ -920,6 +920,12 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
         customerName: updatedLead.customerName ?? null,
         isImportant: updatedLead.isImportant,
       };
+      
+      // console.log("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n lead-->\n", lead);
+      // console.log("\n updatedLead-->\n", updatedLead);
+      // console.log("\n fromState-->\n", fromState);
+      // console.log("\n toState-->\n", toState);
+      // console.log("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
 
       // Detect what changed
       const changedFields: Record<string, { from: any; to: any }> = {};
@@ -942,6 +948,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
 
       // Create activity logs depending on changes
       // 1) STATUS_CHANGED (if status changed)
+
       if (changedFields.status) {
         await tx.leadActivityLog.create({
           data: {
@@ -1011,6 +1018,12 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
           status: updated.status,
           demoDoneAt: updated.demoDoneAt,
           updatedAt: updated.updatedAt,
+          isImportant: updated.isImportant,
+          remark: updated.remark,
+          cost: updated.cost,
+          customerName: updated.customerName,
+          productTitle: updated.productTitle,
+          product: updated.product,
         },
       };
 
