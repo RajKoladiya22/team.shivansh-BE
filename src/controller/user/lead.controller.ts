@@ -1066,6 +1066,7 @@ export async function listMyLeads(req: Request, res: Response) {
       followUpRange, // today | tomorrow | week | overdue | upcoming | custom
       followUpFromDate,
       followUpToDate,
+      isImportant,
     } = req.query as Record<string, string>;
 
     const pageNumber = Math.max(Number(page), 1);
@@ -1104,6 +1105,7 @@ export async function listMyLeads(req: Request, res: Response) {
 
     if (status) where.status = status;
     if (source) where.source = source;
+    if (isImportant === "true") where.isImportant = true;
 
     if (fromDate || toDate) {
       where.createdAt = {};
