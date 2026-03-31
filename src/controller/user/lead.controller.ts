@@ -2272,7 +2272,7 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
 
-    const { fromDate, toDate, source, demoFromDate, demoToDate, demoStatus } =
+    const { fromDate, toDate, source, demoFromDate, demoToDate, demoStatus, isImportant } =
       req.query as {
         fromDate?: string;
         toDate?: string;
@@ -2280,6 +2280,7 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
         demoFromDate?: string;
         demoToDate?: string;
         demoStatus?: string;
+        isImportant?: boolean | string;
       };
 
     const now = new Date();
@@ -2298,6 +2299,8 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
       // },
 
       ...(source && { source: source as any }),
+
+      ...(isImportant === "true" && { isImportant: true }),
 
       ...(fromDate || toDate
         ? {

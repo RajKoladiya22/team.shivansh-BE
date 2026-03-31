@@ -2883,12 +2883,14 @@ export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
       demoFromDate,
       demoToDate,
       demoStatus,
+      isImportant
     } = req.query as Record<string, string>;
 
     const where: any = {};
     const now = new Date();
 
     if (source) where.source = source;
+    if (isImportant === "true") where.isImportant = true;
 
     if (fromDate || toDate) {
       where.createdAt = {};
