@@ -24,6 +24,7 @@ export async function createPublicLead(req: Request, res: Response) {
       customerName,
       mobileNumber,
       customerCompanyName,
+      email,
       productTitle,
       cost,
       remark,
@@ -113,6 +114,7 @@ export async function createPublicLead(req: Request, res: Response) {
               customerCompanyName || customer.customerCompanyName,
             products: existingProducts,
             ...(customerCategory && { customerCategory }),
+            ...(email && { email }),
             ...(businessCategory && { businessCategory }),
             ...(state && { state }),
             ...(city && { city }),
@@ -138,6 +140,7 @@ export async function createPublicLead(req: Request, res: Response) {
           data: {
             name: customerName,
             mobile: mobileNumber,
+            email: email ,
             customerCompanyName: customerCompanyName,
             normalizedMobile,
             products: customerProducts,

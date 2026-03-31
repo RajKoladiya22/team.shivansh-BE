@@ -1216,6 +1216,7 @@ model Lead {
 
   isActive  Boolean @default(true)
   isWorking Boolean @default(false)
+  isImportant Boolean @default(false) 
 
   createdBy    String? // accountId
   createdByAcc Account?  @relation("LeadCreatedBy", fields: [createdBy], references: [id])

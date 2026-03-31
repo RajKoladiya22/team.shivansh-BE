@@ -16,6 +16,6 @@ dist/
 logs/
 
 # prisma generated
-prisma/migrations/
+# prisma/migrations/
 
 deploy.sh

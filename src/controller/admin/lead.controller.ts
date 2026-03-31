@@ -309,6 +309,35 @@ async function closeFollowUpsOnStatusChange(
     return; // only demo follow-ups affected
   }
 
+  if (newStatus === "FOLLOW_UPS") {
+    const pendingDemoFollowUps = await tx.leadFollowUp.findMany({
+      where: {
+        leadId,
+        status: "PENDING",
+        type: "CALL",
+      },
+      select: { id: true, scheduledAt: true },
+    });
+
+    if (pendingDemoFollowUps.length > 0) {
+      await tx.leadFollowUp.updateMany({
+        where: {
+          leadId,
+          status: "PENDING",
+          type: "CALL",
+        },
+        data: {
+          status: "DONE",
+          doneAt: now,
+          doneBy: accountId,
+          remark: "Auto-marked done: Lead status changed to FOLLOW UP",
+        },
+      });
+    }
+
+    return; // only demo follow-ups affected
+  }
+
   // CLOSED or CONVERTED → mark ALL pending follow-ups as done
   if (newStatus === "CLOSED" || newStatus === "CONVERTED") {
     const pendingFollowUps = await tx.leadFollowUp.findMany({
@@ -340,9 +369,7 @@ async function closeFollowUpsOnStatusChange(
    ADMIN CONTROLLER ACTIONS
    ========================== */
 
-/**
- * POST /admin/leads
- */
+
 // export async function createLeadAdmin(req: Request, res: Response) {
 //   try {
 //     const creatorAccountId = req.user?.accountId;
@@ -678,6 +705,9 @@ async function closeFollowUpsOnStatusChange(
 //   }
 // }
 
+/**
+ * POST /admin/leads
+ */
 export async function createLeadAdmin(req: Request, res: Response) {
   try {
     const creatorAccountId = req.user?.accountId;
@@ -702,6 +732,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
       city,
       tallySerial,
       tallyVersion,
+      isImportant,
     } = req.body as Record<string, any>;
 
     if (!source || !type)
@@ -831,6 +862,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
           productTitle: productTitle ?? undefined,
           cost: totalCost ?? undefined,
           remark: remark ?? undefined,
+          isImportant: isImportant === true,
           createdBy: creatorAccountId,
           demoScheduledAt: demoDate ? new Date(demoDate) : undefined,
           demoCount: demoDate ? 1 : 0,
@@ -1005,7 +1037,8 @@ export async function updateLeadAdmin(req: Request, res: Response) {
       "product",
       "productTitle",
       "demoScheduledAt",
-      "source"
+      "source",
+      "isImportant",
     ];
     const data: Record<string, any> = {};
     for (const f of allowedFields) {
@@ -1019,6 +1052,9 @@ export async function updateLeadAdmin(req: Request, res: Response) {
       data.productTitle = data.product.title ?? data.productTitle ?? null;
     if (data.productTitle === undefined && data.product?.title)
       data.productTitle = data.product.title;
+    if (req.body.isImportant !== undefined) {
+      data.isImportant = req.body.isImportant;
+    }
 
     const existing = await prisma.lead.findUnique({
       where: { id },
@@ -1151,7 +1187,8 @@ export async function updateLeadAdmin(req: Request, res: Response) {
       if (
         data.status === "DEMO_DONE" ||
         data.status === "CLOSED" ||
-        data.status === "CONVERTED"
+        data.status === "CONVERTED" ||
+        data.status === "FOLLOW_UPS"
       ) {
         await closeFollowUpsOnStatusChange(tx, id, data.status, performerAccountId);
         await syncLeadFollowUpAggregates(tx, id);
@@ -1194,15 +1231,6 @@ export async function updateLeadAdmin(req: Request, res: Response) {
       return lead;
     });
 
-    // console.log(
-    //   "\n\n\n\n\n\n\n\n\n\n\n\n\\n\n\n\n",
-    //   {
-    //     fromState: existing,
-    //     toState: updated,
-    //   },
-
-    //   "\n\n\n",
-    // );
 
     // -------------------------
     // Resolve recipients
@@ -1524,6 +1552,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
           totalWorkSeconds: true,
           createdAt: true,
           updatedAt: true,
+          isImportant: true,
 
           followUps: {
             where: { status: "PENDING" },
@@ -1776,6 +1805,7 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
         productTitle: true,
         cost: true,
         remark: true,
+        isImportant: true,
 
         isWorking: true,
         totalWorkSeconds: true,
