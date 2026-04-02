@@ -91,7 +91,7 @@ export async function updateProfile(req: Request, res: Response) {
     });
     if (!account) return sendErrorResponse(res, 404, "Account not found");
 
-    const storageDir = path.join(process.cwd(), "src/storage", userId);
+    const storageDir = path.join(process.cwd(), "dist/src/storage", userId);
 
     /* ---------- DOCUMENT MAP ---------- */
     const docs: Record<string, DocumentMeta> = (account.documents as any) ?? {};

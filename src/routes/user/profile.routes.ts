@@ -19,7 +19,7 @@ router.put(
     { name: "resume", maxCount: 1 },
     { name: "driving_license", maxCount: 1 },
     { name: "policy", maxCount: 1 },
-  ]),
+  ]),       
   updateProfile
 );
 
