@@ -1800,3 +1800,1469 @@ export async function getTaskCommentsUser(req: Request, res: Response) {
     );
   }
 }
+
+
+
+/* ═══════════════════════════════════════════════════════════════
+   ░░░░░░░░░░░░░  CHECKLIST OPERATIONS  ░░░░░░░░░░░░░░░░░░░░░░░░
+═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────
+   POST /user/tasks/:id/checklist
+───────────────────────────────────────────────────────────── */
+export async function addChecklistItemUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId } = req.params;
+    const { title, assignedTo, dueDate } = req.body as {
+      title: string;
+      assignedTo?: string;
+      dueDate?: string;
+    };
+
+    if (!title?.trim()) return sendErrorResponse(res, 400, "Title is required");
+
+    const hasAccess = await isAssignedToTask(taskId, accountId);
+    if (!hasAccess) return sendErrorResponse(res, 403, "Not assigned to this task");
+
+    const task = await prisma.task.findUnique({
+      where: { id: taskId, deletedAt: null },
+      select: { id: true, projectId: true },
+    });
+    if (!task) return sendErrorResponse(res, 404, "Task not found");
+
+    const { _max } = await prisma.checklistItem.aggregate({
+      where: { taskId },
+      _max: { order: true },
+    });
+    const nextOrder = (_max.order ?? -1) + 1;
+
+    const item = await prisma.$transaction(async (tx) => {
+      const created = await tx.checklistItem.create({
+        data: {
+          taskId,
+          title: title.trim(),
+          order: nextOrder,
+          assignedTo: assignedTo ?? null,
+          dueDate: dueDate ? new Date(dueDate) : null,
+          createdBy: accountId,
+          status: "PENDING",
+        },
+      });
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: taskId,
+          action: "UPDATED",
+          performedBy: accountId,
+          projectId: task.projectId,
+          taskId,
+          meta: { type: "checklist_added", itemId: created.id, title },
+        },
+      });
+      return created;
+    });
+
+    const recipients = await resolveTaskRecipients(taskId);
+    emitTaskPatch(taskId, recipients, {
+      checklistItem: { action: "added", item },
+      updatedAt: new Date(),
+    });
+
+    return sendSuccessResponse(res, 201, "Checklist item added", item);
+  } catch (err: any) {
+    console.error("[addChecklistItemUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to add checklist item");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   PATCH /user/tasks/:id/checklist/:itemId
+   Toggle status, rename, reassign, reorder.
+───────────────────────────────────────────────────────────── */
+export async function updateChecklistItemUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId, itemId } = req.params;
+    const { title, status, assignedTo, dueDate, order } = req.body as {
+      title?: string;
+      status?: string;
+      assignedTo?: string | null;
+      dueDate?: string | null;
+      order?: number;
+    };
+
+    const hasAccess = await isAssignedToTask(taskId, accountId);
+    if (!hasAccess) return sendErrorResponse(res, 403, "Not assigned to this task");
+
+    const existing = await prisma.checklistItem.findFirst({
+      where: { id: itemId, taskId },
+    });
+    if (!existing) return sendErrorResponse(res, 404, "Checklist item not found");
+
+    const data: Record<string, any> = {};
+    if (title !== undefined) data.title = title.trim();
+    if (status !== undefined) data.status = status;
+    if (assignedTo !== undefined) data.assignedTo = assignedTo;
+    if (dueDate !== undefined) data.dueDate = dueDate ? new Date(dueDate) : null;
+    if (order !== undefined) data.order = order;
+
+    if (status === "COMPLETED" && existing.status !== "COMPLETED") {
+      data.completedAt = new Date();
+      data.completedBy = accountId;
+    } else if (status === "PENDING" && existing.status === "COMPLETED") {
+      data.completedAt = null;
+      data.completedBy = null;
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const item = await tx.checklistItem.update({ where: { id: itemId }, data });
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: taskId,
+          action: "UPDATED",
+          performedBy: accountId,
+          taskId,
+          meta: { type: "checklist_updated", itemId, changes: Object.keys(data) },
+        },
+      });
+      return item;
+    });
+
+    const recipients = await resolveTaskRecipients(taskId);
+    emitTaskPatch(taskId, recipients, {
+      checklistItem: { action: "updated", item: updated },
+      updatedAt: new Date(),
+    });
+
+    return sendSuccessResponse(res, 200, "Checklist item updated", updated);
+  } catch (err: any) {
+    console.error("[updateChecklistItemUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to update checklist item");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   DELETE /user/tasks/:id/checklist/:itemId
+───────────────────────────────────────────────────────────── */
+export async function deleteChecklistItemUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId, itemId } = req.params;
+
+    const hasAccess = await isAssignedToTask(taskId, accountId);
+    if (!hasAccess) return sendErrorResponse(res, 403, "Not assigned to this task");
+
+    const item = await prisma.checklistItem.findFirst({ where: { id: itemId, taskId } });
+    if (!item) return sendErrorResponse(res, 404, "Checklist item not found");
+
+    await prisma.$transaction(async (tx) => {
+      await tx.checklistItem.delete({ where: { id: itemId } });
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: taskId,
+          action: "UPDATED",
+          performedBy: accountId,
+          taskId,
+          meta: { type: "checklist_deleted", itemId, title: item.title },
+        },
+      });
+    });
+
+    const recipients = await resolveTaskRecipients(taskId);
+    emitTaskPatch(taskId, recipients, {
+      checklistItem: { action: "deleted", itemId },
+      updatedAt: new Date(),
+    });
+
+    return sendSuccessResponse(res, 200, "Checklist item deleted");
+  } catch (err: any) {
+    console.error("[deleteChecklistItemUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to delete checklist item");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   PATCH /user/tasks/:id/checklist/reorder
+   Body: { items: [{ id, order }] }
+───────────────────────────────────────────────────────────── */
+export async function reorderChecklistUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId } = req.params;
+    const { items } = req.body as { items: { id: string; order: number }[] };
+
+    if (!Array.isArray(items) || items.length === 0)
+      return sendErrorResponse(res, 400, "items array is required");
+
+    const hasAccess = await isAssignedToTask(taskId, accountId);
+    if (!hasAccess) return sendErrorResponse(res, 403, "Not assigned to this task");
+
+    await prisma.$transaction(
+      items.map(({ id, order }) =>
+        prisma.checklistItem.updateMany({
+          where: { id, taskId },
+          data: { order },
+        }),
+      ),
+    );
+
+    return sendSuccessResponse(res, 200, "Checklist reordered");
+  } catch (err: any) {
+    console.error("[reorderChecklistUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to reorder checklist");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ░░░░░░░░░░░░░  COMMENT — EDIT / DELETE / REACT  ░░░░░░░░░░░░░
+═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────
+   PATCH /user/tasks/:id/comments/:commentId
+   Author-only edit. Captures editedAt for UI diff badge.
+───────────────────────────────────────────────────────────── */
+export async function editCommentUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId, commentId } = req.params;
+    const { content } = req.body as { content: string };
+
+    if (!content?.trim()) return sendErrorResponse(res, 400, "Content is required");
+
+    const comment = await prisma.taskComment.findFirst({
+      where: { id: commentId, taskId, deletedAt: null },
+      select: { id: true, authorId: true, content: true },
+    });
+    if (!comment) return sendErrorResponse(res, 404, "Comment not found");
+    if (comment.authorId !== accountId)
+      return sendErrorResponse(res, 403, "You can only edit your own comments");
+
+    const updated = await prisma.taskComment.update({
+      where: { id: commentId },
+      data: { content: content.trim(), editedAt: new Date() },
+      select: {
+        id: true,
+        content: true,
+        editedAt: true,
+        createdAt: true,
+        author: { select: { id: true, firstName: true, lastName: true, avatar: true } },
+      },
+    });
+
+    const recipients = await resolveTaskRecipients(taskId);
+    try {
+      const io = getIo();
+      const payload = { taskId, comment: updated, action: "edited" };
+      recipients.forEach((id) => io.to(`tasks:user:${id}`).emit("task:comment", payload));
+      io.to("tasks:admin").emit("task:comment", payload);
+    } catch { /* no-op */ }
+
+    return sendSuccessResponse(res, 200, "Comment updated", updated);
+  } catch (err: any) {
+    console.error("[editCommentUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to edit comment");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   DELETE /user/tasks/:id/comments/:commentId  (soft delete)
+───────────────────────────────────────────────────────────── */
+export async function deleteCommentUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId, commentId } = req.params;
+
+    const comment = await prisma.taskComment.findFirst({
+      where: { id: commentId, taskId, deletedAt: null },
+      select: { id: true, authorId: true },
+    });
+    if (!comment) return sendErrorResponse(res, 404, "Comment not found");
+
+    // Admin can delete any comment; user only their own
+    const isAdmin = req.user?.roles?.includes?.("ADMIN");
+    if (!isAdmin && comment.authorId !== accountId)
+      return sendErrorResponse(res, 403, "You can only delete your own comments");
+
+    await prisma.taskComment.update({
+      where: { id: commentId },
+      data: { deletedAt: new Date(), deletedBy: accountId },
+    });
+
+    const recipients = await resolveTaskRecipients(taskId);
+    try {
+      const io = getIo();
+      const payload = { taskId, commentId, action: "deleted" };
+      recipients.forEach((id) => io.to(`tasks:user:${id}`).emit("task:comment", payload));
+      io.to("tasks:admin").emit("task:comment", payload);
+    } catch { /* no-op */ }
+
+    return sendSuccessResponse(res, 200, "Comment deleted");
+  } catch (err: any) {
+    console.error("[deleteCommentUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to delete comment");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   POST /user/tasks/:id/comments/:commentId/reactions
+   Body: { emoji: "👍" }   — toggles: adds if absent, removes if present
+───────────────────────────────────────────────────────────── */
+export async function reactToCommentUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId, commentId } = req.params;
+    const { emoji } = req.body as { emoji: string };
+
+    if (!emoji?.trim()) return sendErrorResponse(res, 400, "emoji is required");
+
+    const hasAccess = await isAssignedToTask(taskId, accountId);
+    if (!hasAccess) return sendErrorResponse(res, 403, "Not assigned to this task");
+
+    const comment = await prisma.taskComment.findFirst({
+      where: { id: commentId, taskId, deletedAt: null },
+      select: { id: true, reactions: true },
+    });
+    if (!comment) return sendErrorResponse(res, 404, "Comment not found");
+
+    // Mutate reactions JSON: { "👍": ["id1", "id2"] }
+    const reactions: Record<string, string[]> =
+      (comment.reactions as Record<string, string[]>) ?? {};
+
+    const current = reactions[emoji] ?? [];
+    const alreadyReacted = current.includes(accountId);
+
+    if (alreadyReacted) {
+      reactions[emoji] = current.filter((id) => id !== accountId);
+      if (reactions[emoji].length === 0) delete reactions[emoji];
+    } else {
+      reactions[emoji] = [...current, accountId];
+    }
+
+    const updated = await prisma.taskComment.update({
+      where: { id: commentId },
+      data: { reactions },
+      select: { id: true, reactions: true },
+    });
+
+    // Lightweight reaction patch — no full task emit needed
+    try {
+      const io = getIo();
+      const payload = {
+        taskId,
+        commentId,
+        action: "reaction",
+        emoji,
+        reactions: updated.reactions,
+        by: accountId,
+      };
+      const recipients = await resolveTaskRecipients(taskId);
+      recipients.forEach((id) => io.to(`tasks:user:${id}`).emit("task:comment", payload));
+      io.to("tasks:admin").emit("task:comment", payload);
+    } catch { /* no-op */ }
+
+    return sendSuccessResponse(res, 200, "Reaction toggled", {
+      commentId,
+      reactions: updated.reactions,
+      action: alreadyReacted ? "removed" : "added",
+    });
+  } catch (err: any) {
+    console.error("[reactToCommentUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to react");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ░░░░░░░░░░░░░░░░  TIME TRACKING  ░░░░░░░░░░░░░░░░░░░░░░░░░░░
+═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────
+   POST /user/tasks/:id/time/start
+   Creates an open entry (endedAt = null). One active timer per task per user.
+───────────────────────────────────────────────────────────── */
+export async function startTimeEntryUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId } = req.params;
+    const { description, isBillable = false } = req.body as {
+      description?: string;
+      isBillable?: boolean;
+    };
+
+    const hasAccess = await isAssignedToTask(taskId, accountId);
+    if (!hasAccess) return sendErrorResponse(res, 403, "Not assigned to this task");
+
+    const task = await prisma.task.findUnique({
+      where: { id: taskId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!task) return sendErrorResponse(res, 404, "Task not found");
+
+    // Enforce single active timer per user per task
+    const activeEntry = await prisma.taskTimeEntry.findFirst({
+      where: { taskId, accountId, endedAt: null },
+      select: { id: true },
+    });
+    if (activeEntry)
+      return sendErrorResponse(res, 409, "A timer is already running for this task. Stop it first.");
+
+    const entry = await prisma.taskTimeEntry.create({
+      data: {
+        taskId,
+        accountId,
+        startedAt: new Date(),
+        description: description ?? null,
+        isBillable: Boolean(isBillable),
+      },
+    });
+
+    return sendSuccessResponse(res, 201, "Timer started", entry);
+  } catch (err: any) {
+    console.error("[startTimeEntryUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to start timer");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   POST /user/tasks/:id/time/:entryId/stop
+   Closes the open entry and updates loggedMinutes on the task.
+───────────────────────────────────────────────────────────── */
+export async function stopTimeEntryUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId, entryId } = req.params;
+
+    const entry = await prisma.taskTimeEntry.findFirst({
+      where: { id: entryId, taskId, accountId, endedAt: null },
+    });
+    if (!entry)
+      return sendErrorResponse(res, 404, "Active timer not found for this task");
+
+    const endedAt = new Date();
+    const durationMinutes = Math.round(
+      (endedAt.getTime() - entry.startedAt.getTime()) / 60_000,
+    );
+
+    const [updated] = await prisma.$transaction([
+      prisma.taskTimeEntry.update({
+        where: { id: entryId },
+        data: { endedAt, durationMinutes },
+      }),
+      prisma.task.update({
+        where: { id: taskId },
+        data: { loggedMinutes: { increment: durationMinutes } },
+      }),
+    ]);
+
+    return sendSuccessResponse(res, 200, "Timer stopped", {
+      ...updated,
+      durationMinutes,
+    });
+  } catch (err: any) {
+    console.error("[stopTimeEntryUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to stop timer");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   POST /user/tasks/:id/time/log
+   Manual time log (no start/stop flow).
+───────────────────────────────────────────────────────────── */
+export async function logManualTimeUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId } = req.params;
+    const { durationMinutes, date, description, isBillable = false } = req.body as {
+      durationMinutes: number;
+      date?: string;
+      description?: string;
+      isBillable?: boolean;
+    };
+
+    if (!durationMinutes || durationMinutes <= 0)
+      return sendErrorResponse(res, 400, "durationMinutes must be a positive number");
+
+    const hasAccess = await isAssignedToTask(taskId, accountId);
+    if (!hasAccess) return sendErrorResponse(res, 403, "Not assigned to this task");
+
+    const task = await prisma.task.findUnique({
+      where: { id: taskId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!task) return sendErrorResponse(res, 404, "Task not found");
+
+    const logDate = date ? new Date(date) : new Date();
+
+    const [entry] = await prisma.$transaction([
+      prisma.taskTimeEntry.create({
+        data: {
+          taskId,
+          accountId,
+          startedAt: logDate,
+          endedAt: new Date(logDate.getTime() + durationMinutes * 60_000),
+          durationMinutes,
+          description: description ?? null,
+          isBillable: Boolean(isBillable),
+        },
+      }),
+      prisma.task.update({
+        where: { id: taskId },
+        data: { loggedMinutes: { increment: durationMinutes } },
+      }),
+    ]);
+
+    return sendSuccessResponse(res, 201, "Time logged", entry);
+  } catch (err: any) {
+    console.error("[logManualTimeUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to log time");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   GET /user/tasks/:id/time
+───────────────────────────────────────────────────────────── */
+export async function getTimeEntriesUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId } = req.params;
+
+    const hasAccess = await isAssignedToTask(taskId, accountId);
+    if (!hasAccess) return sendErrorResponse(res, 403, "Not assigned to this task");
+
+    const task = await prisma.task.findUnique({
+      where: { id: taskId, deletedAt: null },
+      select: { id: true, estimatedMinutes: true, loggedMinutes: true },
+    });
+    if (!task) return sendErrorResponse(res, 404, "Task not found");
+
+    const entries = await prisma.taskTimeEntry.findMany({
+      where: { taskId },
+      orderBy: { startedAt: "desc" },
+      select: {
+        id: true,
+        startedAt: true,
+        endedAt: true,
+        durationMinutes: true,
+        description: true,
+        isBillable: true,
+        account: { select: { id: true, firstName: true, lastName: true, avatar: true } },
+      },
+    });
+
+    const totalLogged = entries.reduce((s, e) => s + (e.durationMinutes ?? 0), 0);
+
+    return sendSuccessResponse(res, 200, "Time entries fetched", {
+      taskId,
+      estimatedMinutes: task.estimatedMinutes,
+      loggedMinutes: totalLogged,
+      activeTimer: entries.find((e) => e.endedAt === null) ?? null,
+      entries,
+    });
+  } catch (err: any) {
+    console.error("[getTimeEntriesUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch time entries");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   DELETE /user/tasks/:id/time/:entryId
+   Owner or admin only. Decrements loggedMinutes if already stopped.
+───────────────────────────────────────────────────────────── */
+export async function deleteTimeEntryUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId, entryId } = req.params;
+
+    const entry = await prisma.taskTimeEntry.findFirst({
+      where: { id: entryId, taskId },
+      select: { id: true, accountId: true, durationMinutes: true, endedAt: true },
+    });
+    if (!entry) return sendErrorResponse(res, 404, "Time entry not found");
+
+    const isAdmin = req.user?.roles?.includes?.("ADMIN");
+    if (!isAdmin && entry.accountId !== accountId)
+      return sendErrorResponse(res, 403, "You can only delete your own time entries");
+
+    const ops: any[] = [prisma.taskTimeEntry.delete({ where: { id: entryId } })];
+
+    // Only decrement if entry was completed
+    if (entry.endedAt && entry.durationMinutes) {
+      ops.push(
+        prisma.task.update({
+          where: { id: taskId },
+          data: { loggedMinutes: { decrement: entry.durationMinutes } },
+        }),
+      );
+    }
+
+    await prisma.$transaction(ops);
+
+    return sendSuccessResponse(res, 200, "Time entry deleted");
+  } catch (err: any) {
+    console.error("[deleteTimeEntryUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to delete time entry");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ░░░░░░░░░░░░░░░░  WATCHERS  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────
+   POST /user/tasks/:id/watch   — toggles watch on/off
+───────────────────────────────────────────────────────────── */
+export async function toggleWatchTaskUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId } = req.params;
+
+    const task = await prisma.task.findUnique({
+      where: { id: taskId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!task) return sendErrorResponse(res, 404, "Task not found");
+
+    const existing = await prisma.taskWatcher.findUnique({
+      where: { taskId_accountId: { taskId, accountId } },
+    });
+
+    if (existing) {
+      await prisma.taskWatcher.delete({
+        where: { taskId_accountId: { taskId, accountId } },
+      });
+      return sendSuccessResponse(res, 200, "Unwatched task", { watching: false });
+    }
+
+    await prisma.taskWatcher.create({ data: { taskId, accountId } });
+    return sendSuccessResponse(res, 200, "Watching task", { watching: true });
+  } catch (err: any) {
+    console.error("[toggleWatchTaskUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to toggle watch");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ░░░░░░░░░  SELF-TASK — FULL UPDATE & DELETE  ░░░░░░░░░░░░░░░
+═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────
+   PATCH /user/tasks/:id
+   Owners of a self-task can update core fields (not status — use /status).
+───────────────────────────────────────────────────────────── */
+export async function updateSelfTaskUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id } = req.params;
+
+    const task = await prisma.task.findUnique({
+      where: { id, deletedAt: null },
+      select: { id: true, isSelfTask: true, createdBy: true, projectId: true },
+    });
+    if (!task) return sendErrorResponse(res, 404, "Task not found");
+
+    if (!task.isSelfTask || task.createdBy !== accountId)
+      return sendErrorResponse(res, 403, "You can only edit your own self-tasks");
+
+    const ALLOWED = ["title", "description", "priority", "dueDate", "startDate", "estimatedMinutes"];
+    const data: Record<string, any> = {};
+    for (const f of ALLOWED) {
+      if (req.body[f] !== undefined) data[f] = req.body[f];
+    }
+    if (!Object.keys(data).length)
+      return sendErrorResponse(res, 400, "No valid fields to update");
+
+    if (data.dueDate) data.dueDate = new Date(data.dueDate);
+    if (data.startDate) data.startDate = new Date(data.startDate);
+
+    const fromState = await prisma.task.findUnique({
+      where: { id },
+      select: { title: true, priority: true, dueDate: true },
+    });
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.task.update({
+        where: { id },
+        data,
+        select: TASK_DETAIL_SELECT,
+      });
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: id,
+          action: "UPDATED",
+          performedBy: accountId,
+          taskId: id,
+          fromState: fromState as any,
+          toState: data,
+          meta: { updatedFields: Object.keys(data), isSelfTask: true },
+        },
+      });
+      return result;
+    });
+
+    emitTaskPatch(id, [accountId], { ...data, updatedAt: new Date() });
+
+    return sendSuccessResponse(res, 200, "Task updated", updated);
+  } catch (err: any) {
+    console.error("[updateSelfTaskUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to update task");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   DELETE /user/tasks/:id   (soft delete)
+───────────────────────────────────────────────────────────── */
+export async function deleteSelfTaskUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id } = req.params;
+
+    const task = await prisma.task.findUnique({
+      where: { id, deletedAt: null },
+      select: { id: true, isSelfTask: true, createdBy: true },
+    });
+    if (!task) return sendErrorResponse(res, 404, "Task not found");
+
+    if (!task.isSelfTask || task.createdBy !== accountId)
+      return sendErrorResponse(res, 403, "You can only delete your own self-tasks");
+
+    await prisma.task.update({
+      where: { id },
+      data: { deletedAt: new Date(), deletedBy: accountId },
+    });
+
+    try {
+      const io = getIo();
+      io.to(`tasks:user:${accountId}`).emit("task:patch", {
+        id,
+        patch: { deletedAt: new Date() },
+      });
+      io.to("tasks:admin").emit("task:patch", { id, patch: { deletedAt: new Date() } });
+    } catch { /* no-op */ }
+
+    return sendSuccessResponse(res, 200, "Task deleted");
+  } catch (err: any) {
+    console.error("[deleteSelfTaskUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to delete task");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ░░░░░░░░░░░░░░░  ATTACHMENTS (URL-based)  ░░░░░░░░░░░░░░░░░░
+═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────
+   POST /user/tasks/:id/attachments
+   Body: { name, url, mimeType?, sizeBytes?, source? }
+───────────────────────────────────────────────────────────── */
+export async function addAttachmentUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId } = req.params;
+    const { name, url, mimeType, sizeBytes, source = "UPLOAD" } = req.body as {
+      name: string;
+      url: string;
+      mimeType?: string;
+      sizeBytes?: number;
+      source?: string;
+    };
+
+    if (!name?.trim() || !url?.trim())
+      return sendErrorResponse(res, 400, "name and url are required");
+
+    const hasAccess = await isAssignedToTask(taskId, accountId);
+    if (!hasAccess) return sendErrorResponse(res, 403, "Not assigned to this task");
+
+    const task = await prisma.task.findUnique({
+      where: { id: taskId, deletedAt: null },
+      select: { id: true, projectId: true },
+    });
+    if (!task) return sendErrorResponse(res, 404, "Task not found");
+
+    const attachment = await prisma.$transaction(async (tx) => {
+      const created = await tx.taskAttachment.create({
+        data: {
+          taskId,
+          name: name.trim(),
+          url,
+          mimeType: mimeType ?? null,
+          sizeBytes: sizeBytes ?? null,
+          source: source as any,
+          uploadedBy: accountId,
+        },
+      });
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: taskId,
+          action: "UPDATED",
+          performedBy: accountId,
+          projectId: task.projectId,
+          taskId,
+          meta: { type: "attachment_added", attachmentId: created.id, name },
+        },
+      });
+      return created;
+    });
+
+    const recipients = await resolveTaskRecipients(taskId);
+    emitTaskPatch(taskId, recipients, {
+      attachment: { action: "added", attachment },
+      updatedAt: new Date(),
+    });
+
+    return sendSuccessResponse(res, 201, "Attachment added", attachment);
+  } catch (err: any) {
+    console.error("[addAttachmentUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to add attachment");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   DELETE /user/tasks/:id/attachments/:attachmentId
+───────────────────────────────────────────────────────────── */
+export async function deleteAttachmentUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId, attachmentId } = req.params;
+
+    const attachment = await prisma.taskAttachment.findFirst({
+      where: { id: attachmentId, taskId, deletedAt: null },
+      select: { id: true, uploadedBy: true, name: true },
+    });
+    if (!attachment) return sendErrorResponse(res, 404, "Attachment not found");
+
+    const isAdmin = req.user?.roles?.includes?.("ADMIN");
+    if (!isAdmin && attachment.uploadedBy !== accountId)
+      return sendErrorResponse(res, 403, "You can only delete your own attachments");
+
+    await prisma.$transaction(async (tx) => {
+      await tx.taskAttachment.update({
+        where: { id: attachmentId },
+        data: { deletedAt: new Date() },
+      });
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: taskId,
+          action: "UPDATED",
+          performedBy: accountId,
+          taskId,
+          meta: { type: "attachment_deleted", attachmentId, name: attachment.name },
+        },
+      });
+    });
+
+    const recipients = await resolveTaskRecipients(taskId);
+    emitTaskPatch(taskId, recipients, {
+      attachment: { action: "deleted", attachmentId },
+      updatedAt: new Date(),
+    });
+
+    return sendSuccessResponse(res, 200, "Attachment deleted");
+  } catch (err: any) {
+    console.error("[deleteAttachmentUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to delete attachment");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ░░░░░░░░░░░░░░░░  SUBTASKS  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────
+   POST /user/tasks/:id/subtasks
+───────────────────────────────────────────────────────────── */
+export async function createSubtaskUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: parentTaskId } = req.params;
+    const { title, description, priority = "NONE", dueDate, assigneeAccountId } =
+      req.body as {
+        title: string;
+        description?: string;
+        priority?: string;
+        dueDate?: string;
+        assigneeAccountId?: string;
+      };
+
+    if (!title?.trim()) return sendErrorResponse(res, 400, "Title is required");
+
+    const hasAccess = await isAssignedToTask(parentTaskId, accountId);
+    if (!hasAccess) return sendErrorResponse(res, 403, "Not assigned to this task");
+
+    const parent = await prisma.task.findUnique({
+      where: { id: parentTaskId, deletedAt: null },
+      select: { id: true, projectId: true, stepId: true },
+    });
+    if (!parent) return sendErrorResponse(res, 404, "Parent task not found");
+
+    const subtask = await prisma.$transaction(async (tx) => {
+      const created = await tx.task.create({
+        data: {
+          title: title.trim(),
+          description: description ?? null,
+          priority: priority as any,
+          dueDate: dueDate ? new Date(dueDate) : null,
+          parentTaskId,
+          projectId: parent.projectId,
+          stepId: parent.stepId,
+          createdBy: accountId,
+          status: TaskStatus.PENDING,
+        },
+        select: TASK_LIST_SELECT,
+      });
+
+      if (assigneeAccountId) {
+        await tx.taskAssignment.create({
+          data: {
+            taskId: created.id,
+            type: "ACCOUNT" as any,
+            accountId: assigneeAccountId,
+            assignedBy: accountId,
+            status: TaskStatus.PENDING,
+          },
+        });
+      }
+
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: parentTaskId,
+          action: "UPDATED",
+          performedBy: accountId,
+          projectId: parent.projectId,
+          taskId: parentTaskId,
+          meta: { type: "subtask_created", subtaskId: created.id, title },
+        },
+      });
+
+      return created;
+    });
+
+    emitTaskPatch(parentTaskId, await resolveTaskRecipients(parentTaskId), {
+      subtask: { action: "added", id: subtask.id, title: subtask.title },
+      updatedAt: new Date(),
+    });
+
+    return sendSuccessResponse(res, 201, "Subtask created", subtask);
+  } catch (err: any) {
+    console.error("[createSubtaskUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to create subtask");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   GET /user/tasks/stats
+   Personal stats for the logged-in user.
+───────────────────────────────────────────────────────────── */
+export async function getMyTaskStatsUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const teamMemberships = await prisma.teamMember.findMany({
+      where: { accountId, isActive: true },
+      select: { teamId: true },
+    });
+    const teamIds = teamMemberships.map((m) => m.teamId);
+
+    const baseWhere: any = {
+      deletedAt: null,
+      assignments: {
+        some: {
+          OR: [
+            { accountId },
+            ...(teamIds.length > 0 ? [{ teamId: { in: teamIds } }] : []),
+          ],
+        },
+      },
+    };
+
+    const [grouped, overdue, activeTimer] = await Promise.all([
+      prisma.task.groupBy({
+        by: ["status"],
+        where: baseWhere,
+        _count: { _all: true },
+      }),
+      prisma.task.count({
+        where: {
+          ...baseWhere,
+          dueDate: { lt: new Date() },
+          status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] },
+        },
+      }),
+      prisma.taskTimeEntry.findFirst({
+        where: { accountId, endedAt: null },
+        select: { id: true, taskId: true, startedAt: true },
+      }),
+    ]);
+
+    const stats: Record<string, number> = {
+      PENDING: 0,
+      IN_PROGRESS: 0,
+      IN_REVIEW: 0,
+      BLOCKED: 0,
+      COMPLETED: 0,
+      CANCELLED: 0,
+      TOTAL: 0,
+      OVERDUE: overdue,
+    };
+
+    for (const row of grouped) {
+      stats[row.status] = row._count._all;
+      stats.TOTAL += row._count._all;
+    }
+
+    return sendSuccessResponse(res, 200, "My task stats", {
+      stats,
+      activeTimer: activeTimer ?? null,
+    });
+  } catch (err: any) {
+    console.error("[getMyTaskStatsUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch stats");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ░░░░░░░░░░░  ADMIN — BULK / DUPLICATE / DEPS / KANBAN  ░░░░░░
+═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────
+   POST /admin/tasks/bulk-update
+   Body: { ids: string[], data: { status?, priority?, stepId?, assigneeAccountId? } }
+───────────────────────────────────────────────────────────── */
+export async function bulkUpdateTasksAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+    const adminAccountId = req.user?.accountId!;
+
+    const { ids, data: updateData } = req.body as {
+      ids: string[];
+      data: {
+        status?: string;
+        priority?: string;
+        stepId?: string;
+        assigneeAccountId?: string;
+      };
+    };
+
+    if (!Array.isArray(ids) || ids.length === 0)
+      return sendErrorResponse(res, 400, "ids array is required");
+    if (ids.length > 100)
+      return sendErrorResponse(res, 400, "Maximum 100 tasks per bulk operation");
+    if (!updateData || !Object.keys(updateData).length)
+      return sendErrorResponse(res, 400, "No update fields provided");
+
+    const ALLOWED_BULK = ["status", "priority", "stepId"];
+    const sanitized: Record<string, any> = {};
+    for (const f of ALLOWED_BULK) {
+      if (updateData[f as keyof typeof updateData] !== undefined)
+        sanitized[f] = updateData[f as keyof typeof updateData];
+    }
+
+    // Status-driven timestamps
+    if (sanitized.status === TaskStatus.IN_PROGRESS) sanitized.startedAt = new Date();
+    if (sanitized.status === TaskStatus.COMPLETED) sanitized.completedAt = new Date();
+    if (sanitized.status === TaskStatus.CANCELLED) sanitized.cancelledAt = new Date();
+
+    await prisma.$transaction(async (tx) => {
+      await tx.task.updateMany({ where: { id: { in: ids }, deletedAt: null }, data: sanitized });
+
+      if (updateData.assigneeAccountId) {
+        // Replace all assignments in bulk
+        await tx.taskAssignment.deleteMany({ where: { taskId: { in: ids } } });
+        await tx.taskAssignment.createMany({
+          data: ids.map((taskId) => ({
+            taskId,
+            type: "ACCOUNT" as any,
+            accountId: updateData.assigneeAccountId!,
+            assignedBy: adminAccountId,
+            status: (sanitized.status as TaskStatus) ?? TaskStatus.PENDING,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      await tx.activityLog.createMany({
+        data: ids.map((taskId) => ({
+          entityType: "TASK" as any,
+          entityId: taskId,
+          action: "UPDATED" as any,
+          performedBy: adminAccountId,
+          taskId,
+          meta: { type: "bulk_update", changes: Object.keys(sanitized) },
+        })),
+      });
+    });
+
+    // Notify each task's recipients
+    for (const taskId of ids) {
+      const recipients = await resolveTaskRecipients(taskId);
+      emitTaskPatch(taskId, recipients, { ...sanitized, updatedAt: new Date() });
+    }
+
+    return sendSuccessResponse(res, 200, `${ids.length} tasks updated`, { updated: ids.length });
+  } catch (err: any) {
+    console.error("[bulkUpdateTasksAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Bulk update failed");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   DELETE /admin/tasks/bulk-delete
+   Body: { ids: string[] }   — hard delete (no activity log kept)
+───────────────────────────────────────────────────────────── */
+export async function bulkDeleteTasksAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+
+    const { ids } = req.body as { ids: string[] };
+    if (!Array.isArray(ids) || ids.length === 0)
+      return sendErrorResponse(res, 400, "ids array is required");
+    if (ids.length > 50)
+      return sendErrorResponse(res, 400, "Maximum 50 tasks per bulk delete");
+
+    // Fan-out recipients before deleting
+    const recipientMap: Record<string, string[]> = {};
+    for (const id of ids) {
+      recipientMap[id] = await resolveTaskRecipients(id);
+    }
+
+    await prisma.task.deleteMany({ where: { id: { in: ids } } });
+
+    ids.forEach((id) => {
+      emitTaskPatch(id, recipientMap[id] ?? [], { deletedAt: new Date() });
+    });
+
+    return sendSuccessResponse(res, 200, `${ids.length} tasks deleted`, { deleted: ids.length });
+  } catch (err: any) {
+    console.error("[bulkDeleteTasksAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Bulk delete failed");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   POST /admin/tasks/:id/duplicate
+   Clones a task (and optionally its checklist).
+   Body: { includeChecklist?: boolean, includeAssignees?: boolean }
+───────────────────────────────────────────────────────────── */
+export async function duplicateTaskAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+    const adminAccountId = req.user?.accountId!;
+
+    const { id } = req.params;
+    const { includeChecklist = true, includeAssignees = true } = req.body as {
+      includeChecklist?: boolean;
+      includeAssignees?: boolean;
+    };
+
+    const source = await prisma.task.findUnique({
+      where: { id, deletedAt: null },
+      include: {
+        checklist: { orderBy: { order: "asc" } },
+        assignments: true,
+        labels: true,
+      },
+    });
+    if (!source) return sendErrorResponse(res, 404, "Task not found");
+
+    const clone = await prisma.$transaction(async (tx) => {
+      const created = await tx.task.create({
+        data: {
+          title: `${source.title} (Copy)`,
+          description: source.description,
+          priority: source.priority,
+          projectId: source.projectId,
+          stepId: source.stepId,
+          dueDate: source.dueDate,
+          startDate: source.startDate,
+          estimatedMinutes: source.estimatedMinutes,
+          parentTaskId: source.parentTaskId,
+          createdBy: adminAccountId,
+          status: TaskStatus.PENDING,
+        },
+        select: TASK_LIST_SELECT,
+      });
+
+      if (includeChecklist && source.checklist.length > 0) {
+        await tx.checklistItem.createMany({
+          data: source.checklist.map((ci) => ({
+            taskId: created.id,
+            title: ci.title,
+            order: ci.order,
+            assignedTo: ci.assignedTo,
+            dueDate: ci.dueDate,
+            createdBy: adminAccountId,
+            status: "PENDING",
+          })),
+        });
+      }
+
+      if (includeAssignees && source.assignments.length > 0) {
+        await tx.taskAssignment.createMany({
+          data: source.assignments.map((a) => ({
+            taskId: created.id,
+            type: a.type,
+            accountId: a.accountId,
+            teamId: a.teamId,
+            assignedBy: adminAccountId,
+            status: TaskStatus.PENDING,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      if (source.labels.length > 0) {
+        await tx.taskLabel.createMany({
+          data: source.labels.map((l) => ({
+            taskId: created.id,
+            labelId: l.labelId,
+            addedBy: adminAccountId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: created.id,
+          action: "CREATED",
+          performedBy: adminAccountId,
+          projectId: source.projectId,
+          taskId: created.id,
+          meta: { type: "duplicated_from", sourceTaskId: id },
+        },
+      });
+
+      return created;
+    });
+
+    const recipients = await resolveTaskRecipients(clone.id);
+    emitTaskCreated(recipients, clone as Record<string, unknown>);
+
+    return sendSuccessResponse(res, 201, "Task duplicated", clone);
+  } catch (err: any) {
+    console.error("[duplicateTaskAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to duplicate task");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   POST /admin/tasks/:id/dependencies
+   Body: { blockingTaskId: string }
+   Adds: "task :id is blocked by blockingTaskId"
+───────────────────────────────────────────────────────────── */
+export async function addTaskDependencyAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+    const adminAccountId = req.user?.accountId!;
+
+    const { id: dependentTaskId } = req.params;
+    const { blockingTaskId } = req.body as { blockingTaskId: string };
+
+    if (!blockingTaskId)
+      return sendErrorResponse(res, 400, "blockingTaskId is required");
+    if (dependentTaskId === blockingTaskId)
+      return sendErrorResponse(res, 400, "A task cannot depend on itself");
+
+    const [dependent, blocking] = await Promise.all([
+      prisma.task.findUnique({
+        where: { id: dependentTaskId, deletedAt: null },
+        select: { id: true },
+      }),
+      prisma.task.findUnique({
+        where: { id: blockingTaskId, deletedAt: null },
+        select: { id: true },
+      }),
+    ]);
+    if (!dependent) return sendErrorResponse(res, 404, "Dependent task not found");
+    if (!blocking) return sendErrorResponse(res, 404, "Blocking task not found");
+
+    // Guard: circular dependency — blockingTask must not already depend on dependentTask
+    const circular = await prisma.taskDependency.findFirst({
+      where: { dependentTaskId: blockingTaskId, blockingTaskId: dependentTaskId },
+    });
+    if (circular)
+      return sendErrorResponse(res, 409, "Circular dependency detected");
+
+    const dep = await prisma.taskDependency.create({
+      data: { dependentTaskId, blockingTaskId, createdBy: adminAccountId },
+    });
+
+    return sendSuccessResponse(res, 201, "Dependency added", dep);
+  } catch (err: any) {
+    if (err?.code === "P2002")
+      return sendErrorResponse(res, 409, "Dependency already exists");
+    console.error("[addTaskDependencyAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to add dependency");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   DELETE /admin/tasks/:id/dependencies/:blockingTaskId
+───────────────────────────────────────────────────────────── */
+export async function removeTaskDependencyAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+
+    const { id: dependentTaskId, blockingTaskId } = req.params;
+
+    const dep = await prisma.taskDependency.findUnique({
+      where: { dependentTaskId_blockingTaskId: { dependentTaskId, blockingTaskId } },
+    });
+    if (!dep) return sendErrorResponse(res, 404, "Dependency not found");
+
+    await prisma.taskDependency.delete({
+      where: { dependentTaskId_blockingTaskId: { dependentTaskId, blockingTaskId } },
+    });
+
+    return sendSuccessResponse(res, 200, "Dependency removed");
+  } catch (err: any) {
+    console.error("[removeTaskDependencyAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to remove dependency");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   GET /admin/tasks/kanban?projectId=...
+   Returns tasks grouped by pipeline step — ideal for board views.
+   Each step carries its tasks, WIP limit, and counts.
+───────────────────────────────────────────────────────────── */
+export async function getProjectKanbanAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+
+    const { projectId } = req.query as { projectId: string };
+    if (!projectId) return sendErrorResponse(res, 400, "projectId is required");
+
+    const pipeline = await prisma.projectPipeline.findUnique({
+      where: { projectId },
+      include: {
+        steps: {
+          orderBy: { order: "asc" },
+          include: {
+            tasks: {
+              where: { deletedAt: null, parentTaskId: null }, // top-level only
+              orderBy: { sortOrder: "asc" },
+              select: TASK_LIST_SELECT,
+            },
+          },
+        },
+      },
+    });
+
+    if (!pipeline)
+      return sendErrorResponse(res, 404, "No pipeline found for this project");
+
+    const columns = pipeline.steps.map((step) => ({
+      id: step.id,
+      name: step.name,
+      color: step.color,
+      order: step.order,
+      isTerminal: step.isTerminal,
+      wipLimit: step.wipLimit,
+      taskCount: step.tasks.length,
+      tasks: step.tasks,
+    }));
+
+    return sendSuccessResponse(res, 200, "Kanban board fetched", {
+      projectId,
+      pipelineId: pipeline.id,
+      columns,
+    });
+  } catch (err: any) {
+    console.error("[getProjectKanbanAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch kanban");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   PATCH /admin/tasks/:id/labels
+   Body: { add?: string[], remove?: string[] }
+───────────────────────────────────────────────────────────── */
+export async function updateTaskLabelsAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+    const adminAccountId = req.user?.accountId!;
+
+    const { id: taskId } = req.params;
+    const { add = [], remove = [] } = req.body as {
+      add?: string[];
+      remove?: string[];
+    };
+
+    const task = await prisma.task.findUnique({
+      where: { id: taskId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!task) return sendErrorResponse(res, 404, "Task not found");
+
+    await prisma.$transaction(async (tx) => {
+      if (remove.length > 0) {
+        await tx.taskLabel.deleteMany({
+          where: { taskId, labelId: { in: remove } },
+        });
+      }
+      if (add.length > 0) {
+        await tx.taskLabel.createMany({
+          data: add.map((labelId) => ({ taskId, labelId, addedBy: adminAccountId })),
+          skipDuplicates: true,
+        });
+      }
+    });
+
+    const labels = await prisma.taskLabel.findMany({
+      where: { taskId },
+      select: { label: { select: { id: true, name: true, color: true } } },
+    });
+
+    const recipients = await resolveTaskRecipients(taskId);
+    emitTaskPatch(taskId, recipients, { labels, updatedAt: new Date() });
+
+    return sendSuccessResponse(res, 200, "Labels updated", { labels });
+  } catch (err: any) {
+    console.error("[updateTaskLabelsAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to update labels");
+  }
+}
