@@ -47,7 +47,7 @@ app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "..", "views"));
 app.use("/storage", express.static(path.join(__dirname, "storage")));
 
-const whitelist = ["/api/v1/auth/reset-password", "/api/v1/public/leads", "/api/v1/public/quotations"];
+const whitelist = ["/api/v1/auth/reset-password", "/api/v1/public/leads", "/api/v1/public/quotations", "/api/v1/public/analytics"];
 
 app.use(requestLogger);
 app.use(checkStaticToken(whitelist));
