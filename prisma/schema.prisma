@@ -2085,3 +2085,347 @@ model QuotationSequence {
 
   @@unique([year, month])
 }
+
+
+
+
+// ═══════════════════════════════════════════════════════════════
+//  ANALYTICS SCHEMA
+//  Five models + two enums.
+//  Compound indexes are tuned for the exact queries a dashboard
+//  will run: group-by-day, group-by-path, group-by-country, etc.
+// ═══════════════════════════════════════════════════════════════
+
+enum DeviceType {
+  DESKTOP
+  MOBILE
+  TABLET
+  BOT
+  UNKNOWN
+}
+
+enum EventCategory {
+  CLICK
+  FORM
+  MEDIA
+  NAVIGATION
+  SCROLL
+  CONVERSION
+  ERROR
+  CUSTOM
+}
+
+// ─────────────────────────────────────────────────────────────
+//  VISITOR
+//  Stable identity across sessions.
+//  Anonymous until accountId is set (on login).
+//  One fingerprint = one row, forever.
+// ─────────────────────────────────────────────────────────────
+model AnalyticsVisitor {
+  id          String   @id @default(uuid())
+
+  // ── Identity ──────────────────────────────────────────────
+  fingerprint String   @unique           // SHA-256(canvas+fonts+ua+tz+…)
+  cookieId    String?  @unique           // your first-party _atid cookie value
+
+  // Identified: set once the visitor logs in — stays set for all future sessions
+  accountId   String?                   // FK to your existing Account model
+
+  // ── Aggregate counters (incremented on each session/view) ──
+  sessionCount   Int   @default(0)
+  pageViewCount  Int   @default(0)
+  isReturning    Boolean @default(false) // true after first session ends
+
+  // ── Lifecycle ─────────────────────────────────────────────
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @updatedAt
+
+  // ── Last-known location (snapshot from most recent session) ─
+  country     String?
+  countryCode String?
+  region      String?
+  city        String?
+
+  // ── Attribution (from very first session) ─────────────────
+  initialReferrer      String?
+  initialReferrerHost  String?
+  initialUtmSource     String?
+  initialUtmMedium     String?
+  initialUtmCampaign   String?
+
+  sessions  AnalyticsSession[]
+
+  @@index([accountId])                   // join to your Account model
+  @@index([isReturning])                 // "new vs returning" filter
+  @@index([firstSeenAt])                 // new-visitor acquisition chart
+  @@index([lastSeenAt])                  // active-user queries
+  @@index([country])                     // geo filter on visitor list
+  @@index([initialUtmSource])            // attribution reports
+  @@index([initialUtmCampaign])
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SESSION
+//  A single continuous visit. Ends after 30 min of inactivity
+//  or when the browser fires beforeunload.
+//  All device/geo/UTM data lives here, not on the visitor,
+//  because the same person can switch devices or campaigns.
+// ─────────────────────────────────────────────────────────────
+model AnalyticsSession {
+  id        String  @id @default(uuid())
+
+  visitorId String
+  visitor   AnalyticsVisitor @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+
+  // ── Timing ────────────────────────────────────────────────
+  startedAt   DateTime  @default(now())
+  endedAt     DateTime?
+  durationSec Int?                        // endedAt - startedAt, set on close
+
+  // ── Entry / exit ──────────────────────────────────────────
+  entryPage   String?                     // first path seen
+  exitPage    String?                     // last path seen
+
+  // ── Traffic source ────────────────────────────────────────
+  referrer          String?               // full referrer URL
+  referrerHost      String?               // e.g. "google.com"
+  referrerType      String?               // "direct"|"organic"|"social"|"email"|"paid"|"referral"
+
+  // UTM parameters from the landing URL
+  utmSource     String?
+  utmMedium     String?
+  utmCampaign   String?
+  utmContent    String?
+  utmTerm       String?
+
+  // ── Device ────────────────────────────────────────────────
+  deviceType     DeviceType @default(UNKNOWN)
+  browser        String?                  // "Chrome", "Safari", "Firefox" …
+  browserVersion String?                  // "120.0"
+  os             String?                  // "macOS", "Windows", "iOS", "Android" …
+  osVersion      String?                  // "14.2"
+  deviceBrand    String?                  // "Apple", "Samsung" …
+  deviceModel    String?                  // "iPhone 15"
+  screenWidth    Int?
+  screenHeight   Int?
+  viewportWidth  Int?
+  viewportHeight Int?
+
+  // ── Network / IP ──────────────────────────────────────────
+  // Store the hash, not raw IP, for GDPR compliance.
+  // Keep raw ip only if you have a lawful basis + data-retention policy.
+  ip       String?                        // raw IPv4/IPv6 (optional, GDPR-sensitive)
+  ipHashed String?                        // SHA-256 of IP
+
+  // ── Location (resolved from IP at session start) ──────────
+  country     String?
+  countryCode String?                     // ISO 3166-1 alpha-2, e.g. "IN"
+  region      String?                     // state / province
+  city        String?
+  latitude    Float?
+  longitude   Float?
+  timezone    String?                     // IANA tz, e.g. "Asia/Kolkata"
+
+  // ── Language ──────────────────────────────────────────────
+  language    String?                     // navigator.language, e.g. "en-IN"
+
+  // ── Aggregate counters ────────────────────────────────────
+  pageViewCount Int     @default(0)
+  eventCount    Int     @default(0)
+  bounced       Boolean @default(false)   // only one page viewed, < 30s
+
+  pageViews AnalyticsPageView[]
+  events    AnalyticsEvent[]
+
+  // ── Single-column indexes ──────────────────────────────────
+  @@index([visitorId])
+  @@index([startedAt])
+  @@index([endedAt])
+  @@index([country])
+  @@index([countryCode])
+  @@index([deviceType])
+  @@index([referrerType])
+  @@index([utmSource])
+  @@index([utmCampaign])
+  @@index([bounced])
+
+  // ── Compound indexes (cover dashboard queries exactly) ─────
+  @@index([startedAt, country])          // "sessions by country over time"
+  @@index([startedAt, deviceType])       // "device share over time"
+  @@index([startedAt, referrerType])     // "traffic source over time"
+  @@index([startedAt, utmCampaign])      // "campaign performance over time"
+  @@index([visitorId, startedAt])        // "this visitor's session history"
+  @@index([countryCode, startedAt])      // geo + date range
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PAGE VIEW
+//  One row per page rendered in a session.
+//  Includes scroll depth, time on page, and Core Web Vitals
+//  so you can track performance per page, not just per deploy.
+// ─────────────────────────────────────────────────────────────
+model AnalyticsPageView {
+  id        String  @id @default(uuid())
+
+  sessionId String
+  session   AnalyticsSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  visitorId String                        // denormalised: avoids join to session for visitor queries
+
+  // ── URL ───────────────────────────────────────────────────
+  url    String                           // full URL incl. query
+  path   String                           // pathname only, e.g. "/blog/my-post"
+  query  String?                          // raw query string
+  hash   String?                          // fragment
+  host   String?                          // hostname (for multi-site setups)
+
+  // ── Page metadata ─────────────────────────────────────────
+  title    String?                        // document.title
+  referrer String?                        // HTTP Referer header for this nav
+
+  // ── Timing ────────────────────────────────────────────────
+  viewedAt      DateTime @default(now())
+  timeOnPageSec Int?                      // set when user navigates away
+
+  // ── Engagement signals ────────────────────────────────────
+  maxScrollPct  Int?                      // 0-100; max scroll depth reached
+
+  // SPA detection: full-load vs pushState navigation
+  isSpa         Boolean @default(false)
+
+  // ── Core Web Vitals ───────────────────────────────────────
+  // All in milliseconds except CLS which is a unitless score (0-1+)
+  lcp   Float?                            // Largest Contentful Paint
+  fid   Float?                            // First Input Delay
+  cls   Float?                            // Cumulative Layout Shift (score)
+  fcp   Float?                            // First Contentful Paint
+  ttfb  Float?                            // Time to First Byte
+
+  events AnalyticsEvent[]
+
+  // ── Single-column indexes ──────────────────────────────────
+  @@index([sessionId])
+  @@index([visitorId])
+  @@index([path])
+  @@index([viewedAt])
+  @@index([host])
+
+  // ── Compound indexes ──────────────────────────────────────
+  @@index([path, viewedAt])              // "page popularity over time"
+  @@index([host, path])                  // multi-site path queries
+  @@index([visitorId, viewedAt])         // "this visitor's page journey"
+  @@index([sessionId, viewedAt])         // "page sequence within session"
+  @@index([path, lcp])                   // "worst LCP pages"
+  @@index([path, cls])                   // "worst CLS pages"
+}
+
+// ─────────────────────────────────────────────────────────────
+//  EVENT
+//  Every discrete user action: click, form submit, scroll
+//  milestone, video play, conversion, JS error, custom.
+//  Tied to both a session and optionally a specific page view.
+// ─────────────────────────────────────────────────────────────
+model AnalyticsEvent {
+  id        String  @id @default(uuid())
+
+  sessionId  String
+  session    AnalyticsSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  pageViewId String?
+  pageView   AnalyticsPageView? @relation(fields: [pageViewId], references: [id], onDelete: SetNull)
+
+  visitorId  String                       // denormalised
+
+  // ── Event taxonomy ────────────────────────────────────────
+  category   EventCategory @default(CUSTOM)
+  name       String                       // "button_click", "form_submit", "video_play" …
+  label      String?                      // human label: element text, form name …
+  value      Float?                       // numeric payload: scroll %, price, duration
+
+  // ── DOM context (for CLICK / FORM events) ─────────────────
+  elementTag    String?                   // "button", "a", "input" …
+  elementId     String?                   // HTML id attribute
+  elementClass  String?                   // first meaningful class
+  elementText   String?                   // truncated innerText (max 120 chars)
+  elementHref   String?                   // href for <a> clicks
+
+  // ── Page context at event time ────────────────────────────
+  pagePath      String?                   // denormalised path — avoids join to pageView
+
+  // ── Custom payload ────────────────────────────────────────
+  meta          Json?                     // any extra key-value data from your tracker
+
+  occurredAt    DateTime @default(now())
+
+  // ── Single-column indexes ──────────────────────────────────
+  @@index([sessionId])
+  @@index([visitorId])
+  @@index([pageViewId])
+  @@index([name])
+  @@index([category])
+  @@index([occurredAt])
+
+  // ── Compound indexes ──────────────────────────────────────
+  @@index([name, occurredAt])            // "event frequency over time"
+  @@index([category, occurredAt])        // "event category breakdown over time"
+  @@index([category, name])             // "events within category"
+  @@index([pagePath, name])             // "events per page"
+  @@index([visitorId, occurredAt])      // "this visitor's action history"
+}
+
+// ─────────────────────────────────────────────────────────────
+//  DAILY ROLLUP
+//  Pre-aggregated totals per day × dimension slice.
+//  A nightly cron populates this from raw tables.
+//  All dashboard queries should hit this table — never scan
+//  AnalyticsSession or AnalyticsPageView directly for charts.
+//
+//  Null dimension = "total" row (no slice applied).
+//  e.g. (date=2024-01-15, path=null, country=null) = site-wide day total.
+//       (date=2024-01-15, path="/pricing", country=null) = /pricing that day.
+//       (date=2024-01-15, path=null, country="IN") = India traffic that day.
+// ─────────────────────────────────────────────────────────────
+model AnalyticsDailyRollup {
+  id String @id @default(uuid())
+
+  // ── Date ──────────────────────────────────────────────────
+  date          DateTime                  // midnight UTC of the day
+
+  // ── Dimensions (null = "all") ─────────────────────────────
+  path          String?                   // page path slice
+  country       String?                   // country name slice
+  countryCode   String?                   // ISO 3166-1 alpha-2
+  deviceType    String?                   // "DESKTOP", "MOBILE" …
+  referrerType  String?                   // "organic", "direct" …
+  utmSource     String?
+  utmCampaign   String?
+
+  // ── Metrics ───────────────────────────────────────────────
+  sessions          Int @default(0)
+  pageViews         Int @default(0)
+  uniqueVisitors    Int @default(0)       // count(distinct visitorId) for that day
+  newVisitors       Int @default(0)       // visitors whose firstSeenAt is this day
+  returningVisitors Int @default(0)       // uniqueVisitors - newVisitors
+  bounces           Int @default(0)       // sessions where bounced = true
+  totalDurationSec  Int @default(0)       // sum(durationSec) for avg session duration
+
+  // Avg web vitals (optional — aggregate from AnalyticsPageView)
+  avgLcp  Float?
+  avgCls  Float?
+  avgFcp  Float?
+  avgTtfb Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Unique constraint: one row per (date × all dimension values)
+  @@unique([date, path, country, deviceType, referrerType, utmSource, utmCampaign])
+
+  // ── Indexes ───────────────────────────────────────────────
+  @@index([date])                        // time-range scans
+  @@index([date, path])                  // page-level charts
+  @@index([date, country])              // geo charts
+  @@index([date, deviceType])           // device charts
+  @@index([date, utmCampaign])          // campaign charts
+  @@index([date, referrerType])         // traffic source charts
+}
