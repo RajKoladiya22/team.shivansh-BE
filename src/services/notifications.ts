@@ -166,7 +166,7 @@ export async function triggerAssignmentNotification({
             level: "INFO",
             title: "New Lead Assigned",
             body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
-            actionUrl: `/user/leads/${lead.id}`,
+            actionUrl: `/leads/user/${lead.id}`,
             dedupeKey,
             deliveryChannels: ["web", "chrome"],
             payload: {
@@ -231,9 +231,9 @@ export async function triggerAssignmentNotification({
           JSON.stringify({
             title: "New Lead Assigned",
             body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
-            actionUrl: `/user/leads/${lead.id}`,
+            actionUrl: `/leads/user/${lead.id}`,
             data: {
-              actionUrl: `/user/leads/${lead.id}`,
+              actionUrl: `/leads/user/${lead.id}`,
               payload: {
                 leadId: lead.id,
                 customerName: lead.customerName,
@@ -334,7 +334,7 @@ export async function triggerHelperNotification({
             level: "INFO",
             title: "You've been added as a helper",
             body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""} (${role})`,
-            actionUrl: `/user/leads/${lead.id}`,
+            actionUrl: `/leads/user/${lead.id}`,
             dedupeKey,
             deliveryChannels: ["web", "chrome"],
             payload: {
@@ -379,9 +379,9 @@ export async function triggerHelperNotification({
           JSON.stringify({
             title: "You've been added as a helper",
             body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""}`,
-            actionUrl: `/user/leads/${lead.id}`,
+            actionUrl: `/leads/user/${lead.id}`,
             data: {
-              actionUrl: `/user/leads/${lead.id}`,
+              actionUrl: `/leads/user/${lead.id}`,
               payload: { leadId: lead.id, role, addedBy },
             },
           }),
@@ -605,7 +605,7 @@ export async function triggerPublicLeadNotification({
             level: "INFO",
             title,
             body,
-            actionUrl: `/admin/leads/${lead.id}`,
+            actionUrl: `/leads/admin/${lead.id}`,
             dedupeKey,
             deliveryChannels: ["web", "chrome"],
             payload: {
@@ -679,8 +679,8 @@ export async function triggerPublicLeadNotification({
           JSON.stringify({
             title,
             body,
-            actionUrl: `/admin/leads/${lead.id}`,
-            data: { actionUrl: `/admin/leads/${lead.id}` },
+            actionUrl: `/leads/admin/${lead.id}`,
+            data: { actionUrl: `/leads/admin/${lead.id}` },
           }),
         );
       } catch (err: any) {

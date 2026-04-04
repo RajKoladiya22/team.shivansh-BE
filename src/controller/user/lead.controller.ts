@@ -920,7 +920,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
         customerName: updatedLead.customerName ?? null,
         isImportant: updatedLead.isImportant,
       };
-      
+
       // console.log("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n lead-->\n", lead);
       // console.log("\n updatedLead-->\n", updatedLead);
       // console.log("\n fromState-->\n", fromState);
@@ -1100,6 +1100,7 @@ export async function listMyLeads(req: Request, res: Response) {
             },
           },
         },
+
       ],
     };
 
@@ -1340,21 +1341,33 @@ export async function getMyLeadById(req: Request, res: Response) {
     const lead = await prisma.lead.findFirst({
       where: {
         id,
-        assignments: {
-          some: {
-            isActive: true,
-            OR: [
-              { accountId },
-              {
-                team: {
-                  members: {
-                    some: { accountId },
+        OR: [
+          {
+            assignments: {
+              some: {
+                isActive: true,
+                OR: [
+                  { accountId },
+                  {
+                    team: {
+                      members: {
+                        some: { accountId },
+                      },
+                    },
                   },
-                },
+                ],
               },
-            ],
+            },
           },
-        },
+          {
+            leadHelpers: {
+              some: {
+                isActive: true,
+                accountId,
+              },
+            },
+          },
+        ],
       },
 
       include: {
@@ -1369,6 +1382,7 @@ export async function getMyLeadById(req: Request, res: Response) {
                 lastName: true,
                 contactPhone: true,
                 designation: true,
+                avatar: true,
               },
             },
             team: { select: { id: true, name: true } },
@@ -1398,6 +1412,7 @@ export async function getMyLeadById(req: Request, res: Response) {
             role: true,
             remark: true,
             addedAt: true,
+            isActive: true,
             account: {
               select: {
                 id: true,
@@ -1405,6 +1420,7 @@ export async function getMyLeadById(req: Request, res: Response) {
                 lastName: true,
                 designation: true,
                 contactPhone: true,
+                avatar: true,
               },
             },
           },
@@ -1421,6 +1437,9 @@ export async function getMyLeadById(req: Request, res: Response) {
         },
       },
     });
+
+    // console.log("\n\n\n\n\n\n\n\n\n\n\n lead", lead);
+
 
     if (!lead)
       return sendErrorResponse(res, 404, "Lead not found or not accessible");

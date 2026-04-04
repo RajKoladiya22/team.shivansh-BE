@@ -13,6 +13,7 @@ import dsuRouter from "./dsu";
 import commonRouter from "./common"
 import publicRouter from "./public"
 import tasksRouter from "./task"
+import analyticsRouter from "./analytics";
 // import projectsRouter from "./project"
 
 
@@ -32,7 +33,7 @@ router.use("/common", commonRouter);
 router.use("/dsu", dsuRouter);
 router.use("/public", publicRouter);
 router.use("/tasks", tasksRouter);
-// router.use("/projects", projectsRouter);
+router.use("/analytics", analyticsRouter);
 
 
 // export main
