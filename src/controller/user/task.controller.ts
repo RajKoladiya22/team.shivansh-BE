@@ -25,11 +25,11 @@ async function resolveAssigneeSnapshot(input: {
     });
     return acc
       ? {
-          type: "ACCOUNT" as const,
-          id: acc.id,
-          name: `${acc.firstName} ${acc.lastName}`,
-          designation: acc.designation ?? null,
-        }
+        type: "ACCOUNT" as const,
+        id: acc.id,
+        name: `${acc.firstName} ${acc.lastName}`,
+        designation: acc.designation ?? null,
+      }
       : null;
   }
 
@@ -312,7 +312,8 @@ export async function createTaskAdmin(req: Request, res: Response) {
       isSelfTask = false,
       parentTaskId,
       labels = [],
-      note, // assignment handoff note
+      checklist = [], // ✅ checklist support
+      note,
       accountId: assigneeAccountId,
       teamId: assigneeTeamId,
       isRecurring = false,
@@ -345,7 +346,7 @@ export async function createTaskAdmin(req: Request, res: Response) {
         `Invalid priority. Must be one of: ${Object.values(TaskPriority).join(", ")}`,
       );
 
-    // stepId must belong to the given project
+    // step validation
     if (stepId && projectId) {
       const step = await prisma.pipelineStep.findFirst({
         where: { id: stepId, pipeline: { projectId } },
@@ -416,7 +417,34 @@ export async function createTaskAdmin(req: Request, res: Response) {
         });
       }
 
-      // ── Activity: CREATED ───────────────────────────────────
+      // ── Checklist items ────────────────────────────────────
+      if (Array.isArray(checklist) && checklist.length > 0) {
+        const validItems = checklist.filter(
+          (item: any) => item?.title?.trim()
+        );
+
+        if (validItems.length > 0) {
+          await tx.checklistItem.createMany({
+            data: validItems.map(
+              (
+                item: { title: string; assignedTo?: string; dueDate?: string },
+                idx: number
+              ) => ({
+                taskId: created.id,
+                title: item.title.trim(),
+                order: idx,
+                status: "PENDING" as const,
+                assignedTo: item.assignedTo ?? null,
+                dueDate: item.dueDate ? new Date(item.dueDate) : null,
+                createdBy: creatorAccountId,
+              })
+            ),
+            skipDuplicates: true,
+          });
+        }
+      }
+
+      // ── Activity Log ────────────────────────────────────────
       await tx.activityLog.create({
         data: {
           entityType: "TASK",
@@ -430,6 +458,9 @@ export async function createTaskAdmin(req: Request, res: Response) {
             priority,
             dueDate: dueDate ?? null,
             assignee: initialAssignee,
+            checklistCount: Array.isArray(checklist)
+              ? checklist.length
+              : 0,
           },
           meta: {
             assignedTo: initialAssignee,
@@ -438,8 +469,9 @@ export async function createTaskAdmin(req: Request, res: Response) {
         },
       });
 
-      // ── Socket recipients ───────────────────────────────────
+      // ── Recipients ─────────────────────────────────────────
       let recipientIds: string[] = [];
+
       if (assigneeAccountId) {
         recipientIds = [assigneeAccountId];
       } else if (assigneeTeamId) {
@@ -453,13 +485,15 @@ export async function createTaskAdmin(req: Request, res: Response) {
       return { task: created, recipientIds };
     });
 
-    // Re-fetch with assignment rows hydrated
+    // ── Fetch full task ───────────────────────────────────────
     const fullTask = await prisma.task.findUnique({
       where: { id: task.id },
       select: TASK_LIST_SELECT,
     });
 
+    // ── Emit events ──────────────────────────────────────────
     emitTaskCreated(recipientIds, fullTask as Record<string, unknown>);
+
     await triggerTaskNotification({
       taskId: task.id,
       event: "CREATED",
@@ -467,10 +501,19 @@ export async function createTaskAdmin(req: Request, res: Response) {
       recipientAccountIds: recipientIds,
     });
 
-    return sendSuccessResponse(res, 201, "Task created successfully", fullTask);
+    return sendSuccessResponse(
+      res,
+      201,
+      "Task created successfully",
+      fullTask
+    );
   } catch (err: any) {
     console.error("[createTaskAdmin]", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to create task");
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to create task"
+    );
   }
 }
 
@@ -530,10 +573,10 @@ export async function assignTaskAdmin(req: Request, res: Response) {
     const fromSnapshot = previousAssignments.map((a) =>
       a.account
         ? {
-            type: "ACCOUNT",
-            id: a.account.id,
-            name: `${a.account.firstName} ${a.account.lastName}`,
-          }
+          type: "ACCOUNT",
+          id: a.account.id,
+          name: `${a.account.firstName} ${a.account.lastName}`,
+        }
         : { type: "TEAM", id: a.team!.id, name: a.team!.name },
     );
 
@@ -746,6 +789,7 @@ export async function updateTaskAdmin(req: Request, res: Response) {
 export async function deleteTaskAdmin(req: Request, res: Response) {
   try {
     if (!assertAdmin(req, res)) return;
+    // console.log("\n\n\n\n\n\n\n API CALL HERE");
 
     const adminAccountId = req.user?.accountId;
     if (!adminAccountId)
@@ -788,6 +832,96 @@ export async function deleteTaskAdmin(req: Request, res: Response) {
   } catch (err: any) {
     console.error("[deleteTaskAdmin]", err);
     return sendErrorResponse(res, 500, err?.message ?? "Failed to delete task");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   DELETE /admin/tasks  (bulk delete)
+───────────────────────────────────────────────────────────── */
+export async function deleteTasksBulkAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+
+    const adminAccountId = req.user?.accountId;
+    if (!adminAccountId) {
+      return sendErrorResponse(res, 401, "Invalid session user");
+    }
+
+    const { ids } = req.body as { ids: string[] };
+
+    // console.log("\n\n\n\n\n\n\nids", ids);
+
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return sendErrorResponse(res, 400, "Task IDs are required");
+    }
+
+    // Fetch tasks (only valid ones)
+    const tasks = await prisma.task.findMany({
+      where: {
+        id: { in: ids },
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        projectId: true,
+      },
+    });
+
+    if (tasks.length === 0) {
+      return sendErrorResponse(res, 404, "No valid tasks found");
+    }
+
+    const taskIds = tasks.map((t) => t.id);
+
+    // Resolve recipients for all tasks
+    const recipientsMap = await Promise.all(
+      taskIds.map(async (id) => ({
+        id,
+        recipients: await resolveTaskRecipients(id),
+      }))
+    );
+
+    await prisma.$transaction(async (tx) => {
+      // HARD DELETE
+      await tx.task.deleteMany({
+        where: {
+          id: { in: taskIds },
+        },
+      });
+
+      // OPTIONAL: activity logs
+      // await tx.activityLog.createMany({
+      //   data: tasks.map((task) => ({
+      //     entityType: "TASK",
+      //     entityId: task.id,
+      //     action: "DELETED",
+      //     performedBy: adminAccountId,
+      //     projectId: task.projectId,
+      //     taskId: task.id,
+      //   })),
+      // });
+    });
+
+    // Emit socket events per task
+    for (const item of recipientsMap) {
+      emitTaskPatch(item.id, item.recipients, {
+        deletedAt: new Date(),
+      });
+    }
+
+    return sendSuccessResponse(
+      res,
+      200,
+      `${taskIds.length} tasks deleted successfully`
+    );
+  } catch (err: any) {
+    console.error("[deleteTasksBulkAdmin]", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to delete tasks"
+    );
   }
 }
 
@@ -1059,26 +1193,26 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
 export async function listRecurringTasksAdmin(req: Request, res: Response) {
   try {
     if (!assertAdmin(req, res)) return;
- 
+
     const {
       recurrenceType,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
- 
+
     const pageNumber = Math.max(Number(page), 1);
     const pageSize = Math.min(Number(limit), 100);
     const skip = (pageNumber - 1) * pageSize;
- 
+
     const where: any = {
       isRecurring: true,
       recurrenceParentId: null,
       deletedAt: null,
       recurrenceType: { not: TaskRecurrenceType.ONE_TIME },
     };
- 
+
     if (recurrenceType) where.recurrenceType = recurrenceType;
- 
+
     const [total, tasks] = await Promise.all([
       prisma.task.count({ where }),
       prisma.task.findMany({
@@ -1124,7 +1258,7 @@ export async function listRecurringTasksAdmin(req: Request, res: Response) {
         },
       }),
     ]);
- 
+
     return sendSuccessResponse(res, 200, "Recurring tasks fetched", {
       data: tasks.map((t) => ({
         ...t,
@@ -1154,9 +1288,9 @@ export async function listRecurringTasksAdmin(req: Request, res: Response) {
 export async function triggerRecurringSchedulerAdmin(req: Request, res: Response) {
   try {
     if (!assertAdmin(req, res)) return;
- 
+
     const result = await spawnDueRecurringTasks();
- 
+
     return sendSuccessResponse(res, 200, "Scheduler triggered", result);
   } catch (err: any) {
     console.error("[triggerRecurringSchedulerAdmin]", err);
@@ -1164,7 +1298,7 @@ export async function triggerRecurringSchedulerAdmin(req: Request, res: Response
   }
 }
 
- 
+
 /* ─────────────────────────────────────────────────────────────
    GET /admin/tasks/:id/instances
    Paginated list of spawned instances for a given parent task.
@@ -1172,35 +1306,35 @@ export async function triggerRecurringSchedulerAdmin(req: Request, res: Response
 export async function listTaskInstancesAdmin(req: Request, res: Response) {
   try {
     if (!assertAdmin(req, res)) return;
- 
+
     const { id: parentId } = req.params;
     const {
       status,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
- 
+
     const pageNumber = Math.max(Number(page), 1);
     const pageSize = Math.min(Number(limit), 100);
     const skip = (pageNumber - 1) * pageSize;
- 
+
     // Verify parent exists and is recurring
     const parent = await prisma.task.findUnique({
       where: { id: parentId },
       select: { id: true, title: true, isRecurring: true, recurrenceType: true },
     });
- 
+
     if (!parent) return sendErrorResponse(res, 404, "Task not found");
     if (!parent.isRecurring)
       return sendErrorResponse(res, 400, "Task is not a recurring task definition");
- 
+
     const where: any = {
       recurrenceParentId: parentId,
       deletedAt: null,
     };
- 
+
     if (status) where.status = status as TaskStatus;
- 
+
     const [total, instances] = await Promise.all([
       prisma.task.count({ where }),
       prisma.task.findMany({
@@ -1231,7 +1365,7 @@ export async function listTaskInstancesAdmin(req: Request, res: Response) {
         },
       }),
     ]);
- 
+
     return sendSuccessResponse(res, 200, "Task instances fetched", {
       parent: {
         id: parent.id,
@@ -1251,7 +1385,8 @@ export async function listTaskInstancesAdmin(req: Request, res: Response) {
     return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch instances");
   }
 }
- 
+
+
 
 /* ═══════════════════════════════════════════════════════════════
    ░░░░░░░░░░░░░░░░  USER CONTROLLERS  ░░░░░░░░░░░░░░░░░░░░░░░░
@@ -1402,7 +1537,7 @@ export async function getMyTasksUser(req: Request, res: Response) {
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
- 
+
     const pageNumber = Math.max(Number(page), 1);
     const pageSize = Math.min(Number(limit), 100);
     const skip = (pageNumber - 1) * pageSize;

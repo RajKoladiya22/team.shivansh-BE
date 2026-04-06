@@ -19,6 +19,7 @@ import {
   deriveLeadScalars,
   normalizeIncomingProducts,
 } from "../../core/utils/leadProducts";
+import { findDuplicateLead } from "../../services/lead/lead.service";
 
 interface LeadProductItem {
   id: string;
@@ -733,6 +734,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
       tallySerial,
       tallyVersion,
       isImportant,
+      forceCreate = false,          
     } = req.body as Record<string, any>;
 
     if (!source || !type)
@@ -757,6 +759,33 @@ export async function createLeadAdmin(req: Request, res: Response) {
     // ── Normalise products (handles all three input shapes) ──────────────────
     const products = normalizeIncomingProducts(req.body);
     const { productTitle, totalCost } = deriveLeadScalars(products, cost);
+
+    if (!forceCreate) {
+      const duplicate = await findDuplicateLead({ normalizedMobile, productTitle });
+ 
+      if (duplicate) {
+        const assigneeName = duplicate.assignments[0]?.account
+          ? `${duplicate.assignments[0].account.firstName} ${duplicate.assignments[0].account.lastName}`.trim()
+          : null;
+ 
+        return res.status(409).json({
+          success: false,
+          code: "DUPLICATE_LEAD",
+          message: "An active lead already exists for this customer and product.",
+          data: {
+            existingLead: {
+              id: duplicate.id,
+              status: duplicate.status,
+              customerName: duplicate.customerName,
+              productTitle: duplicate.productTitle,
+              createdAt: duplicate.createdAt,
+              assignedTo: assigneeName,
+            },
+            hint: "Send { forceCreate: true } to create anyway.",
+          },
+        });
+      }
+    }
 
     const initialAssignee = await resolveAssigneeSnapshot({
       accountId: assigneeAccountId,
@@ -906,6 +935,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
             initialAssignment: initialAssignee,
             demoScheduledAt: demoDate ?? null,
             products: products ? JSON.parse(JSON.stringify(products)) : null,
+            forcedDuplicate: forceCreate || undefined,
           },
         },
       });

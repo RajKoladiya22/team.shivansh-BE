@@ -356,3 +356,60 @@ export async function validateLeadCustomerMatch(
 
   return null;
 }
+
+
+
+export async function findDuplicateLead(params: {
+  normalizedMobile: string;
+  productTitle: string | null | undefined;
+}): Promise<{
+  id: string;
+  status: string;
+  customerName: string;
+  productTitle: string | null;
+  createdAt: Date;
+  assignments: { accountId: string | null; account: { firstName: string; lastName: string } | null }[];
+} | null> {
+  const { normalizedMobile, productTitle } = params;
+ 
+  // Only flag a duplicate when we actually have a product title to compare.
+  // A lead with no product is too generic to block on.
+  if (!productTitle?.trim()) return null;
+ 
+  const normalizedTitle = productTitle.trim().toLowerCase();
+ 
+  const existing = await prisma.lead.findFirst({
+    where: {
+      mobileNumber: normalizedMobile,
+      // Active statuses – ignore already closed / converted leads
+      status: {
+        notIn: ["CLOSED", "CONVERTED"],
+      },
+      // Case-insensitive product title match via Prisma mode
+      productTitle: {
+        equals: normalizedTitle,
+        mode: "insensitive",
+      },
+    },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      status: true,
+      customerName: true,
+      productTitle: true,
+      createdAt: true,
+      assignments: {
+        where: { isActive: true },
+        take: 1,
+        select: {
+          accountId: true,
+          account: {
+            select: { firstName: true, lastName: true },
+          },
+        },
+      },
+    },
+  });
+ 
+  return existing;
+}

@@ -6,6 +6,7 @@ import {
   assignTaskAdmin,
   updateTaskAdmin,
   deleteTaskAdmin,
+  deleteTasksBulkAdmin,
   listTasksAdmin,
   getTaskByIdAdmin,
   getTaskActivityAdmin,
@@ -76,6 +77,7 @@ router.post("/admin/tasks", requireRole("ADMIN"), createTaskAdmin);
 router.get("/admin/tasks", requireRole("ADMIN"), listTasksAdmin);
 router.get("/admin/tasks/:id", requireRole("ADMIN"), getTaskByIdAdmin);
 router.patch("/admin/tasks/:id", requireRole("ADMIN"), updateTaskAdmin);
+router.delete("/admin/task/bulk", requireRole("ADMIN"), deleteTasksBulkAdmin);
 router.delete("/admin/tasks/:id", requireRole("ADMIN"), deleteTaskAdmin);
 
 // ── Task-level actions ─────────────────────────────────────────
@@ -113,6 +115,8 @@ router.get(
   requireRole("ADMIN"),
   listTaskInstancesAdmin,
 );
+
+
 
 /* ═══════════════════════════════════════════════════════════════
    USER — /user/tasks/*

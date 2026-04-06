@@ -12,8 +12,8 @@ cron.schedule("55 18 * * 1-6", async () => {
 });
 
 // Checks for due recurring tasks every minute and spawns child instances.
-cron.schedule("* * * * *", async () => {
-  await registerRecurringTaskJob();
-  console.log("[Jobs] All background jobs registered.");
-});
+// cron.schedule("* * * * *", async () => {
+//   await registerRecurringTaskJob();
+//   console.log("[Jobs] All background jobs registered.");
+// });
 

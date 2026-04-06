@@ -37,41 +37,41 @@ function computeNextDueDate(
   customRule?: Record<string, any> | null,
 ): Date {
   const next = new Date(referenceDate);
-
+ 
   switch (recurrenceType) {
     case TaskRecurrenceType.DAILY:
       next.setDate(next.getDate() + 1);
       break;
-
+ 
     case TaskRecurrenceType.WEEKLY:
       next.setDate(next.getDate() + 7);
       break;
-
+ 
     case TaskRecurrenceType.BIWEEKLY:
       next.setDate(next.getDate() + 14);
       break;
-
+ 
     case TaskRecurrenceType.MONTHLY:
       next.setMonth(next.getMonth() + 1);
       break;
-
+ 
     case TaskRecurrenceType.QUARTERLY:
       next.setMonth(next.getMonth() + 3);
       break;
-
+ 
     case TaskRecurrenceType.CUSTOM: {
       // customRule example: { intervalDays: 3 }
       const intervalDays = customRule?.intervalDays ?? 1;
       next.setDate(next.getDate() + intervalDays);
       break;
     }
-
+ 
     default:
-      // ONE_TIME – should never be processed here, guard anyway
+      // ONE_TIME – should never be processed here
       next.setFullYear(next.getFullYear() + 100);
       break;
   }
-
+ 
   return next;
 }
 
@@ -98,18 +98,15 @@ export async function spawnDueRecurringTasks(): Promise<{
   let processed = 0;
   let spawned = 0;
   let errors = 0;
-
-  // ── 1. Load all recurring root tasks ──────────────────────
+ 
+  // ── 1. Load all active recurring root tasks ────────────────
   const rootTasks = await prisma.task.findMany({
     where: {
       isRecurring: true,
       recurrenceType: { not: TaskRecurrenceType.ONE_TIME },
-      recurrenceParentId: null, // definition tasks only
+      recurrenceParentId: null,   // definition rows only
       deletedAt: null,
-      status: {
-        // Skip cancelled/completed definitions TaskStatus.COMPLETED
-        notIn: [TaskStatus.CANCELLED],
-      },
+      status: { notIn: [TaskStatus.CANCELLED] },
     },
     include: {
       assignments: {
@@ -120,84 +117,88 @@ export async function spawnDueRecurringTasks(): Promise<{
           note: true,
         },
       },
-      // Most-recent child = last generated instance
+      // Most-recent spawned child (ordered by the date it was spawned)
       recurrenceChildren: {
         orderBy: { createdAt: "desc" },
         take: 1,
         select: {
           id: true,
-          createdAt: true,
-          startDate: true,
+          createdAt: true,   // when it was spawned — used as reference for next due
+          startDate: true,   // the scheduled "work begins" date of that child
           dueDate: true,
         },
       },
     },
   });
-
+ 
   logger.info(
-    `[RecurringTask] Found ${rootTasks.length} active recurring task definition(s)`,
+    `[RecurringTask] Found ${rootTasks.length} active recurring definition(s)`,
   );
-
+ 
   for (const task of rootTasks) {
     processed++;
-
+ 
     try {
       const lastChild = task.recurrenceChildren[0] ?? null;
-
-      // ── 2. Determine reference date ────────────────────────
-      // Use the last child's startDate / dueDate / createdAt,
-      // or fall back to the definition's own startDate / createdAt.
-      const referenceDate: Date = lastChild
-        ? (lastChild.startDate ?? lastChild.dueDate ?? lastChild.createdAt)
-        : (task.startDate ?? task.dueDate ?? task.createdAt);
-
-      // ── 3. Compute next due date ───────────────────────────
+ 
       const customRule =
         task.recurrenceType === TaskRecurrenceType.CUSTOM &&
         task.recurrenceRule &&
         typeof task.recurrenceRule === "object"
           ? (task.recurrenceRule as Record<string, any>)
           : null;
-
-      const nextDue = computeNextDueDate(
-        referenceDate,
-        task.recurrenceType,
-        customRule,
-      );
-
+ 
+      let nextDue: Date;
+      let windowKey: string;
+ 
+      if (!lastChild) {
+        // ── First instance ──────────────────────────────────────
+        // The very first child should be created on (or after) the
+        // task's own startDate. If no startDate, fall back to createdAt.
+        // We do NOT add an interval here — the definition's startDate IS
+        // the first due date.
+        const firstDue = task.startDate ?? task.createdAt;
+        nextDue = toMidnightUTC(firstDue);
+        windowKey = nextDue.toISOString().slice(0, 10);
+      } else {
+        // ── Subsequent instances ────────────────────────────────
+        // Use the last child's startDate as the reference and add one interval.
+        // lastChild.startDate is the "work date" that was assigned to that child
+        // when it was spawned (= its nextDue at spawn time).
+        const reference = lastChild.startDate ?? lastChild.createdAt;
+        nextDue = computeNextDueDate(reference, task.recurrenceType, customRule);
+        windowKey = toMidnightUTC(nextDue).toISOString().slice(0, 10);
+      }
+ 
       // ── 4. Check whether it's time ─────────────────────────
       if (now < nextDue) {
-        // Not yet due — skip
+        // Not yet due — skip silently
         continue;
       }
-
+ 
       // ── 5. Idempotency guard ───────────────────────────────
-      // Use a dedupeKey based on parent task ID + next-due window
-      // so we never double-spawn within the same scheduling tick.
-      const windowKey = toMidnightUTC(nextDue).toISOString().slice(0, 10);
       const dedupeKey = `recurring:${task.id}:${windowKey}`;
-
+ 
       const alreadySpawned = await prisma.task.findFirst({
         where: {
           recurrenceParentId: task.id,
-          // The recurrenceRule JSON stores our dedupeKey
           recurrenceRule: { path: ["dedupeKey"], equals: dedupeKey },
         },
         select: { id: true },
       });
-
+ 
       if (alreadySpawned) {
         logger.debug(
           `[RecurringTask] Already spawned for key ${dedupeKey}, skipping`,
         );
         continue;
       }
-
-      // ── 6. Spawn child task inside a transaction ───────────
+ 
+      // ── 6. Spawn child inside a transaction ───────────────
       await prisma.$transaction(async (tx) => {
         const child = await tx.task.create({
           data: {
-            // Core fields copied from definition
+            // ── Core fields copied from the definition ──────
             title: task.title,
             description: task.description,
             priority: task.priority,
@@ -206,27 +207,27 @@ export async function spawnDueRecurringTasks(): Promise<{
             estimatedMinutes: task.estimatedMinutes,
             isSelfTask: task.isSelfTask,
             createdBy: task.createdBy,
-
-            // Recurrence linkage
+ 
+            // ── Recurrence linkage ──────────────────────────
             recurrenceParentId: task.id,
-            isRecurring: false, // instances are not themselves recurring
+            isRecurring: false,                        // instances are NOT themselves recurring
             recurrenceType: TaskRecurrenceType.ONE_TIME,
-
-            // Scheduling
+ 
+            // ── Scheduling ──────────────────────────────────
             startDate: nextDue,
             dueDate: task.dueDate
               ? computeNextDueDate(task.dueDate, task.recurrenceType, customRule)
               : null,
-
-            // Fresh status
+ 
+            // ── Fresh status ────────────────────────────────
             status: TaskStatus.PENDING,
-
-            // Idempotency key stored in recurrenceRule JSON
+ 
+            // ── Idempotency key ─────────────────────────────
             recurrenceRule: { dedupeKey },
           },
         });
-
-        // ── 7. Copy assignments ──────────────────────────────
+ 
+        // ── 7. Copy assignments (preserves original assignees) ─
         if (task.assignments.length > 0) {
           await tx.taskAssignment.createMany({
             data: task.assignments.map((a) => ({
@@ -241,14 +242,14 @@ export async function spawnDueRecurringTasks(): Promise<{
             skipDuplicates: true,
           });
         }
-
-        // ── 8. Activity log ──────────────────────────────────
+ 
+        // ── 8. Activity log ─────────────────────────────────
         await tx.activityLog.create({
           data: {
             entityType: "TASK",
             entityId: child.id,
             action: "CREATED",
-            performedBy: null, // system-generated
+            performedBy: null,   // system-generated
             projectId: task.projectId ?? null,
             taskId: child.id,
             toState: {
@@ -264,15 +265,17 @@ export async function spawnDueRecurringTasks(): Promise<{
               parentTaskId: task.id,
               recurrenceType: task.recurrenceType,
               windowKey,
+              isFirstInstance: !lastChild,
             },
           },
         });
-
+ 
         logger.info(
-          `[RecurringTask] Spawned child ${child.id} for parent ${task.id} (${task.recurrenceType}, window ${windowKey})`,
+          `[RecurringTask] Spawned child ${child.id} for parent ${task.id}` +
+          ` (${task.recurrenceType}, window ${windowKey}${!lastChild ? ", FIRST instance" : ""})`,
         );
       });
-
+ 
       spawned++;
     } catch (err: any) {
       errors++;
@@ -282,11 +285,11 @@ export async function spawnDueRecurringTasks(): Promise<{
       );
     }
   }
-
+ 
   logger.info(
     `[RecurringTask] Done — processed: ${processed}, spawned: ${spawned}, errors: ${errors}`,
   );
-
+ 
   return { processed, spawned, errors };
 }
 
@@ -298,10 +301,8 @@ export async function spawnDueRecurringTasks(): Promise<{
 ───────────────────────────────────────────────────────────── */
 
 export function registerRecurringTaskJob(): void {
-  // Run every minute — fine-grained enough for DAILY tasks and above.
-  // The idempotency guard prevents double-spawning on multiple ticks.
   const schedule = process.env.RECURRING_TASK_CRON ?? "* * * * *";
-
+ 
   cron.schedule(schedule, async () => {
     try {
       await spawnDueRecurringTasks();
@@ -309,7 +310,7 @@ export function registerRecurringTaskJob(): void {
       logger.error("[RecurringTask] Unhandled scheduler error:", err);
     }
   });
-
+ 
   logger.info(
     `[RecurringTask] Scheduler registered (cron: "${schedule}")`,
   );

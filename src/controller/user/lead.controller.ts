@@ -6,13 +6,13 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { getIo } from "../../core/utils/socket";
-import { randomUUID } from "node:crypto";
 import {
   buildCustomerProductEntries,
   deriveLeadScalars,
   normalizeIncomingProducts,
 } from "../../core/utils/leadProducts";
 import { triggerHelperNotification } from "../../services/notifications";
+import { findDuplicateLead } from "../../services/lead/lead.service";
 
 /**
  * Helpers (kept local so this file is self-contained)
@@ -478,6 +478,7 @@ export async function createMyLead(req: Request, res: Response) {
       state,
       city,
       isImportant,
+      forceCreate = false,
     } = req.body as Record<string, any>;
 
     if (!customerName || !mobileNumber)
@@ -492,6 +493,34 @@ export async function createMyLead(req: Request, res: Response) {
     // ── Normalise products ────────────────────────────────────────────────────
     const products = normalizeIncomingProducts(req.body);
     const { productTitle, totalCost } = deriveLeadScalars(products, cost);
+
+    // ── DUPLICATE CHECK ──────────────────────────────────────────────────────
+    if (!forceCreate) {
+      const duplicate = await findDuplicateLead({ normalizedMobile, productTitle });
+ 
+      if (duplicate) {
+        const assigneeName = duplicate.assignments[0]?.account
+          ? `${duplicate.assignments[0].account.firstName} ${duplicate.assignments[0].account.lastName}`.trim()
+          : null;
+ 
+        return res.status(409).json({
+          success: false,
+          code: "DUPLICATE_LEAD",
+          message: "An active lead already exists for this customer and product.",
+          data: {
+            existingLead: {
+              id: duplicate.id,
+              status: duplicate.status,
+              customerName: duplicate.customerName,
+              productTitle: duplicate.productTitle,
+              createdAt: duplicate.createdAt,
+              assignedTo: assigneeName,
+            },
+            hint: "Send { forceCreate: true } to create anyway.",
+          },
+        });
+      }
+    }
 
     const now = new Date();
 
@@ -628,6 +657,7 @@ export async function createMyLead(req: Request, res: Response) {
               initialAssignment: initialAssignee,
               demoScheduledAt: demoDate ?? null,
               products: products ? JSON.parse(JSON.stringify(products)) : null,
+               forcedDuplicate: forceCreate || undefined,
             },
           },
         });
