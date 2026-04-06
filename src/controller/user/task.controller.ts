@@ -6,8 +6,9 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { getIo } from "../../core/utils/socket";
-import { TaskStatus, TaskPriority, AssignmentType } from "@prisma/client";
+import { TaskStatus, TaskPriority, AssignmentType, TaskRecurrenceType } from "@prisma/client";
 import { triggerTaskNotification } from "../../services/notifications";
+import { spawnDueRecurringTasks } from "../../core/job/recurringTask/recurringTask.job";
 
 /* ═══════════════════════════════════════════════════════════════
    SNAPSHOT HELPERS  (mirrors lead.controller.ts pattern)
@@ -1051,6 +1052,207 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
   }
 }
 
+/* ─────────────────────────────────────────────────────────────
+   GET /admin/tasks/recurring
+   List all active recurring task definitions with instance counts.
+───────────────────────────────────────────────────────────── */
+export async function listRecurringTasksAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+ 
+    const {
+      recurrenceType,
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string>;
+ 
+    const pageNumber = Math.max(Number(page), 1);
+    const pageSize = Math.min(Number(limit), 100);
+    const skip = (pageNumber - 1) * pageSize;
+ 
+    const where: any = {
+      isRecurring: true,
+      recurrenceParentId: null,
+      deletedAt: null,
+      recurrenceType: { not: TaskRecurrenceType.ONE_TIME },
+    };
+ 
+    if (recurrenceType) where.recurrenceType = recurrenceType;
+ 
+    const [total, tasks] = await Promise.all([
+      prisma.task.count({ where }),
+      prisma.task.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          status: true,
+          priority: true,
+          recurrenceType: true,
+          recurrenceRule: true,
+          startDate: true,
+          dueDate: true,
+          createdAt: true,
+          updatedAt: true,
+          projectId: true,
+          project: { select: { id: true, name: true } },
+          assignments: {
+            select: {
+              type: true,
+              account: {
+                select: { id: true, firstName: true, lastName: true, avatar: true },
+              },
+              team: { select: { id: true, name: true } },
+            },
+          },
+          _count: { select: { recurrenceChildren: true } },
+          // Last spawned instance
+          recurrenceChildren: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: {
+              id: true,
+              status: true,
+              startDate: true,
+              createdAt: true,
+            },
+          },
+        },
+      }),
+    ]);
+ 
+    return sendSuccessResponse(res, 200, "Recurring tasks fetched", {
+      data: tasks.map((t) => ({
+        ...t,
+        instanceCount: t._count.recurrenceChildren,
+        lastInstance: t.recurrenceChildren[0] ?? null,
+        recurrenceChildren: undefined,
+        _count: undefined,
+      })),
+      meta: {
+        page: pageNumber,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    });
+  } catch (err: any) {
+    console.error("[listRecurringTasksAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch recurring tasks");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   POST /admin/tasks/recurring/trigger
+   Manually fire the recurring task scheduler right now.
+   Useful in staging / for immediate testing without waiting for cron.
+───────────────────────────────────────────────────────────── */
+export async function triggerRecurringSchedulerAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+ 
+    const result = await spawnDueRecurringTasks();
+ 
+    return sendSuccessResponse(res, 200, "Scheduler triggered", result);
+  } catch (err: any) {
+    console.error("[triggerRecurringSchedulerAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Scheduler failed");
+  }
+}
+
+ 
+/* ─────────────────────────────────────────────────────────────
+   GET /admin/tasks/:id/instances
+   Paginated list of spawned instances for a given parent task.
+───────────────────────────────────────────────────────────── */
+export async function listTaskInstancesAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+ 
+    const { id: parentId } = req.params;
+    const {
+      status,
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string>;
+ 
+    const pageNumber = Math.max(Number(page), 1);
+    const pageSize = Math.min(Number(limit), 100);
+    const skip = (pageNumber - 1) * pageSize;
+ 
+    // Verify parent exists and is recurring
+    const parent = await prisma.task.findUnique({
+      where: { id: parentId },
+      select: { id: true, title: true, isRecurring: true, recurrenceType: true },
+    });
+ 
+    if (!parent) return sendErrorResponse(res, 404, "Task not found");
+    if (!parent.isRecurring)
+      return sendErrorResponse(res, 400, "Task is not a recurring task definition");
+ 
+    const where: any = {
+      recurrenceParentId: parentId,
+      deletedAt: null,
+    };
+ 
+    if (status) where.status = status as TaskStatus;
+ 
+    const [total, instances] = await Promise.all([
+      prisma.task.count({ where }),
+      prisma.task.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy: { startDate: "desc" },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          priority: true,
+          startDate: true,
+          dueDate: true,
+          completedAt: true,
+          createdAt: true,
+          recurrenceRule: true,
+          assignments: {
+            select: {
+              type: true,
+              status: true,
+              account: {
+                select: { id: true, firstName: true, lastName: true, avatar: true },
+              },
+              team: { select: { id: true, name: true } },
+            },
+          },
+        },
+      }),
+    ]);
+ 
+    return sendSuccessResponse(res, 200, "Task instances fetched", {
+      parent: {
+        id: parent.id,
+        title: parent.title,
+        recurrenceType: parent.recurrenceType,
+      },
+      data: instances,
+      meta: {
+        page: pageNumber,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize),
+      },
+    });
+  } catch (err: any) {
+    console.error("[listTaskInstancesAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch instances");
+  }
+}
+ 
+
 /* ═══════════════════════════════════════════════════════════════
    ░░░░░░░░░░░░░░░░  USER CONTROLLERS  ░░░░░░░░░░░░░░░░░░░░░░░░
 ═══════════════════════════════════════════════════════════════ */
@@ -1200,7 +1402,7 @@ export async function getMyTasksUser(req: Request, res: Response) {
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
-
+ 
     const pageNumber = Math.max(Number(page), 1);
     const pageSize = Math.min(Number(limit), 100);
     const skip = (pageNumber - 1) * pageSize;

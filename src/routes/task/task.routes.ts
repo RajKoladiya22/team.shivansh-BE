@@ -17,6 +17,9 @@ import {
   removeTaskDependencyAdmin,
   getProjectKanbanAdmin,
   updateTaskLabelsAdmin,
+  listRecurringTasksAdmin,
+  triggerRecurringSchedulerAdmin,
+  listTaskInstancesAdmin,
   // ── User ──────────────────────────────────────────────────────
   createSelfTaskUser,
   getMyTasksUser,
@@ -87,6 +90,28 @@ router.delete(
   "/admin/tasks/:id/dependencies/:blockingTaskId",
   requireRole("ADMIN"),
   removeTaskDependencyAdmin,
+);
+
+// List all recurring task definitions
+router.get(
+  "/admin/tasks/recurring",
+  requireRole("ADMIN"),
+  listRecurringTasksAdmin,
+);
+
+// Manually trigger the recurring scheduler (useful for testing/admin ops)
+router.post(
+  "/admin/tasks/recurring/trigger",
+  requireRole("ADMIN"),
+  triggerRecurringSchedulerAdmin,
+);
+
+// List all spawned instances for a given parent task
+// (Add this alongside the existing /admin/tasks/:id/activity route)
+router.get(
+  "/admin/tasks/:id/instances",
+  requireRole("ADMIN"),
+  listTaskInstancesAdmin,
 );
 
 /* ═══════════════════════════════════════════════════════════════
