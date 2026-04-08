@@ -1,7 +1,7 @@
 // src/core/job/index.ts
 import cron from "node-cron";
 import { autoFinalizeAttendance } from "./attendance/attendance.auto";
-import { registerRecurringTaskJob } from "./recurringTask/recurringTask.job";
+// import { registerRecurringTaskJob } from "./recurringTask/recurringTask.job";
 
 console.log("Job scheduler initialized.");
 

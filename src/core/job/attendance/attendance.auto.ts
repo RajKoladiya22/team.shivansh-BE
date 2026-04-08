@@ -125,7 +125,7 @@ export async function autoFinalizeAttendance() {
               source: CheckSource.AUTO,
               sessionId: lastOpen.sessionId,
               attendanceLogId: log.id,
-              note: "Auto checkout at 6:00 PM",
+              note: "Auto checkout at 6:45 PM",
             },
           });
         }

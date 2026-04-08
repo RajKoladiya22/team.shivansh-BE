@@ -95,40 +95,40 @@ export async function triggerAssignmentNotification({
     if (recipientAccountIds.length === 0) return;
 
     // WhatsApp notification to first recipient (best effort, outside transaction)
-//     if (recipientAccountIds.length > 0) {
-//       const assignee = await prisma.account.findUnique({
-//         where: { id: recipientAccountIds[0] },
-//         select: { contactPhone: true, firstName: true },
-//       });
+    //     if (recipientAccountIds.length > 0) {
+    //       const assignee = await prisma.account.findUnique({
+    //         where: { id: recipientAccountIds[0] },
+    //         select: { contactPhone: true, firstName: true },
+    //       });
 
-//       if (assignee?.contactPhone) {
-//         const message = `*New Lead*
+    //       if (assignee?.contactPhone) {
+    //         const message = `*New Lead*
 
-// *Customer Name:* ${lead.customerName}
-// *Mobile Number:* ${assignee.contactPhone}
-// *Product:* ${lead.productTitle ?? "-"}
-// *Cost:* - ${lead.cost ?? "-"}
-// *Remark:* -${lead.remark ?? "-"}
+    // *Customer Name:* ${lead.customerName}
+    // *Mobile Number:* ${assignee.contactPhone}
+    // *Product:* ${lead.productTitle ?? "-"}
+    // *Cost:* - ${lead.cost ?? "-"}
+    // *Remark:* -${lead.remark ?? "-"}
 
-// *Assigned By* - ${assignedBy}`;
+    // *Assigned By* - ${assignedBy}`;
 
-//         await sendWhatsAppSmart({
-//           phoneNumber: assignee.contactPhone,
-//           message: `*Lead*
+    //         await sendWhatsAppSmart({
+    //           phoneNumber: assignee.contactPhone,
+    //           message: `*Lead*
 
-// *Customer Name:* ${lead.customerName}
-// *Mobile Number:* ${assignee.contactPhone}
-// *Product:* ${lead.productTitle ?? "-"}
-// *Cost:* 25000
-// *Remark:* call them to connect
+    // *Customer Name:* ${lead.customerName}
+    // *Mobile Number:* ${assignee.contactPhone}
+    // *Product:* ${lead.productTitle ?? "-"}
+    // *Cost:* 25000
+    // *Remark:* call them to connect
 
-// *Assigned By* - ${assignedBy}`,
+    // *Assigned By* - ${assignedBy}`,
 
-//           templateName: "pract", // approved template
-//           // templateName: "new_lead_assigned",
-//         });
-//       }
-//     }
+    //           templateName: "pract", // approved template
+    //           // templateName: "new_lead_assigned",
+    //         });
+    //       }
+    //     }
 
     // Step 3 — find existing by dedupeKey and update or create per recipient (dedupeKey is not a unique field in Prisma schema)
     const notifications = await Promise.all(
@@ -243,6 +243,12 @@ export async function triggerAssignmentNotification({
               },
             },
           }),
+          {
+            TTL: 3600, // must
+            headers: {
+              urgency: 'high',
+            },
+          }
         );
       } catch (pushError: any) {
         console.log("❌ Web push failed:", sub.endpoint);
@@ -312,42 +318,42 @@ export async function triggerHelperNotification({
 
     const notification = existing
       ? await prisma.notification.update({
-          where: { id: existing.id },
-          data: {
-            sentAt: null,
-            createdAt: new Date(),
-            payload: {
-              leadId: lead.id,
-              customerName: lead.customerName,
-              productTitle: lead.productTitle ?? null,
-              status: lead.status,
-              role,
-              addedBy,
-              addedAt: new Date().toISOString(),
-            },
+        where: { id: existing.id },
+        data: {
+          sentAt: null,
+          createdAt: new Date(),
+          payload: {
+            leadId: lead.id,
+            customerName: lead.customerName,
+            productTitle: lead.productTitle ?? null,
+            status: lead.status,
+            role,
+            addedBy,
+            addedAt: new Date().toISOString(),
           },
-        })
+        },
+      })
       : await prisma.notification.create({
-          data: {
-            accountId: helperAccountId,
-            category: "LEAD",
-            level: "INFO",
-            title: "You've been added as a helper",
-            body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""} (${role})`,
-            actionUrl: `/leads/user/${lead.id}`,
-            dedupeKey,
-            deliveryChannels: ["web", "chrome"],
-            payload: {
-              leadId: lead.id,
-              customerName: lead.customerName,
-              productTitle: lead.productTitle ?? null,
-              status: lead.status,
-              role,
-              addedBy,
-              addedAt: new Date().toISOString(),
-            },
+        data: {
+          accountId: helperAccountId,
+          category: "LEAD",
+          level: "INFO",
+          title: "You've been added as a helper",
+          body: `${lead.customerName}${lead.productTitle ? ` – ${lead.productTitle}` : ""} (${role})`,
+          actionUrl: `/leads/user/${lead.id}`,
+          dedupeKey,
+          deliveryChannels: ["web", "chrome"],
+          payload: {
+            leadId: lead.id,
+            customerName: lead.customerName,
+            productTitle: lead.productTitle ?? null,
+            status: lead.status,
+            role,
+            addedBy,
+            addedAt: new Date().toISOString(),
           },
-        });
+        },
+      });
 
     // 4. Socket push to helper
     try {
@@ -385,6 +391,12 @@ export async function triggerHelperNotification({
               payload: { leadId: lead.id, role, addedBy },
             },
           }),
+          {
+            TTL: 3600, // must
+            headers: {
+              urgency: 'high',
+            },
+          }
         );
       } catch (pushError: any) {
         console.warn("Helper push notification failed:", sub.endpoint, pushError?.statusCode);
@@ -503,6 +515,12 @@ export async function triggerAdminRegistrationNotification({
               actionUrl: `/employee/requests`,
             },
           }),
+          {
+            TTL: 3600, // must
+            headers: {
+              urgency: 'high',
+            },
+          }
         );
       } catch (err) {
         console.warn("⚠️ Admin push failed", err);
@@ -682,13 +700,19 @@ export async function triggerPublicLeadNotification({
             actionUrl: `/leads/admin/${lead.id}`,
             data: { actionUrl: `/leads/admin/${lead.id}` },
           }),
+          {
+            TTL: 3600, // must
+            headers: {
+              urgency: 'high',
+            },
+          }
         );
       } catch (err: any) {
         if (err?.statusCode === 404 || err?.statusCode === 410) {
           console.warn("Removing expired push subscription:", sub.endpoint);
           await prisma.notificationSubscription
             .delete({ where: { id: sub.id } })
-            .catch(() => {});
+            .catch(() => { });
         }
       }
     }
@@ -860,12 +884,18 @@ export async function triggerTaskNotification({
             badge: "/favicon.png",
             data: { actionUrl },
           }),
+          {
+            TTL: 3600, // must
+            headers: {
+              urgency: 'high',
+            },
+          }
         );
       } catch (err: any) {
         if (err?.statusCode === 404 || err?.statusCode === 410) {
           await prisma.notificationSubscription
             .delete({ where: { id: sub.id } })
-            .catch(() => {});
+            .catch(() => { });
         }
       }
     }
