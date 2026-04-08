@@ -44,7 +44,7 @@ export type TaskNotificationEvent =
 type TaskNotificationArgs = {
   taskId: string;
   event: TaskNotificationEvent;
-  performedByAccountId: string;
+  performedByAccountId: string | null;
   // Pass recipients directly — already resolved in the controller
   recipientAccountIds: string[];
 };
@@ -659,7 +659,7 @@ export async function triggerPublicLeadNotification({
           createdAt: n.createdAt.toISOString(),
         };
         if (n.accountId) {
-          io!.to(`notif:${n.accountId}`).emit("notification", payload);
+          io.to(`notif:${n.accountId}`).emit("notification", payload);
         }
         // ── Once: push new lead into lead lists ────────
         const leadCreatedPayload = {
@@ -750,17 +750,29 @@ export async function triggerTaskNotification({
           project: { select: { name: true } },
         },
       }),
-      prisma.account.findUnique({
-        where: { id: performedByAccountId },
-        select: { firstName: true, lastName: true },
-      }),
+      // prisma.account.findUnique({
+      //   where: { id: performedByAccountId },
+      //   select: { firstName: true, lastName: true },
+      // }),
+      performedByAccountId
+        ? prisma.account.findUnique({
+          where: { id: performedByAccountId },
+          select: { firstName: true, lastName: true },
+        })
+        : null,
     ]);
+
+    // console.log("\n\nTriggering task notification for taskId:", taskId, "event:", event, "performedByAccountId:", performedByAccountId, "recipientAccountIds:", recipientAccountIds);
 
     if (!task) return;
 
-    const performerName = performer
-      ? `${performer.firstName} ${performer.lastName}`.trim()
-      : "Someone";
+    // const performerName = performer
+    //   ? `${performer.firstName} ${performer.lastName}`.trim()
+    //   : "Someone";
+
+      const performerName = performedByAccountId
+      ? `${performer?.firstName ?? ""} ${performer?.lastName ?? ""}`.trim()
+      : "System";
 
     // 2. Build title/body per event type
     const copy: Record<TaskNotificationEvent, { title: string; body: string }> = {
@@ -794,11 +806,16 @@ export async function triggerTaskNotification({
 
     const { title, body } = copy[event];
     const actionUrl = `/tasks/user/${task.id}`;
+    // console.log("\n\nTriggering task notification for taskId:", taskId, "event:", event, "performedByAccountId:", performedByAccountId, "recipientAccountIds:", recipientAccountIds);
 
     // 3. Persist notifications (upsert via dedupeKey)
     const notifications = await Promise.all(
       recipientAccountIds
-        .filter((id) => id !== performedByAccountId) // don't notify the actor
+        // .filter((id) => id !== performedByAccountId) // don't notify the actor
+        .filter((id) => {
+          if (!performedByAccountId) return true;
+          return id !== performedByAccountId;
+        })
         .map(async (accountId) => {
           const dedupeKey = `task:${task.id}:${event}:${accountId}`;
 
@@ -847,6 +864,8 @@ export async function triggerTaskNotification({
         }),
     );
 
+    // console.log("\n\nPersisted notifications:", notifications);
+
     // 4. Socket emit
     let io: ReturnType<typeof getIo> | null = null;
     try { io = getIo(); } catch { /* no-op */ }
@@ -864,9 +883,11 @@ export async function triggerTaskNotification({
           payload: n.payload as any,
           createdAt: n.createdAt.toISOString(),
         };
-        io!.to(`notif:${n.accountId}`).emit("notification", payload);
+        io.to(`notif:${n.accountId}`).emit("notification", payload);
       });
     }
+
+    // console.log("\n\nEmitted socket notifications for taskId:", taskId);
 
     // 5. Web push (Chrome)
     const subscriptions = await prisma.notificationSubscription.findMany({

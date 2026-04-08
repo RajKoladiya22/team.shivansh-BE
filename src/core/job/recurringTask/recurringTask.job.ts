@@ -21,6 +21,7 @@ import { prisma } from "../../../config/database.config";
 
 import { TaskStatus, TaskRecurrenceType } from "@prisma/client";
 import { logger } from "../../help/logs/logger";
+import { triggerTaskNotification } from "../../../services/notifications";
 
 
 /* ─────────────────────────────────────────────────────────────
@@ -37,41 +38,41 @@ function computeNextDueDate(
   customRule?: Record<string, any> | null,
 ): Date {
   const next = new Date(referenceDate);
- 
+
   switch (recurrenceType) {
     case TaskRecurrenceType.DAILY:
       next.setDate(next.getDate() + 1);
       break;
- 
+
     case TaskRecurrenceType.WEEKLY:
       next.setDate(next.getDate() + 7);
       break;
- 
+
     case TaskRecurrenceType.BIWEEKLY:
       next.setDate(next.getDate() + 14);
       break;
- 
+
     case TaskRecurrenceType.MONTHLY:
       next.setMonth(next.getMonth() + 1);
       break;
- 
+
     case TaskRecurrenceType.QUARTERLY:
       next.setMonth(next.getMonth() + 3);
       break;
- 
+
     case TaskRecurrenceType.CUSTOM: {
       // customRule example: { intervalDays: 3 }
       const intervalDays = customRule?.intervalDays ?? 1;
       next.setDate(next.getDate() + intervalDays);
       break;
     }
- 
+
     default:
       // ONE_TIME – should never be processed here
       next.setFullYear(next.getFullYear() + 100);
       break;
   }
- 
+
   return next;
 }
 
@@ -98,7 +99,7 @@ export async function spawnDueRecurringTasks(): Promise<{
   let processed = 0;
   let spawned = 0;
   let errors = 0;
- 
+
   // ── 1. Load all active recurring root tasks ────────────────
   const rootTasks = await prisma.task.findMany({
     where: {
@@ -106,51 +107,61 @@ export async function spawnDueRecurringTasks(): Promise<{
       recurrenceType: { not: TaskRecurrenceType.ONE_TIME },
       recurrenceParentId: null,   // definition rows only
       deletedAt: null,
-      status: { notIn: [TaskStatus.CANCELLED] },
+      status: { notIn: [TaskStatus.CANCELLED, TaskStatus.PENDING] },
     },
     include: {
-      assignments: {
-        select: {
-          type: true,
-          accountId: true,
-          teamId: true,
-          note: true,
-        },
-      },
+      assignments: true,
+      labels: true,
+      checklist: true,
       // Most-recent spawned child (ordered by the date it was spawned)
       recurrenceChildren: {
         orderBy: { createdAt: "desc" },
         take: 1,
         select: {
           id: true,
+          assignments: true,
+          labels: true,
+          checklist: true,
           createdAt: true,   // when it was spawned — used as reference for next due
           startDate: true,   // the scheduled "work begins" date of that child
           dueDate: true,
+          status: true,
         },
       },
     },
   });
- 
+
   logger.info(
     `[RecurringTask] Found ${rootTasks.length} active recurring definition(s)`,
   );
- 
+
   for (const task of rootTasks) {
     processed++;
- 
+
     try {
       const lastChild = task.recurrenceChildren[0] ?? null;
- 
+
+      if (lastChild && lastChild.status !== TaskStatus.COMPLETED) {
+        continue;
+      }
+
       const customRule =
         task.recurrenceType === TaskRecurrenceType.CUSTOM &&
-        task.recurrenceRule &&
-        typeof task.recurrenceRule === "object"
+          task.recurrenceRule &&
+          typeof task.recurrenceRule === "object"
           ? (task.recurrenceRule as Record<string, any>)
           : null;
- 
+
       let nextDue: Date;
       let windowKey: string;
- 
+
+      if (lastChild && lastChild.status !== TaskStatus.COMPLETED) {
+        logger.debug(
+          `[RecurringTask] Skipping ${task.id} because last child (${lastChild.id}) is not completed (status: ${lastChild.status})`
+        );
+        continue;
+      }
+
       if (!lastChild) {
         // ── First instance ──────────────────────────────────────
         // The very first child should be created on (or after) the
@@ -169,16 +180,16 @@ export async function spawnDueRecurringTasks(): Promise<{
         nextDue = computeNextDueDate(reference, task.recurrenceType, customRule);
         windowKey = toMidnightUTC(nextDue).toISOString().slice(0, 10);
       }
- 
+
       // ── 4. Check whether it's time ─────────────────────────
       if (now < nextDue) {
         // Not yet due — skip silently
         continue;
       }
- 
+
       // ── 5. Idempotency guard ───────────────────────────────
       const dedupeKey = `recurring:${task.id}:${windowKey}`;
- 
+
       const alreadySpawned = await prisma.task.findFirst({
         where: {
           recurrenceParentId: task.id,
@@ -186,51 +197,60 @@ export async function spawnDueRecurringTasks(): Promise<{
         },
         select: { id: true },
       });
- 
+
       if (alreadySpawned) {
         logger.debug(
           `[RecurringTask] Already spawned for key ${dedupeKey}, skipping`,
         );
         continue;
       }
- 
+
+      const source: any = lastChild ?? task;
+
       // ── 6. Spawn child inside a transaction ───────────────
-      await prisma.$transaction(async (tx) => {
+      const result = await prisma.$transaction(async (tx) => {
+
         const child = await tx.task.create({
           data: {
             // ── Core fields copied from the definition ──────
-            title: task.title,
-            description: task.description,
-            priority: task.priority,
-            projectId: task.projectId,
-            stepId: task.stepId,
-            estimatedMinutes: task.estimatedMinutes,
-            isSelfTask: task.isSelfTask,
+            title: source.title,
+            description: source.description,
+            priority: source.priority,
+            projectId: source.projectId,
+            stepId: source.stepId,
+            estimatedMinutes: source.estimatedMinutes,
+            isSelfTask: source.isSelfTask,
             createdBy: task.createdBy,
- 
+
             // ── Recurrence linkage ──────────────────────────
             recurrenceParentId: task.id,
             isRecurring: false,                        // instances are NOT themselves recurring
             recurrenceType: TaskRecurrenceType.ONE_TIME,
- 
+
             // ── Scheduling ──────────────────────────────────
             startDate: nextDue,
             dueDate: task.dueDate
               ? computeNextDueDate(task.dueDate, task.recurrenceType, customRule)
               : null,
- 
+
             // ── Fresh status ────────────────────────────────
             status: TaskStatus.PENDING,
- 
+
             // ── Idempotency key ─────────────────────────────
             recurrenceRule: { dedupeKey },
           },
         });
- 
+
+        let recipientAccountIds: string[] = [];
+
+        // console.log("\n\n\n\n\n\n\n\n\n\n\n\n\n\n--> task.assignments\n", task.assignments)
+        const assignmentSource =
+          source.assignments?.length ? source.assignments : task.assignments;
+
         // ── 7. Copy assignments (preserves original assignees) ─
-        if (task.assignments.length > 0) {
+        if (assignmentSource?.length) {
           await tx.taskAssignment.createMany({
-            data: task.assignments.map((a) => ({
+            data: assignmentSource.map((a: any) => ({
               taskId: child.id,
               type: a.type,
               accountId: a.accountId ?? null,
@@ -241,8 +261,44 @@ export async function spawnDueRecurringTasks(): Promise<{
             })),
             skipDuplicates: true,
           });
+
+          recipientAccountIds = assignmentSource
+            .map((a: any) => a.accountId)
+            .filter(Boolean);
         }
- 
+
+
+        // ─────────────────────────────
+        // ✅ COPY LABELS
+        // ─────────────────────────────
+        if (source.labels?.length) {
+          await tx.taskLabel.createMany({
+            data: source.labels.map((l: any) => ({
+              taskId: child.id,
+              labelId: l.labelId,
+              addedBy: task.createdBy ?? null,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        // ─────────────────────────────
+        // ✅ COPY CHECKLIST (RESET)
+        // ─────────────────────────────
+        if (source.checklist?.length) {
+          await tx.checklistItem.createMany({
+            data: source.checklist.map((item: any, idx: number) => ({
+              taskId: child.id,
+              title: item.title,
+              order: idx,
+              status: "PENDING", // 🔥 reset
+              assignedTo: item.assignedTo ?? null,
+              dueDate: item.dueDate ?? null,
+              createdBy: task.createdBy ?? null,
+            })),
+          });
+        }
+
         // ── 8. Activity log ─────────────────────────────────
         await tx.activityLog.create({
           data: {
@@ -266,16 +322,30 @@ export async function spawnDueRecurringTasks(): Promise<{
               recurrenceType: task.recurrenceType,
               windowKey,
               isFirstInstance: !lastChild,
+              clonedFrom: source.id,
             },
           },
         });
- 
+
         logger.info(
           `[RecurringTask] Spawned child ${child.id} for parent ${task.id}` +
           ` (${task.recurrenceType}, window ${windowKey}${!lastChild ? ", FIRST instance" : ""})`,
         );
+        return { childId: child.id, recipientAccountIds };
       });
- 
+
+      if (result.recipientAccountIds.length > 0) {
+
+
+        await triggerTaskNotification({
+          taskId: result.childId,
+          event: "CREATED",
+          performedByAccountId: task.createdBy ?? null,
+          // performedByAccountId: null,
+          recipientAccountIds: result.recipientAccountIds,
+        });
+      }
+
       spawned++;
     } catch (err: any) {
       errors++;
@@ -285,11 +355,11 @@ export async function spawnDueRecurringTasks(): Promise<{
       );
     }
   }
- 
+
   logger.info(
     `[RecurringTask] Done — processed: ${processed}, spawned: ${spawned}, errors: ${errors}`,
   );
- 
+
   return { processed, spawned, errors };
 }
 
@@ -301,8 +371,8 @@ export async function spawnDueRecurringTasks(): Promise<{
 ───────────────────────────────────────────────────────────── */
 
 export function registerRecurringTaskJob(): void {
-  const schedule = process.env.RECURRING_TASK_CRON ?? "* * * * *";
- 
+  const schedule = process.env.RECURRING_TASK_CRON ?? "0 0 * * *";  // default: daily at midnight UTC
+
   cron.schedule(schedule, async () => {
     try {
       await spawnDueRecurringTasks();
@@ -310,7 +380,7 @@ export function registerRecurringTaskJob(): void {
       logger.error("[RecurringTask] Unhandled scheduler error:", err);
     }
   });
- 
+
   logger.info(
     `[RecurringTask] Scheduler registered (cron: "${schedule}")`,
   );
