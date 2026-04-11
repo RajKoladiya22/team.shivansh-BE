@@ -2270,6 +2270,43 @@ export async function updateChecklistItemUser(req: Request, res: Response) {
           meta: { type: "checklist_updated", itemId, changes: Object.keys(data) },
         },
       });
+
+      // Auto-complete task if all checklist items are now completed
+      if (status === "COMPLETED") {
+        const pendingCount = await tx.checklistItem.count({
+          where: { taskId, status: "PENDING", id: { not: itemId } },
+        });
+
+        if (pendingCount === 0) {
+          const task = await tx.task.findUnique({
+            where: { id: taskId },
+            select: { status: true },
+          });
+
+          if (task && task.status !== TaskStatus.COMPLETED && task.status !== TaskStatus.CANCELLED) {
+            await tx.task.update({
+              where: { id: taskId },
+              data: { status: TaskStatus.COMPLETED, completedAt: new Date() },
+            });
+
+            await tx.taskAssignment.updateMany({
+              where: { taskId, accountId },
+              data: { status: TaskStatus.COMPLETED, updatedAt: new Date() },
+            });
+
+            await tx.activityLog.create({
+              data: {
+                entityType: "TASK",
+                entityId: taskId,
+                action: "COMPLETED",
+                performedBy: accountId,
+                taskId,
+                meta: { type: "auto_completed_via_checklist" },
+              },
+            });
+          }
+        }
+      }
       return item;
     });
 
