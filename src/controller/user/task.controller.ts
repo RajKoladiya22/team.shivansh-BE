@@ -945,6 +945,8 @@ export async function listTasksAdmin(req: Request, res: Response) {
       dueBefore,
       dueAfter,
       isSelfTask,
+      sortBy = "priority",
+      sortOrder = "desc",
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
@@ -960,12 +962,22 @@ export async function listTasksAdmin(req: Request, res: Response) {
     if (projectId) where.projectId = projectId;
     if (stepId) where.stepId = stepId;
 
-    if (isSelfTask !== undefined) where.isSelfTask = isSelfTask === "true";
+    
+    if (isSelfTask === "true") where.isSelfTask = true;
+    if (isSelfTask === "false") where.isSelfTask = false;
 
-    if (fromDate || toDate) {
+     if (fromDate || toDate) {
       where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate) where.createdAt.lte = new Date(toDate);
+      if (fromDate) {
+        const start = new Date(fromDate);
+        start.setHours(0, 0, 0, 0);
+        where.createdAt.gte = start;
+      }
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setHours(23, 59, 59, 999);
+        where.createdAt.lte = end;
+      }
     }
 
     if (dueBefore || dueAfter) {
@@ -990,11 +1002,32 @@ export async function listTasksAdmin(req: Request, res: Response) {
       };
     }
 
+    // Dynamic sort — whitelist prevents injection
+    const SORTABLE_FIELDS: Record<string, string> = {
+      priority:  "priority",
+      createdAt: "createdAt",
+      dueDate:   "dueDate",
+      updatedAt: "updatedAt",
+      title:     "title",
+      status:    "status",
+    };
+    const sortField = SORTABLE_FIELDS[sortBy] ?? "priority";
+    const sortDir   = sortOrder === "asc" ? "asc" : "desc";
+
+    // const orderBy = [
+    //   { [sortField]: sortDir },
+    //   // Stable secondary sorts so pagination doesn't shuffle between pages
+    //   ...(sortField !== "status"    ? [{ status:    "asc"  as const }] : []),
+    //   ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
+    //   ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
+    //   ...(sortField !== "createdAt" ? [{ createdAt: "desc" as const }] : []),
+    // ];
+
     const orderBy = [
       { status: "asc" as const },
       { priority: "desc" as const },
-      { dueDate: "asc" as const },
       { createdAt: "desc" as const },
+      { dueDate: "asc" as const },
     ];
 
     const [total, tasks] = await Promise.all([
@@ -1571,6 +1604,9 @@ export async function getMyTasksUser(req: Request, res: Response) {
     if (priority) where.priority = priority as TaskPriority;
     if (projectId) where.projectId = projectId;
 
+    if (isSelfTask === "true") where.isSelfTask = true;
+    if (isSelfTask === "false") where.isSelfTask = false;
+
     if (search?.trim()) {
       where.AND = [
         {
@@ -1613,20 +1649,21 @@ export async function getMyTasksUser(req: Request, res: Response) {
     const sortField = SORTABLE_FIELDS[sortBy] ?? "dueDate";
     const sortOrder = sortDir === "desc" ? "desc" : "asc";
 
-    // const orderBy = [
-    //   { status: "asc" as const },
-    //   { priority: "desc" as const },
-    //   { dueDate: "asc" as const },
-    //   { updatedAt: "desc" as const },
-    // ];
-
     const orderBy = [
-      { [sortField]: sortOrder },
-      // stable secondary sorts so pagination is consistent
-      ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
-      ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
-      ...(sortField !== "updatedAt" ? [{ updatedAt: "desc" as const }] : []),
+      { status: "asc" as const },
+      { priority: "desc" as const },
+      { createdAt: "desc" as const },
+      { dueDate: "asc" as const },
+      { updatedAt: "desc" as const },
     ];
+
+    // const orderBy = [
+    //   { [sortField]: sortOrder },
+    //   // stable secondary sorts so pagination is consistent
+    //   ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
+    //   ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
+    //   ...(sortField !== "updatedAt" ? [{ updatedAt: "desc" as const }] : []),
+    // ];
 
     const [total, tasks] = await Promise.all([
       prisma.task.count({ where }),

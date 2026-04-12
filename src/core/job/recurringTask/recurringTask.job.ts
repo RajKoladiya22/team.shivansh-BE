@@ -220,7 +220,8 @@ export async function spawnDueRecurringTasks(): Promise<{
             stepId: source.stepId,
             estimatedMinutes: source.estimatedMinutes,
             isSelfTask: source.isSelfTask,
-            createdBy: task.createdBy,
+            // createdBy: task.createdBy,
+            createdAt: new Date(),
 
             // ── Recurrence linkage ──────────────────────────
             recurrenceParentId: task.id,
