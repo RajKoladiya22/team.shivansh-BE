@@ -1535,6 +1535,11 @@ export async function getMyTasksUser(req: Request, res: Response) {
       search,
       dueBefore,
       dueAfter,
+      fromDate,
+      toDate,
+      isSelfTask,
+      sortBy = "dueDate",
+      sortDir = "asc",
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
@@ -1582,12 +1587,45 @@ export async function getMyTasksUser(req: Request, res: Response) {
       if (dueAfter) where.dueDate.gte = new Date(dueAfter);
       if (dueBefore) where.dueDate.lte = new Date(dueBefore);
     }
+    // Created date range (fromDate / toDate — used by "today" and "yesterday" quick filters)
+    if (fromDate || toDate) {
+      where.createdAt = {};
+      if (fromDate) {
+        const start = new Date(fromDate);
+        start.setHours(0, 0, 0, 0);
+        where.createdAt.gte = start;
+      }
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setHours(23, 59, 59, 999);
+        where.createdAt.lte = end;
+      }
+    }
+
+    // Dynamic sort — whitelist to prevent injection
+    const SORTABLE_FIELDS: Record<string, string> = {
+      dueDate:   "dueDate",
+      priority:  "priority",
+      createdAt: "createdAt",
+      updatedAt: "updatedAt",
+      title:     "title",
+    };
+    const sortField = SORTABLE_FIELDS[sortBy] ?? "dueDate";
+    const sortOrder = sortDir === "desc" ? "desc" : "asc";
+
+    // const orderBy = [
+    //   { status: "asc" as const },
+    //   { priority: "desc" as const },
+    //   { dueDate: "asc" as const },
+    //   { updatedAt: "desc" as const },
+    // ];
 
     const orderBy = [
-      { status: "asc" as const },
-      { priority: "desc" as const },
-      { dueDate: "asc" as const },
-      { updatedAt: "desc" as const },
+      { [sortField]: sortOrder },
+      // stable secondary sorts so pagination is consistent
+      ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
+      ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
+      ...(sortField !== "updatedAt" ? [{ updatedAt: "desc" as const }] : []),
     ];
 
     const [total, tasks] = await Promise.all([
