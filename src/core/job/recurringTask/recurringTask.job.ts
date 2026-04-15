@@ -608,8 +608,8 @@ export async function spawnDueRecurringTasks(): Promise<{
     try {
       const customRule =
         task.recurrenceType === TaskRecurrenceType.CUSTOM &&
-        task.recurrenceRule &&
-        typeof task.recurrenceRule === "object"
+          task.recurrenceRule &&
+          typeof task.recurrenceRule === "object"
           ? (task.recurrenceRule as Record<string, any>)
           : null;
 
@@ -847,7 +847,7 @@ export async function spawnDueRecurringTasks(): Promise<{
 
       logger.info(
         `[RecurringTask] Spawned child ${childId} for parent ${task.id}` +
-          ` (${task.recurrenceType}, window ${nextKey}${!lastChild ? " — FIRST instance" : ""})`,
+        ` (${task.recurrenceType}, window ${nextKey}${!lastChild ? " — FIRST instance" : ""})`,
       );
 
       // ── 8. Notifications (outside transaction, best-effort) ─

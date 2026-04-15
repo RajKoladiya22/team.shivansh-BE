@@ -1651,8 +1651,8 @@ export async function getMyTasksUser(req: Request, res: Response) {
 
     const orderBy = [
       { status: "asc" as const },
-      { priority: "desc" as const },
       { createdAt: "desc" as const },
+      { priority: "desc" as const },
       { dueDate: "asc" as const },
       { updatedAt: "desc" as const },
     ];
