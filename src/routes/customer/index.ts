@@ -9,8 +9,15 @@ import {
   addCustomerProduct,
   expireCustomerProduct,
   deleteCustomerPermanentAdmin,
-  removeCustomerProductAdmin
+  removeCustomerProductAdmin,
+  bulkCreateCustomersFromFile,
 } from "../../controller/customer/customer.controller";
+import multer from "multer";
+
+const upload = multer({
+  storage: multer.memoryStorage(), // important (buffer access)
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+});
 
 const router = Router();
 
@@ -31,5 +38,6 @@ router.delete(
   requireAuth,
   removeCustomerProductAdmin,
 );
+router.post("/bulk", requireAuth, upload.single("file"), bulkCreateCustomersFromFile);
 
 export default router;

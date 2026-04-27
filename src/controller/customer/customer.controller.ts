@@ -5,6 +5,8 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { randomUUID } from "crypto";
+import XLSX from "xlsx";
+import { parse } from "csv-parse/sync";
 
 /**
  * GET /customers
@@ -646,5 +648,150 @@ export async function removeCustomerProductAdmin(req: Request, res: Response) {
       500,
       err?.message ?? "Failed to remove product",
     );
+  }
+}
+
+
+export async function bulkCreateCustomersFromFile(req: Request, res: Response) {
+  try {
+    if (!req.user?.accountId)
+      return sendErrorResponse(res, 401, "Unauthorized");
+
+    if (!req.file)
+      return sendErrorResponse(res, 400, "File is required");
+
+    let rows: any[] = [];
+
+    // 1️⃣ Parse file
+    if (req.file.originalname.endsWith(".xlsx")) {
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(sheet);
+    } else if (req.file.originalname.endsWith(".csv")) {
+      rows = parse(req.file.buffer.toString(), {
+        columns: true,
+        skip_empty_lines: true,
+      });
+    } else {
+      return sendErrorResponse(res, 400, "Only Excel or CSV allowed");
+    }
+
+    if (!rows.length)
+      return sendErrorResponse(res, 400, "File is empty");
+
+    // 2️⃣ Normalize + validate
+    const errors: any[] = [];
+    const prepared: any[] = [];
+
+    rows.forEach((r, index) => {
+      const mobileRaw = String(r.mobile || r.Mobile || "").trim();
+      const normalizedMobile = mobileRaw.replace(/\D/g, "");
+
+      if (!r.name && !r.Name) {
+        errors.push({ row: index + 2, error: "Name required" });
+        return;
+      }
+
+      if (!normalizedMobile || normalizedMobile.length < 10) {
+        errors.push({ row: index + 2, error: "Invalid mobile" });
+        return;
+      }
+
+      prepared.push({
+        name: r.name || r.Name,
+        customerCompanyName: r.customerCompanyName || r.company || null,
+        contactPerson: r.contactPerson || null,
+        mobile: mobileRaw,
+        normalizedMobile,
+        email: r.email || null,
+        emails: r.emails ? JSON.parse(r.emails) : [],
+        phones: r.phones ? JSON.parse(r.phones) : [],
+        city: r.city || null,
+        state: r.state || null,
+        joiningDate: r.joiningDate
+          ? new Date(r.joiningDate)
+          : new Date(),
+        customerCategory: r.customerCategory || null,
+        businessCategory: r.businessCategory || null,
+        tallySerial: r.tallySerial || null,
+        tallyVersion: r.tallyVersion || null,
+        products: r.products ? JSON.parse(r.products) : [],
+      });
+    });
+
+    // 3️⃣ Deduplicate within file
+    const uniqueMap = new Map<string, any>();
+    prepared.forEach((c) => {
+      if (!uniqueMap.has(c.normalizedMobile)) {
+        uniqueMap.set(c.normalizedMobile, c);
+      }
+    });
+
+    const uniqueCustomers = Array.from(uniqueMap.values());
+
+    // 4️⃣ DB duplicate check
+    const mobiles = uniqueCustomers.map((c) => c.normalizedMobile);
+
+    const existing = await prisma.customer.findMany({
+      where: { normalizedMobile: { in: mobiles } },
+      select: { normalizedMobile: true },
+    });
+
+    const existingSet = new Set(existing.map((e) => e.normalizedMobile));
+
+    const toCreate = uniqueCustomers.filter(
+      (c) => !existingSet.has(c.normalizedMobile)
+    );
+
+    // 5️⃣ Transform for DB
+    const finalData = toCreate.map((c) => ({
+      name: c.name,
+      customerCompanyName: c.customerCompanyName,
+      contactPerson: c.contactPerson,
+      mobile: c.mobile,
+      normalizedMobile: c.normalizedMobile,
+      email: c.email,
+      emails: c.emails,
+      phones: c.phones,
+      city: c.city,
+      state: c.state,
+      joiningDate: c.joiningDate,
+      customerCategory: c.customerCategory,
+      businessCategory: c.businessCategory,
+      tallySerial: c.tallySerial,
+      tallyVersion: c.tallyVersion,
+      products: c.products?.length
+        ? {
+            active: c.products.map((p: any) => ({
+              id: randomUUID(),
+              name: p.name,
+              price: p.price ?? 0,
+              status: "ACTIVE",
+              addedAt: new Date(),
+            })),
+            history: [],
+          }
+        : undefined,
+      createdBy: req.user?.accountId,
+    }));
+
+    // 6️⃣ Insert
+    await prisma.customer.createMany({
+      data: finalData,
+      skipDuplicates: true,
+    });
+
+    // 7️⃣ Response
+    return sendSuccessResponse(res, 201, "Bulk upload complete", {
+      totalRows: rows.length,
+      validRows: prepared.length,
+      inserted: finalData.length,
+      duplicatesInDB: existingSet.size,
+      errors,
+    });
+
+  } catch (err: any) {
+    console.error("Bulk upload error:", err);
+    return sendErrorResponse(res, 500, err.message);
   }
 }

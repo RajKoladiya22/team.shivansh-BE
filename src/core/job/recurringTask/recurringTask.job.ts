@@ -659,6 +659,18 @@ export async function spawnDueRecurringTasks(): Promise<{
         continue;
       }
 
+      // ── 3b. Skip Sundays for DAILY tasks ───────────────────
+      if (task.recurrenceType === TaskRecurrenceType.DAILY) {
+        const dayOfWeek = nextWindowStart.getUTCDay(); // 0 = Sunday
+        if (dayOfWeek === 0) {
+          logger.debug(
+            `[RecurringTask] ${task.id} DAILY task — skipping Sunday window ${nextKey}`,
+          );
+          skipped++;
+          continue;
+        }
+      }
+
       // ── 4. Idempotency — has this window already been spawned? ──
       //
       // We store startDate = nextWindowStart on every child, so a
