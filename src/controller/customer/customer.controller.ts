@@ -470,7 +470,7 @@ export async function addCustomerProduct(req: Request, res: Response) {
       name,
       price,
       status: "ACTIVE",
-       addedAt: new Date().toISOString(),
+      addedAt: new Date().toISOString(),
       purchaseAt: normalizedPurchaseAt,
     };
 
@@ -652,6 +652,53 @@ export async function removeCustomerProductAdmin(req: Request, res: Response) {
 }
 
 
+function normalizeKeys(obj: any) {
+  const newObj: any = {};
+  Object.keys(obj).forEach((key) => {
+    const normalized = key.toLowerCase().replace(/\s+/g, "");
+    newObj[normalized] = obj[key];
+  });
+  return newObj;
+}
+
+function safeJSONParse(value: any, fallback: any = []) {
+  try {
+    if (!value) return fallback;
+    if (typeof value === "object") return value;
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function parseProductsFromRow(rawRow: any) {
+  const productRaw =
+    rawRow["Product Name"] ||
+    rawRow["product name"] ||
+    // rawRow["Product"] ||
+    // rawRow["product"] ||
+    "";
+
+  if (!productRaw) return [];
+
+  if (typeof productRaw === "string") {
+    return Array.from(
+      new Set(
+        productRaw
+          .split(",")
+          .map((p: string) => p.trim())
+          .filter(Boolean)
+      )
+    ).map((name) => ({ name }));
+  }
+
+  if (Array.isArray(productRaw)) {
+    return productRaw.map((name: string) => ({ name }));
+  }
+
+  return [];
+}
+
 export async function bulkCreateCustomersFromFile(req: Request, res: Response) {
   try {
     if (!req.user?.accountId)
@@ -679,15 +726,28 @@ export async function bulkCreateCustomersFromFile(req: Request, res: Response) {
     if (!rows.length)
       return sendErrorResponse(res, 400, "File is empty");
 
-    // 2️⃣ Normalize + validate
     const errors: any[] = [];
     const prepared: any[] = [];
 
-    rows.forEach((r, index) => {
-      const mobileRaw = String(r.mobile || r.Mobile || "").trim();
-      const normalizedMobile = mobileRaw.replace(/\D/g, "");
+    // 2️⃣ Normalize + validate
+    rows.forEach((rawRow, index) => {
+      const r = normalizeKeys(rawRow);
 
-      if (!r.name && !r.Name) {
+      const name =
+        r.name ||
+        r.customername ||
+        r.clientname;
+
+      const mobileRaw =
+        r.mobile ||
+        r.mobileno ||
+        r.phone ||
+        "";
+
+      const mobile = String(mobileRaw).trim();
+      const normalizedMobile = mobile.replace(/\D/g, "");
+
+      if (!name) {
         errors.push({ row: index + 2, error: "Name required" });
         return;
       }
@@ -697,25 +757,29 @@ export async function bulkCreateCustomersFromFile(req: Request, res: Response) {
         return;
       }
 
+      const products = parseProductsFromRow(rawRow);
+
       prepared.push({
-        name: r.name || r.Name,
-        customerCompanyName: r.customerCompanyName || r.company || null,
-        contactPerson: r.contactPerson || null,
-        mobile: mobileRaw,
+        name,
+        customerCompanyName:
+          r.customercompanyname || r.companyname || null,
+        contactPerson:
+          r.contactperson || null,
+        mobile,
         normalizedMobile,
         email: r.email || null,
-        emails: r.emails ? JSON.parse(r.emails) : [],
-        phones: r.phones ? JSON.parse(r.phones) : [],
+        emails: safeJSONParse(r.emails, []),
+        phones: safeJSONParse(r.phones, []),
         city: r.city || null,
         state: r.state || null,
-        joiningDate: r.joiningDate
-          ? new Date(r.joiningDate)
+        joiningDate: r.joiningdate
+          ? new Date(r.joiningdate)
           : new Date(),
-        customerCategory: r.customerCategory || null,
-        businessCategory: r.businessCategory || null,
-        tallySerial: r.tallySerial || null,
-        tallyVersion: r.tallyVersion || null,
-        products: r.products ? JSON.parse(r.products) : [],
+        customerCategory: r.customercategory || null,
+        businessCategory: r.businesscategory || null,
+        tallySerial: r.tallyserial || null,
+        tallyVersion: r.tallyversion || null,
+        products,
       });
     });
 
@@ -762,15 +826,15 @@ export async function bulkCreateCustomersFromFile(req: Request, res: Response) {
       tallyVersion: c.tallyVersion,
       products: c.products?.length
         ? {
-            active: c.products.map((p: any) => ({
-              id: randomUUID(),
-              name: p.name,
-              price: p.price ?? 0,
-              status: "ACTIVE",
-              addedAt: new Date(),
-            })),
-            history: [],
-          }
+          active: c.products.map((p: any) => ({
+            id: randomUUID(),
+            name: p.name,
+            price: p.price ?? 0,
+            status: "ACTIVE",
+            addedAt: new Date(),
+          })),
+          history: [],
+        }
         : undefined,
       createdBy: req.user?.accountId,
     }));
