@@ -957,16 +957,19 @@ export async function listTasksAdmin(req: Request, res: Response) {
 
     const where: any = { deletedAt: null };
 
+    if (req.query.isRecurring === "true") where.isRecurring = true;
+    if (req.query.isRecurring === "false") where.isRecurring = false;
+
     if (status) where.status = status as TaskStatus;
     if (priority) where.priority = priority as TaskPriority;
     if (projectId) where.projectId = projectId;
     if (stepId) where.stepId = stepId;
 
-    
+
     if (isSelfTask === "true") where.isSelfTask = true;
     if (isSelfTask === "false") where.isSelfTask = false;
 
-     if (fromDate || toDate) {
+    if (fromDate || toDate) {
       where.createdAt = {};
       if (fromDate) {
         const start = new Date(fromDate);
@@ -1004,15 +1007,15 @@ export async function listTasksAdmin(req: Request, res: Response) {
 
     // Dynamic sort — whitelist prevents injection
     const SORTABLE_FIELDS: Record<string, string> = {
-      priority:  "priority",
+      priority: "priority",
       createdAt: "createdAt",
-      dueDate:   "dueDate",
+      dueDate: "dueDate",
       updatedAt: "updatedAt",
-      title:     "title",
-      status:    "status",
+      title: "title",
+      status: "status",
     };
     const sortField = SORTABLE_FIELDS[sortBy] ?? "priority";
-    const sortDir   = sortOrder === "asc" ? "asc" : "desc";
+    const sortDir = sortOrder === "asc" ? "asc" : "desc";
 
     // const orderBy = [
     //   { [sortField]: sortDir },
@@ -1640,11 +1643,11 @@ export async function getMyTasksUser(req: Request, res: Response) {
 
     // Dynamic sort — whitelist to prevent injection
     const SORTABLE_FIELDS: Record<string, string> = {
-      dueDate:   "dueDate",
-      priority:  "priority",
+      dueDate: "dueDate",
+      priority: "priority",
       createdAt: "createdAt",
       updatedAt: "updatedAt",
-      title:     "title",
+      title: "title",
     };
     const sortField = SORTABLE_FIELDS[sortBy] ?? "dueDate";
     const sortOrder = sortDir === "desc" ? "desc" : "asc";
@@ -3715,5 +3718,81 @@ export async function updateTaskLabelsAdmin(req: Request, res: Response) {
   } catch (err: any) {
     console.error("[updateTaskLabelsAdmin]", err);
     return sendErrorResponse(res, 500, err?.message ?? "Failed to update labels");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   PATCH /admin/tasks/:id/recurrence
+   Update recurrence settings for any task (admin only).
+───────────────────────────────────────────────────────────── */
+export async function updateTaskRecurrenceAdmin(req: Request, res: Response) {
+  try {
+    if (!assertAdmin(req, res)) return;
+
+    const adminAccountId = req.user?.accountId;
+    if (!adminAccountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+    const { id } = req.params;
+    const {
+      isRecurring,
+      recurrenceType,
+      recurrenceRule,
+    } = req.body as {
+      isRecurring: boolean;
+      recurrenceType?: string;
+      recurrenceRule?: Record<string, unknown> | null;
+    };
+
+    const task = await prisma.task.findUnique({
+      where: { id, deletedAt: null },
+      select: { id: true, isRecurring: true, recurrenceType: true, projectId: true },
+    });
+    if (!task) return sendErrorResponse(res, 404, "Task not found");
+
+    if (isRecurring && (!recurrenceType || recurrenceType === "ONE_TIME")) {
+      return sendErrorResponse(res, 400, "recurrenceType cannot be ONE_TIME when isRecurring is true");
+    }
+
+    const data: Record<string, any> = {
+      isRecurring: Boolean(isRecurring),
+      recurrenceType: isRecurring ? recurrenceType : "ONE_TIME",
+      recurrenceRule: isRecurring && recurrenceRule ? recurrenceRule : null,
+    };
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.task.update({
+        where: { id },
+        data,
+        select: TASK_DETAIL_SELECT,
+      });
+
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: id,
+          action: "UPDATED",
+          performedBy: adminAccountId,
+          projectId: task.projectId,
+          taskId: id,
+          fromState: { isRecurring: task.isRecurring, recurrenceType: task.recurrenceType },
+          toState: data,
+          meta: { updatedFields: ["isRecurring", "recurrenceType", "recurrenceRule"] },
+        },
+      });
+
+      return result;
+    });
+
+    const recipients = await resolveTaskRecipients(id);
+    emitTaskPatch(id, recipients, {
+      isRecurring: updated.isRecurring,
+      recurrenceType: updated.recurrenceType,
+      updatedAt: updated.updatedAt,
+    });
+
+    return sendSuccessResponse(res, 200, "Recurrence settings updated", updated);
+  } catch (err: any) {
+    console.error("[updateTaskRecurrenceAdmin]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to update recurrence");
   }
 }

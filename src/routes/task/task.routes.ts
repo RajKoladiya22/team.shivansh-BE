@@ -21,6 +21,7 @@ import {
   listRecurringTasksAdmin,
   triggerRecurringSchedulerAdmin,
   listTaskInstancesAdmin,
+  updateTaskRecurrenceAdmin,
   // ── User ──────────────────────────────────────────────────────
   createSelfTaskUser,
   getMyTasksUser,
@@ -79,6 +80,8 @@ router.get("/admin/tasks/:id", requireRole("ADMIN"), getTaskByIdAdmin);
 router.patch("/admin/tasks/:id", requireRole("ADMIN"), updateTaskAdmin);
 router.delete("/admin/task/bulk", requireRole("ADMIN"), deleteTasksBulkAdmin);
 router.delete("/admin/tasks/:id", requireRole("ADMIN"), deleteTaskAdmin);
+
+router.patch("/admin/tasks/:id/recurrence", requireRole("ADMIN"), updateTaskRecurrenceAdmin);
 
 // ── Task-level actions ─────────────────────────────────────────
 router.post("/admin/tasks/:id/assign", requireRole("ADMIN"), assignTaskAdmin);
