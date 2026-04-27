@@ -785,8 +785,8 @@ export async function bulkCreateCustomersFromFile(req: Request, res: Response) {
           : new Date(),
         customerCategory: r.customercategory || null,
         businessCategory: r.businesscategory || null,
-        tallySerial: r.tallyserial || null,
-        tallyVersion: r.tallyversion || null,
+        tallySerial: r.tallyserial != null ? String(r.tallyserial) : null,
+        tallyVersion: r.tallyversion != null ? String(r.tallyversion) : null,
         products,
       });
     });
