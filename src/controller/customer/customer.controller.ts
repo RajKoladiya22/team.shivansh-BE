@@ -694,6 +694,44 @@ function normalizeTallyVersion(value: any): string | null {
   return map[v] || null; // return null if unknown
 }
 
+function parseExcelDate(value: any): string | null {
+  if (!value) return null;
+
+  // Case 1: Excel numeric date (like 44826)
+  if (!isNaN(value)) {
+    const excelEpoch = new Date(1899, 11, 30);
+    const date = new Date(excelEpoch.getTime() + Number(value) * 86400000);
+    return date.toISOString().split("T")[0];
+  }
+
+  const str = String(value).trim();
+
+  // Case 2: DD-MMM-YYYY (22-Sep-2022)
+  const match = str.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (match) {
+    const [, day, monStr, year] = match;
+
+    const months: Record<string, number> = {
+      jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+      jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+    };
+
+    const month = months[monStr.toLowerCase()];
+    if (month === undefined) return null;
+
+    const date = new Date(Number(year), month, Number(day));
+    return date.toISOString().split("T")[0];
+  }
+
+  // Case 3: fallback (ISO or others)
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    return d.toISOString().split("T")[0];
+  }
+
+  return null;
+}
+
 function parseRowToCustomer(rawRow: any) {
   const r = normalizeKeys(rawRow);
 
@@ -721,7 +759,7 @@ function parseRowToCustomer(rawRow: any) {
     contactPerson: r.contactperson || null,
     city: r.city || null,
     state: r.state || null,
-    joiningDate: r.joiningdate ? r.joiningdate : null,
+    joiningDate: parseExcelDate(r.joiningdate),
     customerCategory: r.customercategory || null,
     businessCategory: r.businesscategory || null,
     tallySerial: r.tallyserial != null ? String(r.tallyserial) : null,
@@ -804,7 +842,10 @@ export async function verifyBulkCustomers(req: Request, res: Response) {
 
       // Format checks (warnings only)
       if (p.email && !isValidEmail(p.email)) warnings.push(`Email "${p.email}" looks invalid`);
-      if (p.joiningDate && isNaN(new Date(p.joiningDate).getTime())) {
+
+      const parsedDate = parseExcelDate(p.joiningDate);
+
+      if (p.joiningDate && !parsedDate) {
         warnings.push(`Joining date "${p.joiningDate}" couldn't be parsed`);
       }
       if (!p.customerCompanyName) warnings.push("Company name is empty");
