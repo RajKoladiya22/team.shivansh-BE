@@ -652,218 +652,279 @@ export async function removeCustomerProductAdmin(req: Request, res: Response) {
 }
 
 
+// ─── helpers (same as existing) ───────────────────────────────
 function normalizeKeys(obj: any) {
   const newObj: any = {};
-
   Object.keys(obj).forEach((key) => {
-    const normalized = key
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, ""); // 🔥 removes spaces, dots, underscores
-
-    newObj[normalized] = obj[key];
+    newObj[key.toLowerCase().replace(/[^a-z0-9]/g, "")] = obj[key];
   });
-
   return newObj;
 }
 
-function safeJSONParse(value: any, fallback: any = []) {
-  try {
-    if (!value) return fallback;
-    if (typeof value === "object") return value;
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
+function normalizeMobile(mobile: string) {
+  return String(mobile)
+    .replace(/[\s\-\.]/g, "")
+    .replace(/^\+/, "")
+    .replace(/^91(\d{10})$/, "$1")
+    .replace(/^0(\d{10})$/, "$1")
+    .replace(/\D/g, "")
+    .slice(0, 10);
 }
 
-function parseProductsFromRow(rawRow: any) {
-  const productRaw =
-    rawRow["Product Name"] ||
-    rawRow["product name"] ||
-    // rawRow["Product"] ||
-    // rawRow["product"] ||
-    "";
-
-  if (!productRaw) return [];
-
-  if (typeof productRaw === "string") {
-    return Array.from(
-      new Set(
-        productRaw
-          .split(",")
-          .map((p: string) => p.trim())
-          .filter(Boolean)
-      )
-    ).map((name) => ({ name }));
-  }
-
-  if (Array.isArray(productRaw)) {
-    return productRaw.map((name: string) => ({ name }));
-  }
-
-  return [];
+function isValidEmail(email: string) {
+  return /\S+@\S+\.\S+/.test(email);
 }
 
-export async function bulkCreateCustomersFromFile(req: Request, res: Response) {
+function parseRowToCustomer(rawRow: any) {
+  const r = normalizeKeys(rawRow);
+
+  const name =
+    r.name || r.customername || r.clientname || r.partyname ||
+    r.accountname || r.contactperson || "";
+
+  const mobileRaw = r.mobile || r.mobileno || r.phone || "";
+  const mobile = String(mobileRaw).trim();
+  const normalizedMobile = normalizeMobile(mobile);
+
+  const productRaw = rawRow["Product Name"] || rawRow["product name"] || r.productname || "";
+  const products: string[] = productRaw
+    ? Array.from(new Set(
+      String(productRaw).split(",").map((p: string) => p.trim()).filter(Boolean)
+    ))
+    : [];
+
+  return {
+    name: String(name).trim(),
+    mobile,
+    normalizedMobile,
+    email: r.email || null,
+    customerCompanyName: r.customercompanyname || r.companyname || null,
+    contactPerson: r.contactperson || null,
+    city: r.city || null,
+    state: r.state || null,
+    joiningDate: r.joiningdate ? r.joiningdate : null,
+    customerCategory: r.customercategory || null,
+    businessCategory: r.businesscategory || null,
+    tallySerial: r.tallyserial != null ? String(r.tallyserial) : null,
+    tallyVersion: r.tallyversion != null ? String(r.tallyversion) : null,
+    products,
+    notes: r.notes || null,
+  };
+}
+
+type RowStatus = "valid" | "error" | "warning" | "duplicate_file" | "duplicate_db";
+
+interface VerifiedRow {
+  rowIndex: number;          // 1-based for display
+  raw: Record<string, any>;  // original row from file
+  parsed: ReturnType<typeof parseRowToCustomer>;
+  status: RowStatus;
+  errors: string[];
+  warnings: string[];
+}
+
+// ─────────────────────────────────────────────────────────────
+// POST /customers/bulk/verify
+// Body: { rows: any[] }  OR multipart file
+// Returns full per-row verification result
+// ─────────────────────────────────────────────────────────────
+export async function verifyBulkCustomers(req: Request, res: Response) {
   try {
-    if (!req.user?.accountId)
-      return sendErrorResponse(res, 401, "Unauthorized");
-
-    if (!req.file)
-      return sendErrorResponse(res, 400, "File is required");
-
     let rows: any[] = [];
 
-    // 1️⃣ Parse file
-    if (req.file.originalname.endsWith(".xlsx")) {
-      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      rows = XLSX.utils.sheet_to_json(sheet);
-    } else if (req.file.originalname.endsWith(".csv")) {
-      rows = parse(req.file.buffer.toString(), {
-        columns: true,
-        skip_empty_lines: true,
-      });
+    // Accept either JSON body rows OR uploaded file
+    if (req.file) {
+      if (req.file.originalname.endsWith(".xlsx")) {
+        const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+        rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      } else if (req.file.originalname.endsWith(".csv")) {
+        rows = parse(req.file.buffer.toString(), { columns: true, skip_empty_lines: true });
+      } else {
+        return sendErrorResponse(res, 400, "Only .xlsx or .csv files are accepted");
+      }
+    } else if (Array.isArray(req.body?.rows)) {
+      rows = req.body.rows;
     } else {
-      return sendErrorResponse(res, 400, "Only Excel or CSV allowed");
+      return sendErrorResponse(res, 400, "Provide a file or rows array");
     }
 
-    if (!rows.length)
-      return sendErrorResponse(res, 400, "File is empty");
+    if (!rows.length) return sendErrorResponse(res, 400, "No data found");
 
-    const errors: any[] = [];
-    const prepared: any[] = [];
+    // 1. Parse all rows
+    const parsed = rows.map((raw, i) => ({
+      rowIndex: i + 2, // +2 = header row + 1-based
+      raw,
+      parsed: parseRowToCustomer(raw),
+    }));
 
-    // 2️⃣ Normalize + validate
-    rows.forEach((rawRow, index) => {
-      const r = normalizeKeys(rawRow);
+    // 2. Collect all valid mobiles for DB check
+    const validMobiles = parsed
+      .map((r) => r.parsed.normalizedMobile)
+      .filter((m) => m && m.length >= 10);
 
-      const name =
-        r.name ||
-        r.customername ||
-        r.clientname ||
-        r.partyname ||
-        r.accountname ||
-        r.contactperson;
+    const existingInDB = await prisma.customer.findMany({
+      where: { normalizedMobile: { in: validMobiles } },
+      select: { normalizedMobile: true, name: true, id: true },
+    });
+    const dbMobileSet = new Map(existingInDB.map((e) => [e.normalizedMobile, e]));
 
-      const mobileRaw =
-        r.mobile ||
-        r.mobileno ||
-        r.phone ||
-        "";
+    // 3. Build verified rows with per-row errors/warnings
+    const seenInFile = new Map<string, number>(); // mobile -> first rowIndex
+    const verified: VerifiedRow[] = parsed.map(({ rowIndex, raw, parsed: p }) => {
+      const errors: string[] = [];
+      const warnings: string[] = [];
+      let status: RowStatus = "valid";
 
-      const mobile = String(mobileRaw).trim();
-      const normalizedMobile = mobile.replace(/\D/g, "");
-
-      if (!name) {
-        errors.push({ row: index + 2, error: "Name required" });
-        return;
+      // Required fields
+      if (!p.name) errors.push("Name is missing");
+      if (!p.mobile) {
+        errors.push("Mobile number is missing");
+      } else if (p.normalizedMobile.length < 10) {
+        errors.push(`Mobile "${p.mobile}" is invalid (need 10 digits)`);
       }
 
-      if (!normalizedMobile || normalizedMobile.length < 10) {
-        errors.push({ row: index + 2, error: "Invalid mobile" });
-        return;
+      // Format checks (warnings only)
+      if (p.email && !isValidEmail(p.email)) warnings.push(`Email "${p.email}" looks invalid`);
+      if (p.joiningDate && isNaN(new Date(p.joiningDate).getTime())) {
+        warnings.push(`Joining date "${p.joiningDate}" couldn't be parsed`);
+      }
+      if (!p.customerCompanyName) warnings.push("Company name is empty");
+      if (!p.tallySerial) warnings.push("Tally serial is empty");
+
+      // Duplicates within file
+      if (p.normalizedMobile && p.normalizedMobile.length >= 10) {
+        if (seenInFile.has(p.normalizedMobile)) {
+          errors.push(`Duplicate mobile in file (same as row ${seenInFile.get(p.normalizedMobile)})`);
+          status = "duplicate_file";
+        } else {
+          seenInFile.set(p.normalizedMobile, rowIndex);
+        }
+
+        // Duplicate in DB
+        if (status !== "duplicate_file" && dbMobileSet.has(p.normalizedMobile)) {
+          const existing = dbMobileSet.get(p.normalizedMobile)!;
+          errors.push(`Already exists in database (customer: ${existing.name})`);
+          status = "duplicate_db";
+        }
       }
 
-      const products = parseProductsFromRow(rawRow);
+      if (errors.length && status === "valid") status = "error";
+      else if (!errors.length && warnings.length && status === "valid") status = "warning";
 
-      prepared.push({
-        name,
-        customerCompanyName:
-          r.customercompanyname || r.companyname || null,
-        contactPerson:
-          r.contactperson || null,
-        mobile,
-        normalizedMobile,
-        email: r.email || null,
-        emails: safeJSONParse(r.emails, []),
-        phones: safeJSONParse(r.phones, []),
-        city: r.city || null,
-        state: r.state || null,
-        joiningDate: r.joiningdate
-          ? new Date(r.joiningdate)
-          : new Date(),
-        customerCategory: r.customercategory || null,
-        businessCategory: r.businesscategory || null,
-        tallySerial: r.tallyserial != null ? String(r.tallyserial) : null,
-        tallyVersion: r.tallyversion != null ? String(r.tallyversion) : null,
-        products,
-      });
+      return { rowIndex, raw, parsed: p, status, errors, warnings };
     });
 
-    // 3️⃣ Deduplicate within file
-    const uniqueMap = new Map<string, any>();
-    prepared.forEach((c) => {
-      if (!uniqueMap.has(c.normalizedMobile)) {
-        uniqueMap.set(c.normalizedMobile, c);
-      }
+    const stats = {
+      total: verified.length,
+      valid: verified.filter((r) => r.status === "valid").length,
+      warnings: verified.filter((r) => r.status === "warning").length,
+      errors: verified.filter((r) => r.status === "error").length,
+      duplicateInFile: verified.filter((r) => r.status === "duplicate_file").length,
+      duplicateInDB: verified.filter((r) => r.status === "duplicate_db").length,
+    };
+
+    return sendSuccessResponse(res, 200, "Verification complete", { stats, rows: verified });
+  } catch (err: any) {
+    console.error("verifyBulkCustomers error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Verification failed");
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// POST /customers/bulk/import
+// Body: { rows: CorrectedRow[] }
+// Each row is the parsed+corrected customer data (NOT raw file rows).
+// Skips rows with status error/duplicate.
+// ─────────────────────────────────────────────────────────────
+export async function bulkImportCustomers(req: Request, res: Response) {
+  try {
+    if (!req.user?.accountId) return sendErrorResponse(res, 401, "Unauthorized");
+
+    const { rows } = req.body as {
+      rows: {
+        name: string;
+        mobile: string;
+        normalizedMobile: string;
+        email?: string | null;
+        customerCompanyName?: string | null;
+        contactPerson?: string | null;
+        city?: string | null;
+        state?: string | null;
+        joiningDate?: string | null;
+        customerCategory?: string | null;
+        businessCategory?: string | null;
+        tallySerial?: string | null;
+        tallyVersion?: string | null;
+        products?: string[];
+        notes?: string | null;
+      }[];
+    };
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return sendErrorResponse(res, 400, "No rows to import");
+    }
+
+    // Re-validate mobiles and deduplicate
+    const validRows = rows.filter(
+      (r) => r.name?.trim() && r.normalizedMobile && r.normalizedMobile.length >= 10
+    );
+
+    const uniqueMap = new Map<string, typeof validRows[0]>();
+    validRows.forEach((r) => {
+      if (!uniqueMap.has(r.normalizedMobile)) uniqueMap.set(r.normalizedMobile, r);
     });
+    const unique = Array.from(uniqueMap.values());
 
-    const uniqueCustomers = Array.from(uniqueMap.values());
-
-    // 4️⃣ DB duplicate check
-    const mobiles = uniqueCustomers.map((c) => c.normalizedMobile);
-
+    // Check DB duplicates one more time (safety net)
+    const mobiles = unique.map((r) => r.normalizedMobile);
     const existing = await prisma.customer.findMany({
       where: { normalizedMobile: { in: mobiles } },
       select: { normalizedMobile: true },
     });
-
     const existingSet = new Set(existing.map((e) => e.normalizedMobile));
 
-    const toCreate = uniqueCustomers.filter(
-      (c) => !existingSet.has(c.normalizedMobile)
-    );
+    const toCreate = unique.filter((r) => !existingSet.has(r.normalizedMobile));
 
-    // 5️⃣ Transform for DB
-    const finalData = toCreate.map((c) => ({
-      name: c.name,
-      customerCompanyName: c.customerCompanyName,
-      contactPerson: c.contactPerson,
-      mobile: c.mobile,
-      normalizedMobile: c.normalizedMobile,
-      email: c.email,
-      emails: c.emails,
-      phones: c.phones,
-      city: c.city,
-      state: c.state,
-      joiningDate: c.joiningDate,
-      customerCategory: c.customerCategory,
-      businessCategory: c.businessCategory,
-      tallySerial: c.tallySerial,
-      tallyVersion: c.tallyVersion,
-      products: c.products?.length
+    const finalData = toCreate.map((r) => ({
+      name: r.name.trim(),
+      mobile: r.mobile,
+      normalizedMobile: r.normalizedMobile,
+      email: r.email || null,
+      customerCompanyName: r.customerCompanyName || null,
+      contactPerson: r.contactPerson || null,
+      city: r.city || null,
+      state: r.state || null,
+      joiningDate: r.joiningDate ? new Date(r.joiningDate) : new Date(),
+      customerCategory: r.customerCategory || null,
+      businessCategory: r.businessCategory || null,
+      tallySerial: r.tallySerial || null,
+      tallyVersion: r.tallyVersion || null,
+      notes: r.notes || null,
+      products: r.products?.length
         ? {
-          active: c.products.map((p: any) => ({
+          active: r.products.map((name) => ({
             id: randomUUID(),
-            name: p.name,
-            price: p.price ?? 0,
+            name,
+            price: 0,
             status: "ACTIVE",
             addedAt: new Date(),
           })),
           history: [],
         }
         : undefined,
-      createdBy: req.user?.accountId,
+      createdBy: req.user!.accountId,
     }));
 
-    // 6️⃣ Insert
-    await prisma.customer.createMany({
-      data: finalData,
-      skipDuplicates: true,
-    });
+    await prisma.customer.createMany({ data: finalData, skipDuplicates: true });
 
-    // 7️⃣ Response
-    return sendSuccessResponse(res, 201, "Bulk upload complete", {
-      totalRows: rows.length,
-      validRows: prepared.length,
-      inserted: finalData.length,
-      duplicatesInDB: existingSet.size,
-      errors,
+    return sendSuccessResponse(res, 201, "Import complete", {
+      submitted: rows.length,
+      imported: finalData.length,
+      skippedDuplicates: existingSet.size,
+      skippedInvalid: rows.length - validRows.length,
     });
-
   } catch (err: any) {
-    console.error("Bulk upload error:", err);
-    return sendErrorResponse(res, 500, err.message);
+    console.error("bulkImportCustomers error:", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Import failed");
   }
 }

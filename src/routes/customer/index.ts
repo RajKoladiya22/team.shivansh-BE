@@ -10,7 +10,8 @@ import {
   expireCustomerProduct,
   deleteCustomerPermanentAdmin,
   removeCustomerProductAdmin,
-  bulkCreateCustomersFromFile,
+  bulkImportCustomers,
+  verifyBulkCustomers,
 } from "../../controller/customer/customer.controller";
 import multer from "multer";
 
@@ -38,6 +39,7 @@ router.delete(
   requireAuth,
   removeCustomerProductAdmin,
 );
-router.post("/bulk", requireAuth, upload.single("file"), bulkCreateCustomersFromFile);
+router.post("/bulk/verify", requireAuth, upload.single("file"), verifyBulkCustomers);
+router.post("/bulk/import", requireAuth, bulkImportCustomers);
 
 export default router;
