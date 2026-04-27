@@ -675,6 +675,25 @@ function isValidEmail(email: string) {
   return /\S+@\S+\.\S+/.test(email);
 }
 
+function normalizeTallyVersion(value: any): string | null {
+  if (!value) return null;
+
+  const v = String(value).trim().toLowerCase();
+
+  const map: Record<string, string> = {
+    silver: "Tally Prime Silver",
+    gold: "Tally Prime Gold",
+    auditor: "Tally Auditor",
+
+    // also support already-correct values
+    "tally prime silver": "Tally Prime Silver",
+    "tally prime gold": "Tally Prime Gold",
+    "tally auditor": "Tally Auditor",
+  };
+
+  return map[v] || null; // return null if unknown
+}
+
 function parseRowToCustomer(rawRow: any) {
   const r = normalizeKeys(rawRow);
 
@@ -706,7 +725,7 @@ function parseRowToCustomer(rawRow: any) {
     customerCategory: r.customercategory || null,
     businessCategory: r.businesscategory || null,
     tallySerial: r.tallyserial != null ? String(r.tallyserial) : null,
-    tallyVersion: r.tallyversion != null ? String(r.tallyversion) : null,
+    tallyVersion: normalizeTallyVersion(r.tallyversion),
     products,
     notes: r.notes || null,
   };
