@@ -654,10 +654,15 @@ export async function removeCustomerProductAdmin(req: Request, res: Response) {
 
 function normalizeKeys(obj: any) {
   const newObj: any = {};
+
   Object.keys(obj).forEach((key) => {
-    const normalized = key.toLowerCase().replace(/\s+/g, "");
+    const normalized = key
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, ""); // 🔥 removes spaces, dots, underscores
+
     newObj[normalized] = obj[key];
   });
+
   return newObj;
 }
 
@@ -736,7 +741,10 @@ export async function bulkCreateCustomersFromFile(req: Request, res: Response) {
       const name =
         r.name ||
         r.customername ||
-        r.clientname;
+        r.clientname ||
+        r.partyname ||
+        r.accountname ||
+        r.contactperson;
 
       const mobileRaw =
         r.mobile ||
