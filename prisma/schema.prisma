@@ -1394,6 +1394,10 @@ model Customer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  isTncAccepted   Boolean  @default(false)
+  tncAcceptedAt   DateTime?
+  tncToken        String?  @unique
+
   leads      Lead[]
   quotations Quotation[]
 

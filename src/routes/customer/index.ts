@@ -14,6 +14,7 @@ import {
   verifyBulkCustomers,
 } from "../../controller/customer/customer.controller";
 import multer from "multer";
+import { sendTncEmail, getTncByToken, acceptTnc } from "../../controller/customer/tnc.controller";
 
 const upload = multer({
   storage: multer.memoryStorage(), // important (buffer access)
@@ -22,11 +23,14 @@ const upload = multer({
 
 const router = Router();
 
+// ─── Customer CRUD ────────────────────────────────────────────────────────────
 router.get("/", requireAuth, getCustomerList);
 router.get("/:id", requireAuth, getCustomerDetails);
 router.post("/", requireAuth, createCustomer);
 router.patch("/:id", requireAuth, updateCustomer);
 router.delete("/:id", requireAuth, deleteCustomer);
+
+// ─── Products ─────────────────────────────────────────────────────────────────
 router.post("/:id/products", requireAuth, addCustomerProduct);
 router.patch(
   "/:id/products/:productId/expire",
@@ -34,12 +38,22 @@ router.patch(
   expireCustomerProduct,
 );
 router.delete("/:id/permanent", requireAuth, deleteCustomerPermanentAdmin);
+
+// ─── Admin: hard delete ───────────────────────────────────────────────────────
 router.delete(
   "/:customerId/products/:productId",
   requireAuth,
   removeCustomerProductAdmin,
 );
+
+// ─── Bulk import ──────────────────────────────────────────────────────────────
 router.post("/bulk/verify", requireAuth, upload.single("file"), verifyBulkCustomers);
 router.post("/bulk/import", requireAuth, bulkImportCustomers);
+
+
+// ─── Terms & Conditions ───────────────────────────────────────────────────────
+// Admin: generate token + send email to customer
+router.post("/:id/send-tnc", requireAuth, sendTncEmail);
+
 
 export default router;

@@ -1,6 +1,7 @@
 // src/core/middleware/jwt/index.ts
 import jwt, { JwtPayload } from "jsonwebtoken";
 import { env } from "../../../config/database.config";
+import crypto from "crypto";
 
 const JWT_SECRET = env.JWT_ACCESS_TOKEN_SECRET!;
 const JWT_EXPIRES_IN = env.JWT_ACCESS_EXPIRES_IN as `${number}${string}`;
@@ -31,4 +32,8 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
     roles: decoded.roles as string[],
     permissions: decoded.permissions as string[],
   };
+}
+
+export function generateTncToken() {
+  return crypto.randomBytes(32).toString("hex");
 }

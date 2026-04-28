@@ -7,6 +7,7 @@ import {
 import { randomUUID } from "crypto";
 import XLSX from "xlsx";
 import { parse } from "csv-parse/sync";
+import { generateTncToken } from "@core/middleware/jwt";
 
 /**
  * GET /customers
@@ -214,6 +215,8 @@ export async function getCustomerList(req: Request, res: Response) {
           products: true,
           isActive: true,
           createdAt: true,
+          isTncAccepted: true,
+          tncAcceptedAt: true,
           _count: { select: { leads: true } },
           leads: true,
         },
