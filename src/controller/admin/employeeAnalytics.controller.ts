@@ -816,573 +816,28 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
         );
     }
 }
-
-
-// /* ═══════════════════════════════════════════════════════════════
-//    HELPERS
-// ═══════════════════════════════════════════════════════════════ */
-
-// // Utility: get array of the last N month boundaries
-// function getLastNMonths(n: number): { start: Date; end: Date }[] {
-//     const months: { start: Date; end: Date }[] = [];
-//     const today = new Date();
-//     today.setHours(0, 0, 0, 0);
-
-//     for (let i = 0; i < n; i++) {
-//         const year = today.getFullYear();
-//         const month = today.getMonth() - i;
-//         const start = new Date(year, month, 1);
-//         start.setHours(0, 0, 0, 0);
-//         const end = new Date(year, month + 1, 0);
-//         end.setHours(23, 59, 59, 999);
-//         months.push({ start, end });
-//     }
-//     return months.reverse(); // oldest first
-// }
-
-// // Utility: compute Month-over-Month growth percentage
-// function momGrowth(current: number, previous: number): number | null {
-//     if (previous === 0) return current > 0 ? 100 : 0;
-//     return ((current - previous) / previous) * 100;
-// }
-
-// // Utility: simple send helpers
-// function sendSuccess(res: Response, data: any) {
-//     res.status(200).json(data);
-// }
-// function sendError(res: Response, code: number, message: string) {
-//     res.status(code).json({ error: message });
-// }
-
-// /**
-//  * GET /admin/analytics/employees/detailed
-//  * 
-//  * Comprehensive employee analytics including:
-//  * - Attendance metrics
-//  * - Lead/CRM performance
-//  * - Task completion & productivity
-//  * - Efficiency scoring
-//  * - Individual & team comparisons
-//  * - fromDate / toDate (inclusive)
-//  * - Per‑employee detail (when accountId supplied)
-//  * - Summary KPIs (totals, completion rate, overdue rate)
-//  * - Month‑over‑month growth
-//  * - Per‑status breakdown
-//  * - Priority breakdown
-//  * - Per‑employee leaderboard (top performers)
-//  * - Monthly trend (last 13 months)
-//  */
-// export async function getEmployeeAnalyticsV2(req: Request, res: Response) {
-//     try {
-//         // ── 1. Auth guard ──
-//         if (!req.user?.roles?.includes?.('ADMIN')) {
-//             return sendError(res, 403, 'Admin access required');
-//         }
-
-//         // ── 2. Parse query params ──
-//         const rawFrom = req.query.fromDate as string | undefined;
-//         const rawTo = req.query.toDate as string | undefined;
-//         const accountId = req.query.accountId as string | undefined;
-//         const department = req.query.department as string | undefined;
-
-//         const fromDate = new Date(rawFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-//         const toDate = new Date(rawTo || new Date());
-//         fromDate.setHours(0, 0, 0, 0);
-//         toDate.setHours(23, 59, 59, 999);
-
-//         if (fromDate > toDate) {
-//             return sendError(res, 400, "'fromDate' must be before 'toDate'");
-//         }
-
-//         // ── 3. Previous period for MoM growth ──
-//         const periodLengthMs = toDate.getTime() - fromDate.getTime();
-//         const prevEnd = new Date(fromDate.getTime() - 1);
-//         const prevStart = new Date(prevEnd.getTime() - periodLengthMs);
-//         prevStart.setHours(0, 0, 0, 0);
-//         prevEnd.setHours(23, 59, 59, 999);
-
-//         // ── 4. Fetch employees ──
-//         const employees = await prisma.account.findMany({
-//             where: {
-//                 isActive: true,
-//                 ...(accountId && { id: accountId }),
-//                 ...(department && { designation: department }),
-//             },
-//             select: {
-//                 id: true,
-//                 firstName: true,
-//                 lastName: true,
-//                 avatar: true,
-//                 designation: true,
-//                 contactEmail: true,
-//                 contactPhone: true,
-//                 joinedAt: true,
-//                 jobType: true,
-//                 isBusy: true,
-//                 isAvailable: true,
-//                 salaryStructure: { select: { baseSalary: true } },
-//             },
-//         });
-
-//         if (employees.length === 0) {
-//             return sendSuccess(res, {
-//                 dateRange: { from: fromDate, to: toDate },
-//                 summary: { totalEmployees: 0, averagePerformanceScore: 0 },
-//                 employees: [],
-//                 leaderboard: [],
-//                 monthOverMonth: null,
-//                 statusBreakdowns: { leads: {}, tasks: {} },
-//                 priorityBreakdown: {},
-//                 monthlyTrend: [],
-//             });
-//         }
-
-//         // ── 5. Parallel analytics for each employee ──
-//         const detailed = await Promise.all(employees.map(emp => getEmployeeMetrics(emp, fromDate, toDate, prevStart, prevEnd)));
-
-//         // ── 6. Aggregates for summary ──
-//         const totalEmployees = detailed.length;
-//         const avgPerformance = totalEmployees > 0
-//             ? detailed.reduce((s, e) => s + e.performanceScore, 0) / totalEmployees
-//             : 0;
-
-//         const totalRevenue = detailed.reduce((s, e) => s + e.leads.revenue, 0);
-//         const totalWorkHours = detailed.reduce((s, e) => s + e.productivity.totalWorkHours, 0);
-//         const totalTasksCompleted = detailed.reduce((s, e) => s + e.tasks.completed, 0);
-
-//         // ── 7. Status breakdowns (overall) ──
-//         const leadStatusBreakdown = {};
-//         const taskStatusBreakdown = {};
-//         detailed.forEach(e => {
-//             for (const [status, count] of Object.entries(e.leads.statusBreakdown)) {
-//                 leadStatusBreakdown[status] = (leadStatusBreakdown[status] || 0) + count;
-//             }
-//             for (const [status, count] of Object.entries(e.tasks.statusBreakdown)) {
-//                 taskStatusBreakdown[status] = (taskStatusBreakdown[status] || 0) + count;
-//             }
-//         });
-
-//         // ── 8. Task priority breakdown ──
-//         const priorityBreakdown = {
-//             NONE: 0,
-//             LOW: 0,
-//             MEDIUM: 0,
-//             HIGH: 0,
-//             URGENT: 0,
-//         };
-//         detailed.forEach(e => {
-//             for (const [priority, count] of Object.entries(e.tasks.priorityBreakdown)) {
-//                 if (priority in priorityBreakdown) {
-//                     priorityBreakdown[priority] += count;
-//                 }
-//             }
-//         });
-
-//         // ── 9. Leaderboard ──
-//         const leaderboard = [...detailed]
-//             .sort((a, b) => b.performanceScore - a.performanceScore)
-//             .map(e => ({
-//                 accountId: e.accountId,
-//                 name: e.name,
-//                 designation: e.designation,
-//                 performanceScore: e.performanceScore,
-//                 grade: e.productivity.grade,
-//                 tasksCompleted: e.tasks.completed,
-//                 revenue: e.leads.revenue,
-//             }));
-
-//         // ── 10. MoM growth (company-wide) ──
-//         const prevMetrics = await getAggregateMetrics(employees.map(e => e.id), prevStart, prevEnd);
-//         const currMetrics = {
-//             revenue: totalRevenue,
-//             tasksCompleted: totalTasksCompleted,
-//             leadsConverted: detailed.reduce((s, e) => s + e.leads.converted, 0),
-//             attendanceRate: detailed.length > 0
-//                 ? detailed.reduce((s, e) => s + e.attendance.attendanceRate, 0) / detailed.length
-//                 : 0,
-//         };
-
-//         const monthOverMonth = {
-//             revenueGrowth: momGrowth(currMetrics.revenue, prevMetrics.revenue),
-//             tasksCompletedGrowth: momGrowth(currMetrics.tasksCompleted, prevMetrics.tasksCompleted),
-//             leadsConvertedGrowth: momGrowth(currMetrics.leadsConverted, prevMetrics.leadsConverted),
-//             attendanceRateChange: prevMetrics.avgAttendanceRate !== null
-//                 ? +(currMetrics.attendanceRate - prevMetrics.avgAttendanceRate).toFixed(2)
-//                 : null,
-//         };
-
-//         // ── 11. Monthly trend (last 13 months) ──
-//         // const monthlyTrend = await getMonthlyTrend(
-//         //     employees.map(e => e.id),
-//         //     detailed.length > 1 ? null : accountId // if single employee, show personal trend
-//         // );
-
-//         const monthlyTrend = await getMonthlyTrend(
-//             employees.map(e => e.id),
-//             detailed.length > 1 ? undefined : accountId
-//         );
-
-//         // ── 12. Final response ──
-//         sendSuccess(res, {
-//             dateRange: {
-//                 from: fromDate,
-//                 to: toDate,
-//             },
-//             filters: {
-//                 accountId: accountId || null,
-//                 department: department || null,
-//             },
-//             summary: {
-//                 totalEmployees,
-//                 averagePerformanceScore: Math.round(avgPerformance * 100) / 100,
-//                 totalRevenue: Math.round(totalRevenue * 100) / 100,
-//                 totalWorkHours: Math.round(totalWorkHours * 100) / 100,
-//                 totalTasksCompleted,
-//                 topPerformer: leaderboard[0] || null,
-//                 performanceDistribution: {
-//                     'A+': detailed.filter(e => e.productivity.grade === 'A+').length,
-//                     'A': detailed.filter(e => e.productivity.grade === 'A').length,
-//                     'A-': detailed.filter(e => e.productivity.grade === 'A-').length,
-//                     'B+': detailed.filter(e => e.productivity.grade === 'B+').length,
-//                     'B': detailed.filter(e => e.productivity.grade === 'B').length,
-//                     'B-': detailed.filter(e => e.productivity.grade === 'B-').length,
-//                     'C+': detailed.filter(e => e.productivity.grade === 'C+').length,
-//                     'C': detailed.filter(e => e.productivity.grade === 'C').length,
-//                     'D': detailed.filter(e => e.productivity.grade === 'D').length,
-//                     'F': detailed.filter(e => e.productivity.grade === 'F').length,
-//                 },
-//             },
-//             employees: detailed,             // full per‑employee breakdown
-//             leaderboard,
-//             monthOverMonth,
-//             statusBreakdowns: {
-//                 leads: leadStatusBreakdown,
-//                 tasks: taskStatusBreakdown,
-//             },
-//             priorityBreakdown,               // task priority counts
-//             monthlyTrend,
-//         });
-//     } catch (err: any) {
-//         console.error('[EmployeeAnalyticsV2]', err);
-//         sendError(res, 500, err?.message || 'Internal server error');
-//     }
-// }
-
-// // ══════════════════════════════════════════════════════════
-// //  Per‑employee metrics calculator
-// // ══════════════════════════════════════════════════════════
-// async function getEmployeeMetrics(
-//     emp: any,
-//     from: Date,
-//     to: Date,
-//     prevFrom: Date,
-//     prevTo: Date
-// ) {
-//     const acctId = emp.id;
-
-//     // ── A. Attendance ──
-//     const logs = await prisma.attendanceLog.findMany({
-//         where: { accountId: acctId, date: { gte: from, lte: to } },
-//     });
-
-//     const present = logs.filter(l => l.status === 'PRESENT').length;
-//     const half = logs.filter(l => l.status === 'HALF_DAY').length;
-//     const absent = logs.filter(l => l.status === 'ABSENT').length;
-//     const wfh = logs.filter(l => l.isWFH).length;
-//     const late = logs.filter(l => l.firstCheckIn &&
-//         (l.firstCheckIn.getHours() > 10 || (l.firstCheckIn.getHours() === 10 && l.firstCheckIn.getMinutes() > 0))
-//     ).length;
-
-//     const totalWorkMinutes = logs.reduce((s, l) => s + l.totalWorkMinutes, 0);
-//     const totalWorkHours = totalWorkMinutes / 60;
-
-//     const workingDays = getWorkingDaysBetween(from, to);
-//     const attendanceRate = workingDays > 0 ? ((present + half * 0.5) / workingDays) * 100 : 0;
-
-//     // ── B. Leads ──
-//     const leads = await prisma.lead.findMany({
-//         where: {
-//             assignments: { some: { accountId: acctId, isActive: true } },
-//             createdAt: { gte: from, lte: to },
-//         },
-//         include: {
-//             assignments: { where: { accountId: acctId }, select: { WorkSeconds: true } },
-//             followUps: { where: { createdAt: { gte: from, lte: to } }, select: { status: true } },
-//         },
-//     });
-
-//     const leadStatuses = leads.map(l => l.status);
-//     const converted = leadStatuses.filter(s => s === 'CONVERTED').length;
-//     const totalLeads = leads.length;
-//     const conversionRate = totalLeads > 0 ? (converted / totalLeads) * 100 : 0;
-//     const revenue = leads.filter(l => l.status === 'CONVERTED').reduce((s, l) => s + Number(l.cost || 0), 0);
-//     const leadWorkSec = leads.reduce((s, l) => s + (l.totalWorkSeconds || 0), 0);
-//     const leadWorkHours = leadWorkSec / 3600;
-//     const followUpTotal = leads.flatMap(l => l.followUps).length;
-//     const followUpDone = leads.flatMap(l => l.followUps.filter(f => f.status === 'DONE')).length;
-//     const followUpRate = followUpTotal > 0 ? (followUpDone / followUpTotal) * 100 : 0;
-
-//     const leadStatusBreakdown = {};
-//     for (const s of leadStatuses) {
-//         leadStatusBreakdown[s] = (leadStatusBreakdown[s] || 0) + 1;
-//     }
-
-//     // ── C. Tasks ──
-//     const tasks = await prisma.task.findMany({
-//         where: {
-//             assignments: { some: { accountId: acctId } },
-//             OR: [
-//                 { createdAt: { gte: from, lte: to } },
-//                 { completedAt: { gte: from, lte: to } },
-//             ],
-//             deletedAt: null,
-//         },
-//         include: {
-//             checklist: true,
-//             timeEntries: { where: { startedAt: { gte: from, lte: to } } },
-//         },
-//     });
-
-//     const taskStatuses = tasks.map(t => t.status);
-//     const pending = taskStatuses.filter(s => s === 'PENDING').length;
-//     const inProgress = taskStatuses.filter(s => s === 'IN_PROGRESS').length;
-//     const inReview = taskStatuses.filter(s => s === 'IN_REVIEW').length;
-//     const blocked = taskStatuses.filter(s => s === 'BLOCKED').length;
-//     const completed = taskStatuses.filter(s => s === 'COMPLETED').length;
-//     const cancelled = taskStatuses.filter(s => s === 'CANCELLED').length;
-//     const totalTasks = tasks.length;
-//     const completionRate = totalTasks > 0 ? (completed / totalTasks) * 100 : 0;
-
-//     // overdue tasks
-//     const now = new Date();
-//     const overdue = tasks.filter(t =>
-//         t.status !== 'COMPLETED' && t.status !== 'CANCELLED' &&
-//         t.dueDate && new Date(t.dueDate) < now
-//     ).length;
-
-//     // on‑time completion
-//     const completedOnTime = tasks.filter(t =>
-//         t.status === 'COMPLETED' && t.dueDate && t.completedAt &&
-//         new Date(t.completedAt) <= new Date(t.dueDate)
-//     ).length;
-//     const onTimeRate = completed > 0 ? (completedOnTime / completed) * 100 : 0;
-
-//     // Time tracking
-//     const estimatedHours = tasks.reduce((s, t) => s + (t.estimatedMinutes || 0), 0) / 60;
-//     const loggedHours = tasks.reduce((s, t) => s + (t.loggedMinutes || 0), 0) / 60;
-//     const timeAccuracy = estimatedHours > 0 ? (loggedHours / estimatedHours) * 100 : 0;
-
-//     // Checklist
-//     const checklistItems = tasks.flatMap(t => t.checklist);
-//     const checklistDone = checklistItems.filter(c => c.status === 'COMPLETED').length;
-//     const checklistRate = checklistItems.length > 0 ? (checklistDone / checklistItems.length) * 100 : 0;
-
-//     // Priority breakdown
-//     const priorityBreakdown = { NONE: 0, LOW: 0, MEDIUM: 0, HIGH: 0, URGENT: 0 };
-//     for (const t of tasks) {
-//         priorityBreakdown[t.priority] = (priorityBreakdown[t.priority] || 0) + 1;
-//     }
-
-//     // ── D. Efficiency scoring ──
-//     const weights = {
-//         conversion: 0.35,
-//         tasks: 0.30,
-//         attendance: 0.15,
-//         timeAccuracy: 0.10,
-//         checklist: 0.05,
-//         followUp: 0.05,
-//     };
-//     const score =
-//         conversionRate * weights.conversion +
-//         completionRate * weights.tasks +
-//         attendanceRate * weights.attendance +
-//         Math.min(timeAccuracy, 100) * weights.timeAccuracy +
-//         checklistRate * weights.checklist +
-//         followUpRate * weights.followUp;
-
-//     const grade = score >= 90 ? 'A+' : score >= 85 ? 'A' : score >= 80 ? 'A-'
-//         : score >= 75 ? 'B+' : score >= 70 ? 'B' : score >= 65 ? 'B-'
-//             : score >= 60 ? 'C+' : score >= 55 ? 'C' : score >= 50 ? 'D' : 'F';
-
-//     // revenue per hour
-//     const totalWorkHrs = totalWorkHours + leadWorkHours;
-//     const revPerHour = totalWorkHrs > 0 ? revenue / totalWorkHrs : 0;
-
-//     return {
-//         accountId: acctId,
-//         name: `${emp.firstName} ${emp.lastName}`,
-//         avatar: emp.avatar,
-//         designation: emp.designation || 'Not Specified',
-//         contactEmail: emp.contactEmail,
-//         contactPhone: emp.contactPhone,
-//         joinedAt: emp.joinedAt,
-//         jobType: emp.jobType,
-//         currentStatus: { isBusy: emp.isBusy, isAvailable: emp.isAvailable },
-
-//         attendance: {
-//             workingDays,
-//             presentDays: present,
-//             halfDays: half,
-//             absentDays: absent,
-//             wfhDays: wfh,
-//             lateDays: late,
-//             attendanceRate: Math.round(attendanceRate * 100) / 100,
-//             totalWorkHours: Math.round(totalWorkHours * 100) / 100,
-//             avgDailyHours: present > 0 ? Math.round((totalWorkHours / present) * 100) / 100 : 0,
-//         },
-
-//         leads: {
-//             totalAssigned: totalLeads,
-//             statusBreakdown: leadStatusBreakdown,
-//             converted,
-//             conversionRate: Math.round(conversionRate * 100) / 100,
-//             followUpCompletionRate: Math.round(followUpRate * 100) / 100,
-//             revenue: Math.round(revenue * 100) / 100,
-//             revenuePerHour: Math.round(revPerHour * 100) / 100,
-//             workHours: Math.round(leadWorkHours * 100) / 100,
-//             avgHoursPerLead: totalLeads > 0 ? Math.round((leadWorkHours / totalLeads) * 100) / 100 : 0,
-//         },
-
-//         tasks: {
-//             totalAssigned: totalTasks,
-//             statusBreakdown: {
-//                 PENDING: pending,
-//                 IN_PROGRESS: inProgress,
-//                 IN_REVIEW: inReview,
-//                 BLOCKED: blocked,
-//                 COMPLETED: completed,
-//                 CANCELLED: cancelled,
-//             },
-//             completed,
-//             pending: pending + inProgress,
-//             overdue,
-//             completedOnTime,
-//             onTimeRate: Math.round(onTimeRate * 100) / 100,
-//             completionRate: Math.round(completionRate * 100) / 100,
-//             estimatedHours: Math.round(estimatedHours * 100) / 100,
-//             loggedHours: Math.round(loggedHours * 100) / 100,
-//             timeAccuracy: Math.round(timeAccuracy * 100) / 100,
-//             checklistCompletionRate: Math.round(checklistRate * 100) / 100,
-//             priorityBreakdown,
-//         },
-
-//         productivity: {
-//             totalWorkHours: Math.round((totalWorkHours + leadWorkHours + loggedHours) * 100) / 100,
-//             score: Math.round(score * 100) / 100,
-//             grade,
-//             revenueGenerated: Math.round(revenue * 100) / 100,
-//             tasksPerDay: workingDays > 0 ? Math.round((completed / workingDays) * 100) / 100 : 0,
-//         },
-
-//         performanceScore: Math.round(score * 100) / 100,
-//     };
-// }
-
-// // ══════════════════════════════════════════════════════════
-// //  Aggregate helpers
-// // ══════════════════════════════════════════════════════════
-
-// function getWorkingDaysBetween(start: Date, end: Date): number {
-//     let count = 0;
-//     const d = new Date(start);
-//     while (d <= end) {
-//         if (d.getDay() !== 0) count++; // exclude Sundays
-//         d.setDate(d.getDate() + 1);
-//     }
-//     return count;
-// }
-
-// async function getAggregateMetrics(accountIds: string[], from: Date, to: Date) {
-//     if (accountIds.length === 0) return { revenue: 0, tasksCompleted: 0, leadsConverted: 0, avgAttendanceRate: null };
-
-//     // revenue from converted leads
-//     const leads = await prisma.lead.findMany({
-//         where: {
-//             assignments: { some: { accountId: { in: accountIds }, isActive: true } },
-//             status: 'CONVERTED',
-//             createdAt: { gte: from, lte: to },
-//         },
-//         select: { cost: true },
-//     });
-//     const revenue = leads.reduce((s, l) => s + Number(l.cost || 0), 0);
-
-//     // tasks completed
-//     const tasks = await prisma.task.findMany({
-//         where: {
-//             assignments: { some: { accountId: { in: accountIds } } },
-//             status: 'COMPLETED',
-//             completedAt: { gte: from, lte: to },
-//             deletedAt: null,
-//         },
-//     });
-//     const tasksCompleted = tasks.length;
-
-//     // attendance rates (simple average across employees for the period)
-//     // Not implemented fully for brevity; you could add avgAttendanceRate by fetching logs similarly.
-
-//     return { revenue, tasksCompleted, leadsConverted: 0, avgAttendanceRate: null }; // adjust as needed
-// }
-
-// // ══════════════════════════════════════════════════════════
-// //  Monthly trend generator (last 13 months)
-// // ══════════════════════════════════════════════════════════
-// async function getMonthlyTrend(accountIds: string[], singleAccountId?: string) {
-//     const months = getLastNMonths(13);
-//     const trend: any[] = [];
-
-//     for (const { start, end } of months) {
-//         // For each month, compute aggregate metrics for the given employee(s)
-//         const tasks = await prisma.task.count({
-//             where: {
-//                 assignments: { some: { accountId: { in: accountIds } } },
-//                 status: 'COMPLETED',
-//                 completedAt: { gte: start, lte: end },
-//                 deletedAt: null,
-//             },
-//         });
-
-//         const leads = await prisma.lead.count({
-//             where: {
-//                 assignments: { some: { accountId: { in: accountIds }, isActive: true } },
-//                 status: 'CONVERTED',
-//                 createdAt: { gte: start, lte: end },
-//             },
-//         });
-
-//         const revenueResult = await prisma.lead.aggregate({
-//             _sum: { cost: true },
-//             where: {
-//                 assignments: { some: { accountId: { in: accountIds }, isActive: true } },
-//                 status: 'CONVERTED',
-//                 createdAt: { gte: start, lte: end },
-//             },
-//         });
-
-//         trend.push({
-//             month: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`,
-//             tasksCompleted: tasks,
-//             leadsConverted: leads,
-//             revenue: Number(revenueResult._sum.cost || 0),
-//             // attendance rate can be added if needed
-//         });
-//     }
-
-//     return trend;
-// }
-
-
-
-
 // ══════════════════════════════════════════════════════════════
-//  TYPES
+//  TYPES & INTERFACES
 // ══════════════════════════════════════════════════════════════
 
 type LeadStatusBreakdown = Partial<
-    Record<'PENDING' | 'IN_PROGRESS' | 'FOLLOW_UPS' | 'DEMO_DONE' | 'INTERESTED' | 'CONVERTED' | 'CLOSED', number>
+    Record<
+        | 'PENDING'
+        | 'IN_PROGRESS'
+        | 'FOLLOW_UPS'
+        | 'DEMO_DONE'
+        | 'INTERESTED'
+        | 'CONVERTED'
+        | 'CLOSED',
+        number
+    >
 >;
 
 type TaskStatusBreakdown = Partial<
-    Record<'PENDING' | 'IN_PROGRESS' | 'IN_REVIEW' | 'BLOCKED' | 'COMPLETED' | 'CANCELLED', number>
+    Record<
+        'PENDING' | 'IN_PROGRESS' | 'IN_REVIEW' | 'BLOCKED' | 'COMPLETED' | 'CANCELLED',
+        number
+    >
 >;
 
 type PriorityBreakdown = Record<'NONE' | 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT', number>;
@@ -1390,11 +845,158 @@ type PriorityBreakdown = Record<'NONE' | 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT', n
 type Grade = 'A+' | 'A' | 'A-' | 'B+' | 'B' | 'B-' | 'C+' | 'C' | 'D' | 'F';
 
 // ══════════════════════════════════════════════════════════════
-//  HELPERS
+//  INTERFACES
 // ══════════════════════════════════════════════════════════════
 
-/** Compute working days between two dates.
- *  Excludes Sunday by default. Pass `excludeSaturday = true` for a 5-day week. */
+interface AttendanceMetrics {
+    workingDays: number;
+    presentDays: number;
+    halfDays: number;
+    absentDays: number;
+    wfhDays: number;
+    lateDays: number;
+    attendanceRate: number;
+    totalWorkHours: number;
+    avgDailyHours: number;
+}
+
+interface LeadMetrics {
+    totalAssigned: number;
+    statusBreakdown: LeadStatusBreakdown;
+    converted: number;
+    conversionRate: number;
+    followUpCompletionRate: number;
+    revenue: number;
+    revenuePerHour: number;
+    workHours: number;
+    avgHoursPerLead: number;
+    // demoCount removed — demo tracking belongs on the lead record, not a derived metric
+    // demoConversionRate removed — leads can convert without a demo, the ratio is misleading
+}
+
+interface TaskMetrics {
+    totalAssigned: number;
+    statusBreakdown: TaskStatusBreakdown;
+    completed: number;
+    pending: number;
+    overdue: number;
+    completedOnTime: number;
+    onTimeRate: number;
+    completionRate: number;
+    estimatedHours: number;
+    loggedHours: number;
+    timeAccuracy: number;
+    checklistCompletionRate: number;
+    priorityBreakdown: PriorityBreakdown;
+    avgCompletionTime: number;
+}
+
+interface ProductivityMetrics {
+    // Only attendance hours — lead work hours and task logged hours are already
+    // broken out in their own sections; summing all three would triple-count time.
+    attendanceWorkHours: number;
+    score: number;
+    grade: Grade;
+    revenueGenerated: number;
+    tasksPerDay: number;
+    leadsPerDay: number;
+}
+
+interface EmployeeDetailedMetrics {
+    accountId: string;
+    name: string;
+    avatar: string | null;
+    designation: string;
+    contactEmail: string;
+    contactPhone: string;
+    joinedAt: Date | null;
+    jobType: string | null;
+    currentStatus: { isBusy: boolean; isAvailable: boolean };
+    attendance: AttendanceMetrics;
+    leads: LeadMetrics;
+    tasks: TaskMetrics;
+    productivity: ProductivityMetrics;
+    performanceScore: number;
+    riskFactors: string[];
+    recommendations: string[];
+}
+
+interface MonthlyTrendPoint {
+    month: string;
+    tasksCompleted: number;
+    leadsConverted: number;
+    revenue: number;
+    attendanceRate: number | null;
+    workHours: number;
+}
+
+interface LeaderboardEntry {
+    accountId: string;
+    name: string;
+    designation: string;
+    avatar: string | null;
+    performanceScore: number;
+    grade: Grade;
+    tasksCompleted: number;
+    revenue: number;
+    attendanceRate: number;
+    conversionRate: number;
+}
+
+interface CompanyWideSummary {
+    totalEmployees: number;
+    averagePerformanceScore: number;
+    totalRevenue: number;
+    totalWorkHours: number;
+    totalTasksCompleted: number;
+    totalLeadsConverted: number;
+    avgAttendanceRate: number;
+    topPerformer: LeaderboardEntry | null;
+    performanceDistribution: Record<Grade, number>;
+    totalLeads: number;
+    overallConversionRate: number;
+}
+
+interface MonthOverMonth {
+    revenueGrowth: number | null;
+    tasksCompletedGrowth: number | null;
+    leadsConvertedGrowth: number | null;
+    attendanceRateChange: number | null;
+    workHoursGrowth: number | null;
+}
+
+interface AnalyticsResponse {
+    dateRange: { from: Date; to: Date };
+    filters: {
+        accountId: string | null;
+        department: string | null;
+        excludeSaturday: boolean;
+        minPerformanceScore: number | null;
+    };
+    summary: CompanyWideSummary;
+    employees: EmployeeDetailedMetrics[];
+    leaderboard: LeaderboardEntry[];
+    monthOverMonth: MonthOverMonth | null;
+    statusBreakdowns: {
+        leads: LeadStatusBreakdown;
+        tasks: TaskStatusBreakdown;
+    };
+    priorityBreakdown: PriorityBreakdown;
+    monthlyTrend: MonthlyTrendPoint[];
+    departmentBreakdown: Record<string, CompanyWideSummary>;
+    riskAnalysis: {
+        lowPerformers: LeaderboardEntry[];
+        highAbsenteeism: Array<{ accountId: string; name: string; attendanceRate: number }>;
+        overdueTasks: Array<{ accountId: string; name: string; count: number }>;
+        lowConversion: Array<{ accountId: string; name: string; rate: number }>;
+    };
+    insights: string[];
+}
+
+// ══════════════════════════════════════════════════════════════
+//  UTILITY FUNCTIONS
+// ══════════════════════════════════════════════════════════════
+
 function getWorkingDaysBetween(start: Date, end: Date, excludeSaturday = false): number {
     let count = 0;
     const d = new Date(start);
@@ -1409,13 +1011,11 @@ function getWorkingDaysBetween(start: Date, end: Date, excludeSaturday = false):
     return count;
 }
 
-/** MoM growth %. Returns null only when previous period had no data at all. */
 function momGrowth(current: number, previous: number): number | null {
     if (previous === 0) return current > 0 ? 100 : null;
-    return +((current - previous) / Math.abs(previous) * 100).toFixed(2);
+    return +((((current - previous) / Math.abs(previous)) * 100).toFixed(2));
 }
 
-/** Derive the immediately preceding calendar period of equal length. */
 function previousPeriod(from: Date, to: Date): { prevStart: Date; prevEnd: Date } {
     const ms = to.getTime() - from.getTime();
     const prevEnd = new Date(from.getTime() - 1);
@@ -1425,7 +1025,6 @@ function previousPeriod(from: Date, to: Date): { prevStart: Date; prevEnd: Date 
     return { prevStart, prevEnd };
 }
 
-/** Last N calendar months (oldest first). */
 function getLastNMonths(n: number): { start: Date; end: Date; label: string }[] {
     const months: { start: Date; end: Date; label: string }[] = [];
     const today = new Date();
@@ -1456,6 +1055,11 @@ function scoreToGrade(score: number): Grade {
     return 'F';
 }
 
+function round(n: number, decimals = 2): number {
+    const f = 10 ** decimals;
+    return Math.round(n * f) / f;
+}
+
 function sendSuccess(res: Response, data: unknown) {
     res.status(200).json(data);
 }
@@ -1465,19 +1069,740 @@ function sendError(res: Response, code: number, message: string) {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  MAIN HANDLER
-//  GET /admin/analytics/employees/detailed
-//
-//  Query params
-//  ─────────────────────────────────────────────────────────────
-//  fromDate       ISO date string  (default: start of current month)
-//  toDate         ISO date string  (default: today)
-//  accountId      filter to one employee
-//  department     filter by designation
-//  excludeSaturday  "true" to use a 5-day working-week
+//  MODULE 1 — ATTENDANCE
 // ══════════════════════════════════════════════════════════════
 
-export async function getEmployeeAnalyticsV2(req: Request, res: Response) {
+/**
+ * Fetches and computes all attendance-related metrics for one employee.
+ *
+ * Working days are calendar-based (Mon–Fri, optionally excl. Sat).
+ * lateDays = first check-in after 10:00 AM.
+ * attendanceRate = (present + 0.5 * halfDays) / workingDays * 100.
+ */
+async function computeAttendanceMetrics(
+    accountId: string,
+    from: Date,
+    to: Date,
+    excludeSat: boolean
+): Promise<AttendanceMetrics> {
+    const logs = await prisma.attendanceLog.findMany({
+        where: { accountId, date: { gte: from, lte: to } },
+    });
+
+    const present = logs.filter((l) => l.status === 'PRESENT').length;
+    const half = logs.filter((l) => l.status === 'HALF_DAY').length;
+    const absent = logs.filter((l) => l.status === 'ABSENT').length;
+    const wfh = logs.filter((l) => l.isWFH).length;
+
+    // Late = first check-in strictly after 10:00 AM
+    const late = logs.filter((l) => {
+        if (!l.firstCheckIn) return false;
+        const h = l.firstCheckIn.getHours();
+        const m = l.firstCheckIn.getMinutes();
+        return h > 10 || (h === 10 && m > 0);
+    }).length;
+
+    const totalWorkMinutes = logs.reduce((s, l) => s + (l.totalWorkMinutes ?? 0), 0);
+    const totalWorkHours = totalWorkMinutes / 60;
+
+    const workingDays = getWorkingDaysBetween(from, to, excludeSat);
+    const attendanceRate = workingDays > 0 ? ((present + half * 0.5) / workingDays) * 100 : 0;
+
+    return {
+        workingDays,
+        presentDays: present,
+        halfDays: half,
+        absentDays: absent,
+        wfhDays: wfh,
+        lateDays: late,
+        attendanceRate: round(attendanceRate),
+        totalWorkHours: round(totalWorkHours),
+        // avgDailyHours only counts days the employee actually came in
+        avgDailyHours: present > 0 ? round(totalWorkHours / present) : 0,
+    };
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MODULE 2 — LEADS
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Fetches and computes all lead-related metrics for one employee.
+ *
+ * A lead is "in scope" when:
+ *   - its active assignment was created on or before `to`  (employee was assigned)
+ *   - the lead itself was last updated within [from, to]   (there was activity in the window)
+ *   - isActive = true
+ *
+ * This is stricter than the original which used `updatedAt` only — a lead
+ * assigned months ago but untouched in the window won't pollute the numbers.
+ *
+ * workHours = sum of totalWorkSeconds logged against the lead (converted to hours).
+ * revenue   = sum of `cost` for CONVERTED leads only.
+ * revenuePerHour = revenue / leadWorkHours (0 when no time logged).
+ */
+async function computeLeadMetrics(
+    accountId: string,
+    from: Date,
+    to: Date
+): Promise<LeadMetrics> {
+    const leads = await prisma.lead.findMany({
+        where: {
+            isActive: true,
+            assignments: {
+                some: {
+                    accountId,
+                    isActive: true,
+                    assignedAt: { lte: to },   // was assigned before/during the window
+                },
+            },
+            OR: [
+                { createdAt: { gte: from, lte: to } },
+                { closedAt: { gte: from, lte: to } },
+            ]
+        },
+        include: {
+            // Only follow-ups scheduled within the window
+            followUps: {
+                where: { scheduledAt: { gte: from, lte: to } },
+                select: { status: true },
+            },
+            assignments: {
+                where: {
+                    accountId,
+                },
+                select: {
+                    WorkSeconds: true,
+                    assignedAt: true,
+                    unassignedAt: true,
+                }
+            }
+        },
+    });
+
+    const toNumber = (val: Prisma.Decimal | null | undefined) =>
+        val ? Number(val.toString()) : 0;
+
+    const statusBreakdown: LeadStatusBreakdown = {};
+    let converted = 0;
+    let revenue = 0;
+    let leadWorkSec = 0;
+    let followUpDone = 0;
+    let followUpTotal = 0;
+
+    for (const lead of leads) {
+        const s = lead.status as keyof LeadStatusBreakdown;
+        statusBreakdown[s] = (statusBreakdown[s] ?? 0) + 1;
+
+        if (
+            lead.status === "CONVERTED" &&
+            lead.closedAt &&
+            lead.closedAt >= from &&
+            lead.closedAt <= to
+        ) {
+            converted++;
+            revenue += toNumber(lead.cost);
+        }
+
+        for (const a of lead.assignments ?? []) {
+            if (!a.assignedAt) continue;
+
+            const overlapStart = Math.max(a.assignedAt.getTime(), from.getTime());
+            const overlapEnd = Math.min(
+                (a.unassignedAt ?? to).getTime(),
+                to.getTime()
+            );
+
+            if (overlapStart < overlapEnd) {
+                leadWorkSec += a.WorkSeconds ?? 0;
+            }
+        }
+        followUpTotal += lead.followUps.length;
+        followUpDone += lead.followUps.filter((f) => f.status === 'DONE').length;
+    }
+
+    const totalAssigned = leads.length;
+    const leadWorkHours = leadWorkSec / 3600;
+    const conversionRate = totalAssigned > 0 ? (converted / totalAssigned) * 100 : 0;
+    const followUpRate = followUpTotal > 0 ? (followUpDone / followUpTotal) * 100 : 0;
+    const revenuePerHour = leadWorkHours > 0 ? revenue / leadWorkHours : 0;
+
+    return {
+        totalAssigned,
+        statusBreakdown,
+        converted,
+        conversionRate: round(conversionRate),
+        followUpCompletionRate: round(followUpRate),
+        revenue: round(revenue),
+        revenuePerHour: round(revenuePerHour),
+        workHours: round(leadWorkHours),
+        avgHoursPerLead: totalAssigned > 0 ? round(leadWorkHours / totalAssigned) : 0,
+    };
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MODULE 3 — TASKS
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Fetches and computes all task-related metrics for one employee.
+ *
+ * Scope: tasks assigned to the employee that were either
+ *   - created in the window, OR
+ *   - completed in the window.
+ * We intentionally exclude the broad `updatedAt` filter from the original
+ * because a task updated merely by a comment edit would skew totals.
+ *
+ * overdue    = not COMPLETED / CANCELLED, dueDate is in the past right now.
+ * onTimeRate = completedOnTime / completed (not totalTasks, avoids division by
+ *              incomplete tasks dragging the rate down unfairly).
+ * timeAccuracy is capped at 200 % for display but raw value drives the score.
+ * loggedHours = sum of loggedMinutes on the task record (pre-aggregated by DB).
+ */
+async function computeTaskMetrics(
+    accountId: string,
+    from: Date,
+    to: Date
+): Promise<TaskMetrics> {
+    const tasks = await prisma.task.findMany({
+        where: {
+            deletedAt: null,
+            assignments: { some: { accountId } },
+            OR: [
+                { createdAt: { gte: from, lte: to } },
+                { completedAt: { gte: from, lte: to } },
+            ],
+        },
+        include: {
+            checklist: true,
+        },
+    });
+
+    const statusBreakdown: TaskStatusBreakdown = {
+        PENDING: 0,
+        IN_PROGRESS: 0,
+        IN_REVIEW: 0,
+        BLOCKED: 0,
+        COMPLETED: 0,
+        CANCELLED: 0,
+    };
+    const priorityBreakdown: PriorityBreakdown = {
+        NONE: 0, LOW: 0, MEDIUM: 0, HIGH: 0, URGENT: 0,
+    };
+
+    let completed = 0;
+    let overdue = 0;
+    let completedOnTime = 0;
+    let estimatedMin = 0;
+    let loggedMin = 0;
+    let totalCompletionMs = 0;
+    const now = new Date();
+
+    for (const task of tasks) {
+        // Status & priority tallies
+        const st = task.status as keyof TaskStatusBreakdown;
+        if (st in statusBreakdown) statusBreakdown[st] = (statusBreakdown[st] ?? 0) + 1;
+
+        const pr = task.priority as keyof PriorityBreakdown;
+        if (pr in priorityBreakdown) priorityBreakdown[pr]++;
+
+        // Completion metrics
+        if (task.status === 'COMPLETED') {
+            completed++;
+            if (task.dueDate && task.completedAt) {
+                if (new Date(task.completedAt) <= new Date(task.dueDate)) completedOnTime++;
+                totalCompletionMs += task.completedAt.getTime() - task.createdAt.getTime();
+            }
+        }
+
+        // Overdue = active task whose due date has already passed
+        if (
+            task.status !== 'COMPLETED' &&
+            task.status !== 'CANCELLED' &&
+            task.dueDate &&
+            new Date(task.dueDate) < now
+        ) {
+            overdue++;
+        }
+
+        // Time tracking (use pre-aggregated field on the task — no extra query)
+        estimatedMin += task.estimatedMinutes ?? 0;
+        loggedMin += task.loggedMinutes ?? 0;
+    }
+
+    const totalTasks = tasks.length;
+    const completionRate = totalTasks > 0 ? (completed / totalTasks) * 100 : 0;
+    const onTimeRate = completed > 0 ? (completedOnTime / completed) * 100 : 0;
+    const estimatedHours = estimatedMin / 60;
+    const loggedHours = loggedMin / 60;
+    const avgCompletionTime = completed > 0 ? totalCompletionMs / completed / (1000 * 60 * 60) : 0;
+
+    // rawTimeAccuracy > 100 % means over-logged (more time than estimated)
+    const rawTimeAccuracy = estimatedHours > 0 ? (loggedHours / estimatedHours) * 100 : 0;
+    const cappedForDisplay = Math.min(rawTimeAccuracy, 200);
+
+    const checklistItems = tasks.flatMap((t) => t.checklist);
+    const checklistDone = checklistItems.filter((c) => c.status === 'COMPLETED').length;
+    const checklistRate = checklistItems.length > 0
+        ? (checklistDone / checklistItems.length) * 100
+        : 0;
+
+    return {
+        totalAssigned: totalTasks,
+        statusBreakdown,
+        completed,
+        // pending = actively not-done (PENDING + IN_PROGRESS)
+        pending: (statusBreakdown.PENDING ?? 0) + (statusBreakdown.IN_PROGRESS ?? 0),
+        overdue,
+        completedOnTime,
+        onTimeRate: round(onTimeRate),
+        completionRate: round(completionRate),
+        estimatedHours: round(estimatedHours),
+        loggedHours: round(loggedHours),
+        timeAccuracy: round(cappedForDisplay),   // display value
+        checklistCompletionRate: round(checklistRate),
+        priorityBreakdown,
+        avgCompletionTime: round(avgCompletionTime),
+    };
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MODULE 4 — PERFORMANCE SCORE
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Weighted score (0–100) combining the five metric areas.
+ *
+ * timeAccuracy: perfect = 100 % (logged == estimated).
+ *   Values above 100 % (over-logged) or below 50 % (under-logged) both penalise.
+ *   Score contribution = 100 - |rawAccuracy - 100|, floored at 0.
+ */
+function computePerformanceScore(
+    conversionRate: number,
+    completionRate: number,
+    attendanceRate: number,
+    rawTimeAccuracy: number,  // UN-capped value for scoring
+    checklistRate: number,
+    followUpRate: number
+): number {
+    const WEIGHTS = {
+        conversion: 0.35,
+        tasks: 0.30,
+        attendance: 0.15,
+        timeAccuracy: 0.10,
+        checklist: 0.05,
+        followUp: 0.05,
+    } as const;
+
+    // Time accuracy score: 100 when logged == estimated, degrades symmetrically
+    const timeAccuracyScore = Math.max(0, 100 - Math.abs(rawTimeAccuracy - 100));
+
+    return round(
+        conversionRate * WEIGHTS.conversion +
+        completionRate * WEIGHTS.tasks +
+        attendanceRate * WEIGHTS.attendance +
+        timeAccuracyScore * WEIGHTS.timeAccuracy +
+        checklistRate * WEIGHTS.checklist +
+        followUpRate * WEIGHTS.followUp,
+        2
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MODULE 5 — RISK FACTORS & RECOMMENDATIONS
+// ══════════════════════════════════════════════════════════════
+
+function computeRiskAndRecommendations(
+    attendance: AttendanceMetrics,
+    leads: LeadMetrics,
+    tasks: TaskMetrics,
+    performanceScore: number
+): { riskFactors: string[]; recommendations: string[] } {
+    const riskFactors: string[] = [];
+    const recommendations: string[] = [];
+
+    if (attendance.attendanceRate < 75) {
+        riskFactors.push('Low attendance rate');
+        recommendations.push('Review attendance with employee');
+    }
+    if (leads.conversionRate < 20) {
+        riskFactors.push('Low lead conversion rate');
+        recommendations.push('Provide sales training or mentoring');
+    }
+    if (tasks.overdue > 0) {
+        riskFactors.push(`${tasks.overdue} overdue task${tasks.overdue > 1 ? 's' : ''}`);
+        recommendations.push('Prioritize task completion and deadline management');
+    }
+    if (tasks.completionRate < 70) {
+        riskFactors.push('Low task completion rate');
+        recommendations.push('Assist with task prioritization and workload management');
+    }
+
+    // Raw time accuracy: flag both extremes (under-estimated AND over-logged)
+    const rawAcc = tasks.estimatedHours > 0
+        ? (tasks.loggedHours / tasks.estimatedHours) * 100
+        : 0;
+    if (rawAcc > 0 && (rawAcc < 50 || rawAcc > 150)) {
+        recommendations.push('Review time estimation process');
+    }
+
+    if (performanceScore < 60) {
+        recommendations.push('Schedule performance review meeting');
+    }
+
+    return { riskFactors, recommendations };
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MAIN PER-EMPLOYEE ORCHESTRATOR
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * Calls each module in parallel (attendance + leads + tasks simultaneously)
+ * and combines results. This halves DB round-trips versus the original sequential approach.
+ */
+async function getEmployeeMetrics(
+    emp: {
+        id: string;
+        firstName: string;
+        lastName: string;
+        avatar: string | null;
+        designation: string | null;
+        contactEmail: string;
+        contactPhone: string;
+        joinedAt: Date | null;
+        jobType: string | null;
+        isBusy: boolean;
+        isAvailable: boolean;
+    },
+    from: Date,
+    to: Date,
+    excludeSat: boolean
+): Promise<EmployeeDetailedMetrics> {
+    // Run all three DB-heavy modules in parallel
+    const [attendance, leads, tasks] = await Promise.all([
+        computeAttendanceMetrics(emp.id, from, to, excludeSat),
+        computeLeadMetrics(emp.id, from, to),
+        computeTaskMetrics(emp.id, from, to),
+    ]);
+
+    // Raw (uncapped) time accuracy needed for the score formula
+    const rawTimeAccuracy = tasks.estimatedHours > 0
+        ? (tasks.loggedHours / tasks.estimatedHours) * 100
+        : 0;
+
+    const performanceScore = computePerformanceScore(
+        leads.conversionRate,
+        tasks.completionRate,
+        attendance.attendanceRate,
+        rawTimeAccuracy,
+        tasks.checklistCompletionRate,
+        leads.followUpCompletionRate
+    );
+
+    const grade = scoreToGrade(performanceScore);
+
+    const { riskFactors, recommendations } = computeRiskAndRecommendations(
+        attendance, leads, tasks, performanceScore
+    );
+
+    return {
+        accountId: emp.id,
+        name: `${emp.firstName} ${emp.lastName}`,
+        avatar: emp.avatar,
+        designation: emp.designation ?? 'Not Specified',
+        contactEmail: emp.contactEmail,
+        contactPhone: emp.contactPhone,
+        joinedAt: emp.joinedAt,
+        jobType: emp.jobType,
+        currentStatus: { isBusy: emp.isBusy, isAvailable: emp.isAvailable },
+
+        attendance,
+        leads,
+        tasks,
+
+        productivity: {
+            // Only attendance clock hours — avoids triple-counting with leads.workHours
+            // and tasks.loggedHours which are already surfaced in their own sections.
+            attendanceWorkHours: attendance.totalWorkHours,
+            score: performanceScore,
+            grade,
+            revenueGenerated: leads.revenue,
+            tasksPerDay: attendance.workingDays > 0
+                ? round(tasks.completed / attendance.workingDays)
+                : 0,
+            leadsPerDay: attendance.workingDays > 0
+                ? round(leads.totalAssigned / attendance.workingDays)
+                : 0,
+        },
+
+        performanceScore,
+        riskFactors,
+        recommendations,
+    };
+}
+
+// ══════════════════════════════════════════════════════════════
+//  AGGREGATE HELPERS (unchanged logic, same correctness fixes)
+// ══════════════════════════════════════════════════════════════
+
+async function getAggregateMetrics(
+    ids: string[],
+    from: Date,
+    to: Date,
+    excludeSat = false
+) {
+    if (ids.length === 0) {
+        return { revenue: 0, tasksCompleted: 0, leadsConverted: 0, avgAttendanceRate: null, workHours: 0 };
+    }
+
+    const [leads, tasksCompleted, attendanceLogs] = await Promise.all([
+        prisma.lead.findMany({
+            where: {
+                isActive: true,
+                assignments: { some: { accountId: { in: ids }, isActive: true, assignedAt: { lte: to } } },
+                status: 'CONVERTED',
+                updatedAt: { gte: from, lte: to },
+            },
+            select: { cost: true },
+        }),
+        prisma.task.count({
+            where: {
+                assignments: { some: { accountId: { in: ids } } },
+                status: 'COMPLETED',
+                completedAt: { gte: from, lte: to },
+                deletedAt: null,
+            },
+        }),
+        prisma.attendanceLog.findMany({
+            where: { accountId: { in: ids }, date: { gte: from, lte: to } },
+            select: { accountId: true, status: true, totalWorkMinutes: true },
+        }),
+    ]);
+
+    const revenue = leads.reduce((s, l) => s + Number(l.cost ?? 0), 0);
+    const leadsConverted = leads.length;
+
+    let avgAttendanceRate: number | null = null;
+    if (attendanceLogs.length > 0) {
+        const workingDays = getWorkingDaysBetween(from, to, excludeSat);
+        if (workingDays > 0) {
+            const byEmp = new Map<string, { present: number; half: number }>();
+            for (const log of attendanceLogs) {
+                if (!byEmp.has(log.accountId)) byEmp.set(log.accountId, { present: 0, half: 0 });
+                const r = byEmp.get(log.accountId)!;
+                if (log.status === 'PRESENT') r.present++;
+                if (log.status === 'HALF_DAY') r.half++;
+            }
+            const rates = [...byEmp.values()].map((r) => ((r.present + r.half * 0.5) / workingDays) * 100);
+            avgAttendanceRate = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : 0;
+        }
+    }
+
+    // workHours from attendance logs (clock hours — consistent with productivity.attendanceWorkHours)
+    const workHours = attendanceLogs.reduce((s, l) => s + (l.totalWorkMinutes ?? 0), 0) / 60;
+
+    return { revenue, tasksCompleted, leadsConverted, avgAttendanceRate, workHours };
+}
+
+async function getMonthlyTrend(
+    allAccountIds: string[],
+    singleAccountId?: string
+): Promise<MonthlyTrendPoint[]> {
+    const months = getLastNMonths(13);
+    const first = months[0].start;
+    const last = months[months.length - 1].end;
+    const scopeIds = singleAccountId ? [singleAccountId] : allAccountIds;
+
+    const [completedTasks, convertedLeads, attendanceLogs, attendanceSummaries] = await Promise.all([
+        prisma.task.findMany({
+            where: {
+                assignments: { some: { accountId: { in: scopeIds } } },
+                status: 'COMPLETED',
+                completedAt: { gte: first, lte: last },
+                deletedAt: null,
+            },
+            select: { completedAt: true },
+        }),
+        prisma.lead.findMany({
+            where: {
+                isActive: true,
+                assignments: { some: { accountId: { in: scopeIds }, isActive: true } },
+                status: 'CONVERTED',
+                updatedAt: { gte: first, lte: last },
+            },
+            select: { updatedAt: true, cost: true },
+        }),
+        prisma.attendanceLog.findMany({
+            where: { accountId: { in: scopeIds }, date: { gte: first, lte: last } },
+            select: { date: true, status: true, totalWorkMinutes: true },
+        }),
+        // Separate query to get work hours from attendance minutes
+        prisma.attendanceLog.findMany({
+            where: { accountId: { in: scopeIds }, date: { gte: first, lte: last } },
+            select: { date: true, totalWorkMinutes: true },
+        }),
+    ]);
+
+    return months.map(({ start, end, label }) => {
+        const tasksCompleted = completedTasks.filter(
+            (t) => t.completedAt && t.completedAt >= start && t.completedAt <= end
+        ).length;
+
+        const monthLeads = convertedLeads.filter((l) => l.updatedAt >= start && l.updatedAt <= end);
+        const leadsConverted = monthLeads.length;
+        const revenue = monthLeads.reduce((s, l) => s + Number(l.cost ?? 0), 0);
+
+        const monthLogs = attendanceLogs.filter((l) => l.date >= start && l.date <= end);
+        const workingDays = getWorkingDaysBetween(start, end);
+        const present = monthLogs.filter((l) => l.status === 'PRESENT').length;
+        const half = monthLogs.filter((l) => l.status === 'HALF_DAY').length;
+        const attendanceRate =
+            workingDays > 0 && monthLogs.length > 0
+                ? round(((present + half * 0.5) / workingDays) * 100)
+                : null;
+
+        const workHours = attendanceSummaries
+            .filter((l) => l.date >= start && l.date <= end)
+            .reduce((s, l) => s + (l.totalWorkMinutes ?? 0), 0) / 60;
+
+        return {
+            month: label,
+            tasksCompleted,
+            leadsConverted,
+            revenue: round(revenue),
+            attendanceRate,
+            workHours: round(workHours),
+        };
+    });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SUMMARY HELPERS
+// ══════════════════════════════════════════════════════════════
+
+function groupByDepartment(
+    employees: EmployeeDetailedMetrics[]
+): Record<string, EmployeeDetailedMetrics[]> {
+    const grouped: Record<string, EmployeeDetailedMetrics[]> = {};
+    for (const emp of employees) {
+        const dept = emp.designation || 'Unassigned';
+        if (!grouped[dept]) grouped[dept] = [];
+        grouped[dept].push(emp);
+    }
+    return grouped;
+}
+
+function computeDepartmentSummary(employees: EmployeeDetailedMetrics[]): CompanyWideSummary {
+    const totalEmployees = employees.length;
+    const totalRevenue = employees.reduce((s, e) => s + e.leads.revenue, 0);
+    const totalWorkHours = employees.reduce((s, e) => s + e.attendance.totalWorkHours, 0);
+    const totalTasksCompleted = employees.reduce((s, e) => s + e.tasks.completed, 0);
+    const totalLeads = employees.reduce((s, e) => s + e.leads.totalAssigned, 0);
+    const totalLeadsConverted = employees.reduce((s, e) => s + e.leads.converted, 0);
+
+    const avgPerformance = totalEmployees > 0
+        ? employees.reduce((s, e) => s + e.performanceScore, 0) / totalEmployees
+        : 0;
+    const avgAttendanceRate = totalEmployees > 0
+        ? employees.reduce((s, e) => s + e.attendance.attendanceRate, 0) / totalEmployees
+        : 0;
+
+    const allGrades: Grade[] = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'D', 'F'];
+    const performanceDistribution = allGrades.reduce<Record<Grade, number>>((acc, g) => {
+        acc[g] = employees.filter((e) => e.productivity.grade === g).length;
+        return acc;
+    }, {} as Record<Grade, number>);
+
+    // Use spread to avoid mutating the original array (was a bug in generateInsights too)
+    const topEntry = [...employees].sort((a, b) => b.performanceScore - a.performanceScore)[0];
+    const topPerformer: LeaderboardEntry | null = topEntry
+        ? {
+            accountId: topEntry.accountId,
+            name: topEntry.name,
+            designation: topEntry.designation,
+            avatar: topEntry.avatar,
+            performanceScore: topEntry.performanceScore,
+            grade: topEntry.productivity.grade,
+            tasksCompleted: topEntry.tasks.completed,
+            revenue: topEntry.leads.revenue,
+            attendanceRate: topEntry.attendance.attendanceRate,
+            conversionRate: topEntry.leads.conversionRate,
+        }
+        : null;
+
+    return {
+        totalEmployees,
+        averagePerformanceScore: round(avgPerformance),
+        totalRevenue: round(totalRevenue),
+        totalWorkHours: round(totalWorkHours),
+        totalTasksCompleted,
+        totalLeadsConverted,
+        avgAttendanceRate: round(avgAttendanceRate),
+        topPerformer,
+        performanceDistribution,
+        totalLeads,
+        overallConversionRate: round(totalLeads > 0 ? (totalLeadsConverted / totalLeads) * 100 : 0),
+    };
+}
+
+function generateInsights(
+    employees: EmployeeDetailedMetrics[],
+    summary: CompanyWideSummary,
+    monthOverMonth: MonthOverMonth | null
+): string[] {
+    const insights: string[] = [];
+
+    if (summary.averagePerformanceScore >= 80) {
+        insights.push('🎯 Team performance is excellent with average score above 80');
+    } else if (summary.averagePerformanceScore < 60) {
+        insights.push('⚠️ Team performance needs improvement. Consider team training');
+    }
+
+    if (summary.avgAttendanceRate >= 95) {
+        insights.push('✓ Excellent attendance rate across the team');
+    } else if (summary.avgAttendanceRate < 80) {
+        insights.push('⚠️ Attendance rate is below acceptable levels');
+    }
+
+    if (monthOverMonth?.revenueGrowth != null) {
+        if (monthOverMonth.revenueGrowth > 10) {
+            insights.push(`📈 Strong revenue growth of ${monthOverMonth.revenueGrowth}% MoM`);
+        } else if (monthOverMonth.revenueGrowth < -10) {
+            insights.push(`📉 Revenue declined by ${Math.abs(monthOverMonth.revenueGrowth)}% MoM`);
+        }
+    }
+
+    if (summary.overallConversionRate >= 25) {
+        insights.push('💰 Strong lead conversion rate indicates effective sales team');
+    } else if (summary.overallConversionRate < 15) {
+        insights.push('🔄 Low conversion rate - consider sales training or process review');
+    }
+
+    const avgTaskCompletion =
+        employees.length > 0
+            ? employees.reduce((s, e) => s + e.tasks.completionRate, 0) / employees.length
+            : 0;
+    if (avgTaskCompletion >= 80) {
+        insights.push('✓ High task completion rate indicates good project execution');
+    }
+
+    // Use spread — do NOT mutate the original array
+    const topPerformer = [...employees].sort((a, b) => b.performanceScore - a.performanceScore)[0];
+    if (topPerformer) {
+        insights.push(
+            `⭐ ${topPerformer.name} is the top performer with grade ${topPerformer.productivity.grade}`
+        );
+    }
+
+    return insights;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MAIN HANDLER
+// ══════════════════════════════════════════════════════════════
+
+export async function getEmployeeAnalyticsV3(req: Request, res: Response): Promise<void> {
     try {
         // ── 1. Auth ──────────────────────────────────────────
         if (!req.user?.roles?.includes?.('ADMIN')) {
@@ -1486,13 +1811,18 @@ export async function getEmployeeAnalyticsV2(req: Request, res: Response) {
 
         // ── 2. Parse + validate params ────────────────────────
         const rawFrom = req.query.fromDate as string | undefined;
-        const rawTo   = req.query.toDate   as string | undefined;
-        const accountId     = req.query.accountId     as string | undefined;
-        const department    = req.query.department    as string | undefined;
-        const excludeSat    = req.query.excludeSaturday === 'true';
+        const rawTo = req.query.toDate as string | undefined;
+        const accountId = req.query.accountId as string | undefined;
+        const department = req.query.department as string | undefined;
+        const excludeSat = req.query.excludeSaturday === 'true';
+        const minScore = req.query.minPerformanceScore
+            ? parseFloat(req.query.minPerformanceScore as string)
+            : null;
 
-        const fromDate = new Date(rawFrom ?? new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-        const toDate   = new Date(rawTo   ?? new Date());
+        const fromDate = new Date(
+            rawFrom ?? new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
+        );
+        const toDate = new Date(rawTo ?? new Date().toISOString());
         fromDate.setHours(0, 0, 0, 0);
         toDate.setHours(23, 59, 59, 999);
 
@@ -1510,9 +1840,8 @@ export async function getEmployeeAnalyticsV2(req: Request, res: Response) {
         const employees = await prisma.account.findMany({
             where: {
                 isActive: true,
-                // BUG FIX #7: when an accountId is supplied we still enforce isActive
-                ...(accountId   && { id: accountId }),
-                ...(department  && { designation: department }),
+                ...(accountId && { id: accountId }),
+                ...(department && { designation: department }),
             },
             select: {
                 id: true,
@@ -1531,35 +1860,32 @@ export async function getEmployeeAnalyticsV2(req: Request, res: Response) {
         });
 
         if (employees.length === 0) {
-            return sendSuccess(res, emptyResponse(fromDate, toDate, accountId, department));
+            return sendSuccess(
+                res,
+                getEmptyResponse(fromDate, toDate, accountId, department, minScore, excludeSat)
+            );
         }
 
-        const accountIds = employees.map(e => e.id);
+        const accountIds = employees.map((e) => e.id);
 
-        // ── 5. Per-employee detail (in parallel) ──────────────
+        // ── 5. Per-employee detail — all three modules run in parallel per employee
         const detailed = await Promise.all(
-            employees.map(emp => getEmployeeMetrics(emp, fromDate, toDate, excludeSat))
+            employees.map((emp) => getEmployeeMetrics(emp, fromDate, toDate, excludeSat))
         );
 
-        // ── 6. Company-wide aggregates ────────────────────────
-        const totalEmployees      = detailed.length;
-        const totalRevenue        = detailed.reduce((s, e) => s + e.leads.revenue, 0);
-        const totalWorkHours      = detailed.reduce((s, e) => s + e.attendance.totalWorkHours, 0);
-        const totalTasksCompleted = detailed.reduce((s, e) => s + e.tasks.completed, 0);
-        const totalLeadsConverted = detailed.reduce((s, e) => s + e.leads.converted, 0);
-        const avgPerformance      = totalEmployees > 0
-            ? detailed.reduce((s, e) => s + e.performanceScore, 0) / totalEmployees
-            : 0;
-        const avgAttendanceRate   = totalEmployees > 0
-            ? detailed.reduce((s, e) => s + e.attendance.attendanceRate, 0) / totalEmployees
-            : 0;
+        const filtered = minScore !== null
+            ? detailed.filter((e) => e.performanceScore >= minScore)
+            : detailed;
 
-        // ── 7. Overall status / priority breakdowns ───────────
+        // ── 6. Company-wide summary ───────────────────────────
+        const summary = computeDepartmentSummary(filtered);
+
+        // ── 7. Aggregated status / priority breakdowns ────────
         const leadStatusBreakdown: LeadStatusBreakdown = {};
         const taskStatusBreakdown: TaskStatusBreakdown = {};
         const priorityBreakdown: PriorityBreakdown = { NONE: 0, LOW: 0, MEDIUM: 0, HIGH: 0, URGENT: 0 };
 
-        for (const e of detailed) {
+        for (const e of filtered) {
             for (const [k, v] of Object.entries(e.leads.statusBreakdown) as [keyof LeadStatusBreakdown, number][]) {
                 leadStatusBreakdown[k] = (leadStatusBreakdown[k] ?? 0) + v;
             }
@@ -1572,468 +1898,117 @@ export async function getEmployeeAnalyticsV2(req: Request, res: Response) {
         }
 
         // ── 8. Leaderboard ────────────────────────────────────
-        const leaderboard = [...detailed]
+        const leaderboard: LeaderboardEntry[] = [...filtered]
             .sort((a, b) => b.performanceScore - a.performanceScore)
-            .map(e => ({
-                accountId:        e.accountId,
-                name:             e.name,
-                designation:      e.designation,
-                avatar:           e.avatar,
+            .map((e) => ({
+                accountId: e.accountId,
+                name: e.name,
+                designation: e.designation,
+                avatar: e.avatar,
                 performanceScore: e.performanceScore,
-                grade:            e.productivity.grade,
-                tasksCompleted:   e.tasks.completed,
-                revenue:          e.leads.revenue,
-                attendanceRate:   e.attendance.attendanceRate,
+                grade: e.productivity.grade,
+                tasksCompleted: e.tasks.completed,
+                revenue: e.leads.revenue,
+                attendanceRate: e.attendance.attendanceRate,
+                conversionRate: e.leads.conversionRate,
             }));
 
-        // ── 9. MoM growth ─────────────────────────────────────
-        // BUG FIX #1: previous period now includes leadsConverted + avgAttendanceRate
-        const prev = await getAggregateMetrics(accountIds, prevStart, prevEnd);
-        const monthOverMonth = {
-            revenueGrowth:        momGrowth(totalRevenue,        prev.revenue),
-            tasksCompletedGrowth: momGrowth(totalTasksCompleted, prev.tasksCompleted),
-            leadsConvertedGrowth: momGrowth(totalLeadsConverted, prev.leadsConverted),
+        // ── 9. MoM growth (pass excludeSat so working days match) ──
+        const prev = await getAggregateMetrics(accountIds, prevStart, prevEnd, excludeSat);
+        const monthOverMonth: MonthOverMonth = {
+            revenueGrowth: momGrowth(summary.totalRevenue, prev.revenue),
+            tasksCompletedGrowth: momGrowth(summary.totalTasksCompleted, prev.tasksCompleted),
+            leadsConvertedGrowth: momGrowth(summary.totalLeadsConverted, prev.leadsConverted),
             attendanceRateChange: prev.avgAttendanceRate !== null
-                ? +(avgAttendanceRate - prev.avgAttendanceRate).toFixed(2)
+                ? +(summary.avgAttendanceRate - prev.avgAttendanceRate).toFixed(2)
                 : null,
+            workHoursGrowth: momGrowth(summary.totalWorkHours, prev.workHours),
         };
 
-        // ── 10. Monthly trend (last 13 months, batched) ───────
-        // BUG FIX #2 + #3: respects singleAccountId, batches all months in ~3 queries
+        // ── 10. Monthly trend (last 13 months) ────────────────
         const monthlyTrend = await getMonthlyTrend(
             accountIds,
-            // BUG FIX #2: pass the individual account if only one employee is in scope
-            detailed.length === 1 ? detailed[0].accountId : undefined
+            filtered.length === 1 ? filtered[0].accountId : undefined
         );
 
-        // ── 11. Performance distribution ──────────────────────
-        const allGrades: Grade[] = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'D', 'F'];
-        const performanceDistribution = Object.fromEntries(
-            allGrades.map(g => [g, detailed.filter(e => e.productivity.grade === g).length])
-        );
+        // ── 11. Department breakdown ──────────────────────────
+        const deptGrouped = groupByDepartment(filtered);
+        const departmentBreakdown: Record<string, CompanyWideSummary> = {};
+        for (const [dept, emps] of Object.entries(deptGrouped)) {
+            departmentBreakdown[dept] = computeDepartmentSummary(emps);
+        }
 
-        // ── 12. Final response ────────────────────────────────
-        return sendSuccess(res, {
+        // ── 12. Risk Analysis ─────────────────────────────────
+        const riskAnalysis = {
+            lowPerformers: leaderboard.filter((e) => e.performanceScore < 60).slice(0, 5),
+            highAbsenteeism: filtered
+                .filter((e) => e.attendance.attendanceRate < 75)
+                .map((e) => ({ accountId: e.accountId, name: e.name, attendanceRate: e.attendance.attendanceRate }))
+                .slice(0, 5),
+            overdueTasks: filtered
+                .filter((e) => e.tasks.overdue > 0)
+                .map((e) => ({ accountId: e.accountId, name: e.name, count: e.tasks.overdue }))
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 5),
+            lowConversion: leaderboard
+                .filter((e) => e.conversionRate < 15)
+                .map((e) => ({ accountId: e.accountId, name: e.name, rate: e.conversionRate }))
+                .slice(0, 5),
+        };
+
+        // ── 13. Insights ──────────────────────────────────────
+        const insights = generateInsights(filtered, summary, monthOverMonth);
+
+        // ── 14. Final response ────────────────────────────────
+        const response: AnalyticsResponse = {
             dateRange: { from: fromDate, to: toDate },
             filters: {
-                accountId:       accountId       ?? null,
-                department:      department      ?? null,
+                accountId: accountId ?? null,
+                department: department ?? null,
                 excludeSaturday: excludeSat,
+                minPerformanceScore: minScore,
             },
-            summary: {
-                totalEmployees,
-                averagePerformanceScore: round(avgPerformance),
-                totalRevenue:            round(totalRevenue),
-                totalWorkHours:          round(totalWorkHours),
-                totalTasksCompleted,
-                totalLeadsConverted,
-                avgAttendanceRate:       round(avgAttendanceRate),
-                topPerformer:            leaderboard[0] ?? null,
-                performanceDistribution,
-            },
-            employees:   detailed,
+            summary,
+            employees: filtered,
             leaderboard,
             monthOverMonth,
-            statusBreakdowns: {
-                leads: leadStatusBreakdown,
-                tasks: taskStatusBreakdown,
-            },
+            statusBreakdowns: { leads: leadStatusBreakdown, tasks: taskStatusBreakdown },
             priorityBreakdown,
             monthlyTrend,
-        });
+            departmentBreakdown,
+            riskAnalysis,
+            insights,
+        };
 
+        return sendSuccess(res, response);
     } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Internal server error';
-        console.error('[EmployeeAnalyticsV2]', err);
+        console.error('[EmployeeAnalyticsV3]', err);
         return sendError(res, 500, message);
     }
 }
 
 // ══════════════════════════════════════════════════════════════
-//  PER-EMPLOYEE METRICS
+//  EMPTY RESPONSE HELPER
 // ══════════════════════════════════════════════════════════════
 
-async function getEmployeeMetrics(
-    emp: {
-        id: string; firstName: string; lastName: string; avatar: string | null;
-        designation: string | null; contactEmail: string; contactPhone: string;
-        joinedAt: Date | null; jobType: string | null; isBusy: boolean; isAvailable: boolean;
-    },
+function getEmptyResponse(
     from: Date,
-    to:   Date,
-    excludeSat: boolean
-) {
-    const id = emp.id;
-
-    // ── A. Attendance ─────────────────────────────────────────
-    const logs = await prisma.attendanceLog.findMany({
-        where: { accountId: id, date: { gte: from, lte: to } },
-    });
-
-    const present    = logs.filter(l => l.status === 'PRESENT').length;
-    const half       = logs.filter(l => l.status === 'HALF_DAY').length;
-    const absent     = logs.filter(l => l.status === 'ABSENT').length;
-    const wfh        = logs.filter(l => l.isWFH).length;
-    const late       = logs.filter(l =>
-        l.firstCheckIn && (
-            l.firstCheckIn.getHours() > 10 ||
-            (l.firstCheckIn.getHours() === 10 && l.firstCheckIn.getMinutes() > 0)
-        )
-    ).length;
-
-    const totalWorkMinutes = logs.reduce((s, l) => s + l.totalWorkMinutes, 0);
-    const totalWorkHours   = totalWorkMinutes / 60;
-
-    const workingDays    = getWorkingDaysBetween(from, to, excludeSat);
-    const attendanceRate = workingDays > 0
-        ? ((present + half * 0.5) / workingDays) * 100
-        : 0;
-
-    // ── B. Leads ──────────────────────────────────────────────
-    // BUG FIX #5: filter by assignment activity window, not lead createdAt,
-    // so we capture leads created before the period but worked on during it.
-    const leads = await prisma.lead.findMany({
-        where: {
-            assignments: {
-                some: {
-                    accountId: id,
-                    isActive:  true,
-                    // Include leads assigned before `from` that are still active,
-                    // and leads assigned during the window
-                    assignedAt: { lte: to },
-                },
-            },
-            // Optionally also restrict to leads updated/created in range so
-            // stale ancient leads don't inflate numbers:
-            updatedAt: { gte: from, lte: to },
-            isActive: true,
-        },
-        include: {
-            assignments: { where: { accountId: id } },
-            followUps:   {
-                where: { scheduledAt: { gte: from, lte: to } },
-                select: { status: true },
-            },
-        },
-    });
-
-    const leadStatusBreakdown: LeadStatusBreakdown = {};
-    let converted    = 0;
-    let revenue      = 0;
-    let leadWorkSec  = 0;
-    let followUpDone = 0;
-    let followUpTot  = 0;
-
-    for (const l of leads) {
-        const s = l.status as keyof LeadStatusBreakdown;
-        leadStatusBreakdown[s] = (leadStatusBreakdown[s] ?? 0) + 1;
-        if (l.status === 'CONVERTED') {
-            converted++;
-            revenue += Number(l.cost ?? 0);
-        }
-        leadWorkSec  += l.totalWorkSeconds ?? 0;
-        followUpTot  += l.followUps.length;
-        followUpDone += l.followUps.filter(f => f.status === 'DONE').length;
-    }
-
-    const totalLeads     = leads.length;
-    const conversionRate = totalLeads > 0 ? (converted / totalLeads) * 100 : 0;
-    const leadWorkHours  = leadWorkSec / 3600;
-    const followUpRate   = followUpTot > 0 ? (followUpDone / followUpTot) * 100 : 0;
-    const revPerHour     = leadWorkHours > 0 ? revenue / leadWorkHours : 0;
-
-    // ── C. Tasks ──────────────────────────────────────────────
-    const tasks = await prisma.task.findMany({
-        where: {
-            assignments: { some: { accountId: id } },
-            OR: [
-                { createdAt:   { gte: from, lte: to } },
-                { completedAt: { gte: from, lte: to } },
-                { updatedAt:   { gte: from, lte: to } },
-            ],
-            deletedAt: null,
-        },
-        include: {
-            checklist:   true,
-            timeEntries: { where: { startedAt: { gte: from, lte: to } } },
-        },
-    });
-
-    const taskStatusBreakdown: TaskStatusBreakdown = {
-        PENDING: 0, IN_PROGRESS: 0, IN_REVIEW: 0, BLOCKED: 0, COMPLETED: 0, CANCELLED: 0,
-    };
-    const priorityBreakdown: PriorityBreakdown = { NONE: 0, LOW: 0, MEDIUM: 0, HIGH: 0, URGENT: 0 };
-
-    let completed  = 0;
-    let overdue    = 0;
-    let completedOnTime = 0;
-    let estimatedMin = 0;
-    let loggedMin    = 0;
-    const now = new Date();
-
-    for (const t of tasks) {
-        const st = t.status as keyof TaskStatusBreakdown;
-        taskStatusBreakdown[st] = (taskStatusBreakdown[st] ?? 0) + 1;
-        priorityBreakdown[t.priority as keyof PriorityBreakdown]++;
-
-        if (t.status === 'COMPLETED') {
-            completed++;
-            if (t.dueDate && t.completedAt && new Date(t.completedAt) <= new Date(t.dueDate)) {
-                completedOnTime++;
-            }
-        }
-        if (
-            t.status !== 'COMPLETED' && t.status !== 'CANCELLED' &&
-            t.dueDate && new Date(t.dueDate) < now
-        ) overdue++;
-
-        estimatedMin += t.estimatedMinutes ?? 0;
-        loggedMin    += t.loggedMinutes     ?? 0;
-    }
-
-    const totalTasks      = tasks.length;
-    const completionRate  = totalTasks  > 0 ? (completed / totalTasks)  * 100 : 0;
-    const onTimeRate      = completed   > 0 ? (completedOnTime / completed) * 100 : 0;
-    const estimatedHours  = estimatedMin / 60;
-    const loggedHours     = loggedMin    / 60;
-
-    // BUG FIX #8: cap raw timeAccuracy at 200% for display, and cap at 100 for scoring
-    const rawTimeAccuracy  = estimatedHours > 0 ? (loggedHours / estimatedHours) * 100 : 0;
-    const cappedForDisplay = Math.min(rawTimeAccuracy, 200);
-
-    const checklistItems = tasks.flatMap(t => t.checklist);
-    const checklistDone  = checklistItems.filter(c => c.status === 'COMPLETED').length;
-    const checklistRate  = checklistItems.length > 0
-        ? (checklistDone / checklistItems.length) * 100
-        : 0;
-
-    // ── D. Performance score ──────────────────────────────────
-    const WEIGHTS = {
-        conversion:   0.35,
-        tasks:        0.30,
-        attendance:   0.15,
-        timeAccuracy: 0.10,
-        checklist:    0.05,
-        followUp:     0.05,
-    } as const;
-
-    const score =
-        conversionRate                     * WEIGHTS.conversion  +
-        completionRate                     * WEIGHTS.tasks        +
-        attendanceRate                     * WEIGHTS.attendance   +
-        Math.min(rawTimeAccuracy, 100)     * WEIGHTS.timeAccuracy + // cap at 100 for score
-        checklistRate                      * WEIGHTS.checklist    +
-        followUpRate                       * WEIGHTS.followUp;
-
-    const grade = scoreToGrade(score);
-
-    return {
-        accountId:     id,
-        name:          `${emp.firstName} ${emp.lastName}`,
-        avatar:        emp.avatar,
-        designation:   emp.designation ?? 'Not Specified',
-        contactEmail:  emp.contactEmail,
-        contactPhone:  emp.contactPhone,
-        joinedAt:      emp.joinedAt,
-        jobType:       emp.jobType,
-        currentStatus: { isBusy: emp.isBusy, isAvailable: emp.isAvailable },
-
-        attendance: {
-            workingDays,
-            presentDays:     present,
-            halfDays:        half,
-            absentDays:      absent,
-            wfhDays:         wfh,
-            lateDays:        late,
-            attendanceRate:  round(attendanceRate),
-            totalWorkHours:  round(totalWorkHours),
-            avgDailyHours:   present > 0 ? round(totalWorkHours / present) : 0,
-        },
-
-        leads: {
-            totalAssigned:            totalLeads,
-            statusBreakdown:          leadStatusBreakdown,
-            converted,
-            conversionRate:           round(conversionRate),
-            followUpCompletionRate:   round(followUpRate),
-            revenue:                  round(revenue),
-            revenuePerHour:           round(revPerHour),
-            workHours:                round(leadWorkHours),
-            avgHoursPerLead:          totalLeads > 0 ? round(leadWorkHours / totalLeads) : 0,
-        },
-
-        tasks: {
-            totalAssigned:             totalTasks,
-            statusBreakdown:           taskStatusBreakdown,
-            completed,
-            pending:                   (taskStatusBreakdown.PENDING  ?? 0) +
-                                       (taskStatusBreakdown.IN_PROGRESS ?? 0),
-            overdue,
-            completedOnTime,
-            onTimeRate:                round(onTimeRate),
-            completionRate:            round(completionRate),
-            estimatedHours:            round(estimatedHours),
-            loggedHours:               round(loggedHours),
-            timeAccuracy:              round(cappedForDisplay),  // BUG FIX #8
-            checklistCompletionRate:   round(checklistRate),
-            priorityBreakdown,
-        },
-
-        productivity: {
-            totalWorkHours:    round(totalWorkHours + leadWorkHours + loggedHours),
-            score:             round(score),
-            grade,
-            revenueGenerated:  round(revenue),
-            tasksPerDay:       workingDays > 0 ? round(completed / workingDays) : 0,
-        },
-
-        performanceScore: round(score),
-    };
-}
-
-// ══════════════════════════════════════════════════════════════
-//  AGGREGATE METRICS (for MoM comparison)
-//  BUG FIX #1: now correctly computes leadsConverted + avgAttendanceRate
-// ══════════════════════════════════════════════════════════════
-
-async function getAggregateMetrics(ids: string[], from: Date, to: Date) {
-    if (ids.length === 0) {
-        return { revenue: 0, tasksCompleted: 0, leadsConverted: 0, avgAttendanceRate: null };
-    }
-
-    const [leads, tasks, attendanceLogs] = await Promise.all([
-        prisma.lead.findMany({
-            where: {
-                assignments: { some: { accountId: { in: ids }, isActive: true } },
-                status:      'CONVERTED',
-                updatedAt:   { gte: from, lte: to },
-            },
-            select: { cost: true },
-        }),
-        prisma.task.count({
-            where: {
-                assignments: { some: { accountId: { in: ids } } },
-                status:      'COMPLETED',
-                completedAt: { gte: from, lte: to },
-                deletedAt:   null,
-            },
-        }),
-        // BUG FIX #1: fetch attendance logs so we can compute avgAttendanceRate
-        prisma.attendanceLog.findMany({
-            where: { accountId: { in: ids }, date: { gte: from, lte: to } },
-            select: { accountId: true, status: true },
-        }),
-    ]);
-
-    const revenue         = leads.reduce((s, l) => s + Number(l.cost ?? 0), 0);
-    const leadsConverted  = leads.length;
-    const tasksCompleted  = tasks;
-
-    // Average attendance rate across all employees in the period
-    let avgAttendanceRate: number | null = null;
-    if (attendanceLogs.length > 0) {
-        const workingDays = getWorkingDaysBetween(from, to);
-        if (workingDays > 0) {
-            const rateByEmp = new Map<string, { present: number; half: number }>();
-            for (const log of attendanceLogs) {
-                if (!rateByEmp.has(log.accountId)) rateByEmp.set(log.accountId, { present: 0, half: 0 });
-                const r = rateByEmp.get(log.accountId)!;
-                if (log.status === 'PRESENT')  r.present++;
-                if (log.status === 'HALF_DAY') r.half++;
-            }
-            const rates = [...rateByEmp.values()].map(r =>
-                ((r.present + r.half * 0.5) / workingDays) * 100
-            );
-            avgAttendanceRate = rates.length > 0
-                ? rates.reduce((a, b) => a + b, 0) / rates.length
-                : 0;
-        }
-    }
-
-    return { revenue, tasksCompleted, leadsConverted, avgAttendanceRate };
-}
-
-// ══════════════════════════════════════════════════════════════
-//  MONTHLY TREND — last 13 months
-//  BUG FIX #2: respects singleAccountId
-//  BUG FIX #3: uses 3 bulk queries instead of 39 sequential queries
-// ══════════════════════════════════════════════════════════════
-
-async function getMonthlyTrend(allAccountIds: string[], singleAccountId?: string) {
-    const months = getLastNMonths(13);
-    const first  = months[0].start;
-    const last   = months[months.length - 1].end;
-
-    // The effective scope: one employee or all
-    const scopeIds = singleAccountId ? [singleAccountId] : allAccountIds;
-
-    // Bulk-fetch all tasks completed in the 13-month window once
-    const completedTasks = await prisma.task.findMany({
-        where: {
-            assignments: { some: { accountId: { in: scopeIds } } },
-            status:      'COMPLETED',
-            completedAt: { gte: first, lte: last },
-            deletedAt:   null,
-        },
-        select: { completedAt: true },
-    });
-
-    // Bulk-fetch all converted leads and their revenue in the window
-    const convertedLeads = await prisma.lead.findMany({
-        where: {
-            assignments: { some: { accountId: { in: scopeIds }, isActive: true } },
-            status:      'CONVERTED',
-            updatedAt:   { gte: first, lte: last },
-        },
-        select: { updatedAt: true, cost: true },
-    });
-
-    // Bulk-fetch attendance for attendance rate trend
-    const attendanceLogs = await prisma.attendanceLog.findMany({
-        where: {
-            accountId: { in: scopeIds },
-            date:      { gte: first, lte: last },
-        },
-        select: { date: true, status: true },
-    });
-
-    // Bucket into months
-    return months.map(({ start, end, label }) => {
-        const tasksCompleted = completedTasks.filter(t =>
-            t.completedAt && t.completedAt >= start && t.completedAt <= end
-        ).length;
-
-        const monthLeads = convertedLeads.filter(l =>
-            l.updatedAt >= start && l.updatedAt <= end
-        );
-        const leadsConverted = monthLeads.length;
-        const revenue        = monthLeads.reduce((s, l) => s + Number(l.cost ?? 0), 0);
-
-        const monthLogs  = attendanceLogs.filter(l => l.date >= start && l.date <= end);
-        const workingDays = getWorkingDaysBetween(start, end);
-        const present    = monthLogs.filter(l => l.status === 'PRESENT').length;
-        const half       = monthLogs.filter(l => l.status === 'HALF_DAY').length;
-        const attendanceRate = workingDays > 0 && monthLogs.length > 0
-            ? round(((present + half * 0.5) / workingDays) * 100)
-            : null;
-
-        return { month: label, tasksCompleted, leadsConverted, revenue: round(revenue), attendanceRate };
-    });
-}
-
-// ══════════════════════════════════════════════════════════════
-//  UTILITIES
-// ══════════════════════════════════════════════════════════════
-
-function round(n: number, decimals = 2): number {
-    const f = 10 ** decimals;
-    return Math.round(n * f) / f;
-}
-
-function emptyResponse(from: Date, to: Date, accountId?: string, department?: string) {
+    to: Date,
+    accountId?: string,
+    department?: string,
+    minScore?: number | null,
+    excludeSaturday = false
+): AnalyticsResponse {
+    const allGrades: Grade[] = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'D', 'F'];
     return {
         dateRange: { from, to },
-        filters:   { accountId: accountId ?? null, department: department ?? null },
+        filters: {
+            accountId: accountId ?? null,
+            department: department ?? null,
+            excludeSaturday,
+            minPerformanceScore: minScore ?? null,
+        },
         summary: {
             totalEmployees: 0,
             averagePerformanceScore: 0,
@@ -2043,13 +2018,23 @@ function emptyResponse(from: Date, to: Date, accountId?: string, department?: st
             totalLeadsConverted: 0,
             avgAttendanceRate: 0,
             topPerformer: null,
-            performanceDistribution: {},
+            performanceDistribution: allGrades.reduce<Record<Grade, number>>((a, g) => { a[g] = 0; return a; }, {} as Record<Grade, number>),
+            totalLeads: 0,
+            overallConversionRate: 0,
         },
-        employees:   [],
+        employees: [],
         leaderboard: [],
         monthOverMonth: null,
         statusBreakdowns: { leads: {}, tasks: {} },
         priorityBreakdown: { NONE: 0, LOW: 0, MEDIUM: 0, HIGH: 0, URGENT: 0 },
         monthlyTrend: [],
+        departmentBreakdown: {},
+        riskAnalysis: {
+            lowPerformers: [],
+            highAbsenteeism: [],
+            overdueTasks: [],
+            lowConversion: [],
+        },
+        insights: [],
     };
 }

@@ -734,7 +734,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
       tallySerial,
       tallyVersion,
       isImportant,
-      forceCreate = false,          
+      forceCreate = false,
     } = req.body as Record<string, any>;
 
     if (!source || !type)
@@ -762,12 +762,12 @@ export async function createLeadAdmin(req: Request, res: Response) {
 
     if (!forceCreate) {
       const duplicate = await findDuplicateLead({ normalizedMobile, productTitle });
- 
+
       if (duplicate) {
         const assigneeName = duplicate.assignments[0]?.account
           ? `${duplicate.assignments[0].account.firstName} ${duplicate.assignments[0].account.lastName}`.trim()
           : null;
- 
+
         return res.status(409).json({
           success: false,
           code: "DUPLICATE_LEAD",
@@ -3018,15 +3018,30 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
 
     if (source) where.source = source;
 
+    // if (fromDate || toDate) {
+    //   where.createdAt = {};
+    //   if (fromDate) where.createdAt.gte = new Date(fromDate);
+    //   if (toDate) {
+    //     const end = new Date(toDate);
+    //     end.setDate(end.getDate() + 1);
+    //     where.createdAt.lt = end;
+    //   }
+    // }
     if (fromDate || toDate) {
       where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate);
+      if (fromDate) {
+        const start = new Date(fromDate);
+        start.setHours(0, 0, 0, 0);
+        where.createdAt.gte = start;
+      }
       if (toDate) {
         const end = new Date(toDate);
-        end.setDate(end.getDate() + 1);
-        where.createdAt.lt = end;
+        end.setHours(23, 59, 59, 999);
+        where.createdAt.lte = end; // lte + end-of-day is cleaner than lt + next day
       }
     }
+
+
 
     if (accountId) {
       where.assignments = {
@@ -3068,8 +3083,8 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
     );
 
     const grandTotal = grouped.reduce(
-      (sum, row) => sum + (row._sum?.cost ? Number(row._sum.cost) : 0),
-      0,
+      (sum, row) => sum + Number(row._sum?.cost),
+      0
     );
 
     const totalCount = grouped.reduce(
