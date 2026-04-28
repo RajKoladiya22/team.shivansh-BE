@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/database.config";
 import {
   sendErrorResponse,
@@ -7,7 +8,6 @@ import {
 import { randomUUID } from "crypto";
 import XLSX from "xlsx";
 import { parse } from "csv-parse/sync";
-import { generateTncToken } from "@core/middleware/jwt";
 
 /**
  * GET /customers
@@ -217,6 +217,7 @@ export async function getCustomerList(req: Request, res: Response) {
           createdAt: true,
           isTncAccepted: true,
           tncAcceptedAt: true,
+          tncToken: true,
           _count: { select: { leads: true } },
           leads: true,
         },
@@ -989,5 +990,421 @@ export async function bulkImportCustomers(req: Request, res: Response) {
   } catch (err: any) {
     console.error("bulkImportCustomers error:", err);
     return sendErrorResponse(res, 500, err?.message ?? "Import failed");
+  }
+}
+
+
+
+/* ─────────────────────────────────────────────
+   Helpers
+───────────────────────────────────────────── */
+
+function parseDate(raw: string | undefined): Date | undefined {
+  if (!raw || typeof raw !== "string") return undefined;
+  // Accept YYYY-MM-DD or ISO strings
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return undefined;
+  return d;
+}
+
+/** Return the first day of a given month offset from today */
+function monthStart(offsetMonths: number): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth() + offsetMonths, 1);
+}
+
+/** Return the first day of the next month offset from today */
+function monthEnd(offsetMonths: number): Date {
+  return monthStart(offsetMonths + 1);
+}
+
+/**
+ * GET /api/v1/customers/analytics
+ *
+ * Query params:
+ *   from  – ISO date string, inclusive (optional)
+ *   to    – ISO date string, inclusive (optional)
+ *
+ * All independent DB calls are batched into parallel Promise.all groups
+ * to minimise total latency.  Raw SQL is used only where Prisma's query
+ * builder cannot express the operation (JSON array traversal, count on
+ * conditional text).  All raw SQL uses tagged-template Prisma.sql to
+ * prevent injection.
+ */
+export async function getCustomerAnalytics(req: Request, res: Response) {
+  try {
+    /* ── 1. Parse & validate query params ── */
+    const rawFrom = req.query.from as string | undefined;
+    const rawTo = req.query.to as string | undefined;
+
+    const fromDate = parseDate(rawFrom);
+    const toDate = parseDate(rawTo);
+
+    if (rawFrom && !fromDate)
+      return sendErrorResponse(res, 400, "Invalid 'from' date");
+    if (rawTo && !toDate)
+      return sendErrorResponse(res, 400, "Invalid 'to' date");
+    if (fromDate && toDate && fromDate > toDate)
+      return sendErrorResponse(res, 400, "'from' must be before 'to'");
+
+    const hasDateFilter = !!(fromDate || toDate);
+
+    /* Build a reusable Prisma where clause for createdAt range */
+    const createdAtFilter: Prisma.CustomerWhereInput =
+      hasDateFilter
+        ? {
+          createdAt: {
+            ...(fromDate ? { gte: fromDate } : {}),
+            ...(toDate ? { lte: toDate } : {}),
+          },
+        }
+        : {};
+
+    /* Build a Prisma.sql fragment for raw queries — avoids string concat */
+    const rawCreatedAtFilter: Prisma.Sql = hasDateFilter
+      ? Prisma.sql`AND "createdAt" >= ${fromDate ?? new Date(0)} AND "createdAt" <= ${toDate ?? new Date()}`
+      : Prisma.empty;
+
+    /* ── 2. Summary counts + month-over-month — all in one transaction ── */
+    const thisMonthStart = monthStart(0);
+    const lastMonthStart = monthStart(-1);
+    const lastMonthEnd = monthEnd(-1);
+
+    const [
+      totalCustomers,
+      activeCustomers,
+      inactiveCustomers,
+      tncAccepted,
+      tncPending,
+      newThisMonth,
+      newLastMonth,
+      withActiveProducts,
+      withNoProducts,
+    ] = await prisma.$transaction(async (tx) => {
+      const totalCustomers = await tx.customer.count({ where: { ...createdAtFilter } });
+      const activeCustomers = await tx.customer.count({ where: { ...createdAtFilter, isActive: true } });
+      const inactiveCustomers = await tx.customer.count({ where: { ...createdAtFilter, isActive: false } });
+      // T&C accepted
+      const tncAccepted = await tx.customer.count({
+        where: { ...createdAtFilter, isTncAccepted: true },
+      });
+      // T&C token sent but not yet accepted
+      const tncPending = await tx.customer.count({
+        where: {
+          ...createdAtFilter,
+          tncToken: { not: null },
+          isTncAccepted: false,
+        },
+      });
+      // new registrations this calendar month (ignores date-range filter
+      // intentionally — MoM growth is always relative to the current month)
+      const newThisMonth = await tx.customer.count({
+        where: { createdAt: { gte: thisMonthStart } },
+      });
+      const newLastMonth = await tx.customer.count({
+        where: { createdAt: { gte: lastMonthStart, lt: lastMonthEnd } },
+      });
+      // customers that have at least one active product (raw — JSON)
+      const withActiveProducts = await tx.$queryRaw<{ cnt: bigint }[]>`
+        SELECT COUNT(*)::bigint AS cnt
+        FROM "Customer"
+        WHERE products IS NOT NULL
+          AND jsonb_typeof((products->'active')::jsonb) = 'array'
+          AND jsonb_array_length((products->'active')::jsonb) > 0
+        ${rawCreatedAtFilter}
+      `.then((r) => r[0]);
+      // customers with no products at all
+      const withNoProducts = await tx.$queryRaw<{ cnt: bigint }[]>`
+        SELECT COUNT(*)::bigint AS cnt
+        FROM "Customer"
+        WHERE (
+          products IS NULL
+          OR jsonb_typeof((products->'active')::jsonb) != 'array'
+          OR jsonb_array_length((products->'active')::jsonb) = 0
+        )
+        ${rawCreatedAtFilter}
+      `.then((r) => r[0]);
+
+      return [
+        totalCustomers,
+        activeCustomers,
+        inactiveCustomers,
+        tncAccepted,
+        tncPending,
+        newThisMonth,
+        newLastMonth,
+        withActiveProducts,
+        withNoProducts,
+      ];
+    });
+
+    const tncNotSent = totalCustomers - tncAccepted - tncPending;
+
+    /* MoM growth — null when last month was zero (avoid division by zero) */
+    const newThisMonthGrowth: string | null =
+      newLastMonth === 0
+        ? null
+        : (((newThisMonth - newLastMonth) / newLastMonth) * 100).toFixed(1);
+
+    /* ── 3. Missing-data counts (run in parallel) ── */
+    const [
+      missingEmail,
+      missingCompany,
+      missingTallySerial,
+      missingPhoneRows,
+    ] = await Promise.all([
+      prisma.customer.count({
+        where: {
+          ...createdAtFilter,
+          OR: [{ email: null }, { email: "" }],
+        },
+      }),
+      prisma.customer.count({
+        where: {
+          ...createdAtFilter,
+          OR: [{ customerCompanyName: null }, { customerCompanyName: "" }],
+        },
+      }),
+      prisma.customer.count({
+        where: {
+          ...createdAtFilter,
+          OR: [{ tallySerial: null }, { tallySerial: "" }],
+        },
+      }),
+      // phones is a JSON array — must use raw
+      prisma.$queryRaw<{ cnt: bigint }[]>`
+        SELECT COUNT(*)::bigint AS cnt
+        FROM "Customer"
+        WHERE (phones IS NULL OR phones::text = '[]')
+        ${rawCreatedAtFilter}
+      `,
+    ]);
+
+    const missingPhone = Number(missingPhoneRows[0].cnt);
+
+    /* ── 4. Distribution groupings (run in parallel) ── */
+    const [
+      categoryGroups,
+      businessGroups,
+      stateGroups,
+      cityGroups,
+      tallyVersionGroups,
+    ] = await Promise.all([
+      prisma.customer.groupBy({
+        by: ["customerCategory"],
+        where: createdAtFilter,
+        _count: { id: true },
+        orderBy: { _count: { id: "desc" } },
+      }),
+      prisma.customer.groupBy({
+        by: ["businessCategory"],
+        where: createdAtFilter,
+        _count: { id: true },
+        orderBy: { _count: { id: "desc" } },
+      }),
+      prisma.customer.groupBy({
+        by: ["state"],
+        where: { ...createdAtFilter, state: { not: null } },
+        _count: { id: true },
+        orderBy: { _count: { id: "desc" } },
+        take: 15,
+      }),
+      prisma.customer.groupBy({
+        by: ["city"],
+        where: { ...createdAtFilter, city: { not: null } },
+        _count: { id: true },
+        orderBy: { _count: { id: "desc" } },
+        take: 15,
+      }),
+      prisma.customer.groupBy({
+        by: ["tallyVersion"],
+        where: { ...createdAtFilter, tallyVersion: { not: null } },
+        _count: { id: true },
+        orderBy: { _count: { id: "desc" } },
+      }),
+    ]);
+
+
+    /* ── 4. Distribution groupings ── */
+    // tallyVersion uses raw SQL to normalize casing before grouping
+    const tallyVersionRows = await prisma.$queryRaw<
+      { version: string; cnt: bigint }[]
+    >`
+  SELECT  INITCAP(LOWER(TRIM("tallyVersion"))) AS version,
+          COUNT(*)::bigint                      AS cnt
+  FROM    "Customer"
+  WHERE   "tallyVersion" IS NOT NULL
+    AND   TRIM("tallyVersion") != ''
+  ${rawCreatedAtFilter}
+  GROUP   BY 1
+  ORDER   BY 2 DESC
+`;
+    /* ── 5. Trends — monthly joining + registration (last 13 months) ── */
+    const trendWindow = Prisma.sql`NOW() - INTERVAL '13 months'`;
+
+    const [joiningTrendRows, registrationTrendRows] = await Promise.all([
+      prisma.$queryRaw<{ month: string; count: bigint }[]>`
+        SELECT TO_CHAR("joiningDate", 'YYYY-MM') AS month,
+               COUNT(*)::bigint                  AS count
+        FROM   "Customer"
+        WHERE  "joiningDate" IS NOT NULL
+          AND  "joiningDate" >= ${trendWindow}
+        GROUP  BY 1
+        ORDER  BY 1 ASC
+      `,
+      prisma.$queryRaw<{ month: string; count: bigint }[]>`
+        SELECT TO_CHAR("createdAt", 'YYYY-MM') AS month,
+               COUNT(*)::bigint                AS count
+        FROM   "Customer"
+        WHERE  "createdAt" >= ${trendWindow}
+        GROUP  BY 1
+        ORDER  BY 1 ASC
+      `,
+    ]);
+
+    /* ── 6. Top active products (JSON array traversal) ── */
+    const productRows = await prisma.$queryRaw<
+      { name: string; cnt: bigint }[]
+    >`
+      SELECT  p->>'name'      AS name,
+              COUNT(*)::bigint AS cnt
+      FROM    "Customer",
+              jsonb_array_elements((products->'active')::jsonb) AS p
+      WHERE   products IS NOT NULL
+        AND   p->>'name' IS NOT NULL
+      GROUP   BY 1
+      ORDER   BY 2 DESC
+      LIMIT   10
+    `;
+
+    /* ── 7. High-value customers (active products × leads) ── */
+    const highValueRaw = await prisma.customer.findMany({
+      where: { ...createdAtFilter, isActive: true },
+      select: {
+        id: true,
+        name: true,
+        customerCompanyName: true,
+        mobile: true,
+        city: true,
+        state: true,
+        customerCategory: true,
+        products: true,
+        _count: { select: { leads: true } },
+      },
+      orderBy: { leads: { _count: "desc" } },
+      take: 50, // over-fetch then re-score client-side
+    });
+
+    const highValueCustomers = highValueRaw
+      .map((c) => {
+        const active: any[] = (c.products as any)?.active ?? [];
+        const score = active.length * 2 + c._count.leads;
+        return {
+          id: c.id,
+          name: c.name,
+          company: c.customerCompanyName,
+          mobile: c.mobile,
+          city: c.city,
+          state: c.state,
+          customerCategory: c.customerCategory,
+          activeProducts: active.length,
+          totalLeads: c._count.leads,
+          score,
+        };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
+
+    /* ── 8. Average products per customer ── */
+    const avgProductsRow = await prisma.$queryRaw<{ avg: number }[]>`
+      SELECT ROUND(
+        AVG(jsonb_array_length((products->'active')::jsonb))::numeric,
+        2
+      ) AS avg
+      FROM "Customer"
+      WHERE products IS NOT NULL
+        AND jsonb_typeof((products->'active')::jsonb) = 'array'
+      ${rawCreatedAtFilter}
+    `;
+    const avgActiveProductsPerCustomer =
+      Number(avgProductsRow[0]?.avg ?? 0);
+
+    /* ── 9. Assemble response ── */
+    return sendSuccessResponse(res, 200, "Analytics fetched", {
+      summary: {
+        totalCustomers,
+        activeCustomers,
+        inactiveCustomers,
+        newThisMonth,
+        newLastMonth,
+        newThisMonthGrowth,
+        withActiveProducts: Number(withActiveProducts.cnt),
+        withNoProducts: Number(withNoProducts.cnt),
+        avgActiveProductsPerCustomer,
+      },
+      tnc: {
+        accepted: tncAccepted,
+        pending: tncPending,
+        notSent: Math.max(0, tncNotSent), // guard against stale counts
+        acceptanceRate:
+          totalCustomers === 0
+            ? "0"
+            : ((tncAccepted / totalCustomers) * 100).toFixed(1),
+      },
+      missingData: {
+        email: missingEmail,
+        phone: missingPhone,
+        companyName: missingCompany,
+        tallySerial: missingTallySerial,
+      },
+      distributions: {
+        category: categoryGroups.map((g) => ({
+          name: g.customerCategory ?? "Uncategorised",
+          count: g._count.id,
+        })),
+        business: businessGroups.map((g) => ({
+          name: g.businessCategory ?? "Uncategorised",
+          count: g._count.id,
+        })),
+        state: stateGroups.map((g) => ({
+          name: g.state!,
+          count: g._count.id,
+        })),
+        city: cityGroups.map((g) => ({
+          name: g.city!,
+          count: g._count.id,
+        })),
+        // tallyVersion: tallyVersionGroups.map((g) => ({
+        //   name: g.tallyVersion!,
+        //   count: g._count.id,
+        // })),
+        tallyVersion: tallyVersionRows.map((r) => ({
+          name: r.version,
+          count: Number(r.cnt),
+        })),
+        topProducts: productRows.map((r) => ({
+          name: r.name,
+          count: Number(r.cnt),
+        })),
+      },
+      trends: {
+        joining: joiningTrendRows.map((r) => ({
+          month: r.month,
+          count: Number(r.count),
+        })),
+        registration: registrationTrendRows.map((r) => ({
+          month: r.month,
+          count: Number(r.count),
+        })),
+      },
+      highValueCustomers,
+    });
+  } catch (err: any) {
+    console.error("[CustomerAnalytics] error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch analytics",
+    );
   }
 }

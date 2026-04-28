@@ -12,6 +12,7 @@ import {
   removeCustomerProductAdmin,
   bulkImportCustomers,
   verifyBulkCustomers,
+  getCustomerAnalytics,
 } from "../../controller/customer/customer.controller";
 import multer from "multer";
 import { sendTncEmail, getTncByToken, acceptTnc } from "../../controller/customer/tnc.controller";
@@ -24,6 +25,7 @@ const upload = multer({
 const router = Router();
 
 // ─── Customer CRUD ────────────────────────────────────────────────────────────
+router.get("/analytics", requireAuth, getCustomerAnalytics);
 router.get("/", requireAuth, getCustomerList);
 router.get("/:id", requireAuth, getCustomerDetails);
 router.post("/", requireAuth, createCustomer);

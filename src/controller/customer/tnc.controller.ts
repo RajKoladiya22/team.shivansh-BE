@@ -33,7 +33,7 @@ import { sendMail } from "../../core/mailer";
 
 // ─── current T&C version (bump this string when your T&C document changes) ────
 const TNC_VERSION = "1.0";
-const FRONTEND_URL = "https://shivanshinfosys.in/";
+const FRONTEND_URL = "https://shivanshinfosys.in";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  POST /customers/:id/send-tnc
