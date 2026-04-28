@@ -792,11 +792,13 @@ function computeChildDueDate(
   task: { startDate: Date | null; createdAt: Date; dueDate: Date | null },
   childStartDate: Date,
 ): Date | null {
-  if (!task.dueDate) return null;
+  if (!task.dueDate){
+    return addDays(childStartDate, 1);
+  };
   const originStart = toMidnightUTC(task.startDate ?? task.createdAt);
   const originDue = toMidnightUTC(task.dueDate);
   const offsetMs = originDue.getTime() - originStart.getTime();
-  if (offsetMs < 0) return null; // dueDate before startDate — malformed definition
+  if (offsetMs < 0) return addDays(childStartDate, 1); // dueDate before startDate — malformed definition
   return new Date(childStartDate.getTime() + offsetMs);
 }
 
