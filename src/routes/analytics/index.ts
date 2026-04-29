@@ -17,6 +17,10 @@ import {
   getRetention,
   getFunnelAnalysis,
   getDailyRollup,
+  sessionStart,
+  sessionEnd,
+  trackPageView,
+  trackEvent,
 } from "../../controller/admin/analytics.report.controller";
 
 const router = Router();
@@ -142,5 +146,9 @@ router.get("/sessions/:sessionId", getSessionDetail);
  * Poll every 30s on the dashboard. Default window = 5 min.
  */
 router.get("/realtime", getRealtime);
+router.post("/session/start", sessionStart);
+router.post("/session/end", sessionEnd);
+router.post("/pageview", trackPageView);
+router.post("/event", trackEvent);
 
 export default router;

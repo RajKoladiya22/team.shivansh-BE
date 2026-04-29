@@ -6,6 +6,165 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 
+
+/* ═══════════════════════════════════════════════════════════
+   IP EXTRACTION
+   Works behind Nginx / Caddy / cloud load balancers.
+   Priority: X-Forwarded-For (first IP) → X-Real-IP → req.ip
+═══════════════════════════════════════════════════════════ */
+
+function extractClientIp(req: Request): string | null {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (forwarded) {
+    const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)
+      .split(",")[0]
+      .trim();
+    if (first && first !== "::1" && first !== "127.0.0.1") return first;
+  }
+
+  const realIp = req.headers["x-real-ip"];
+  if (realIp) {
+    const ip = Array.isArray(realIp) ? realIp[0] : realIp;
+    if (ip && ip !== "::1" && ip !== "127.0.0.1") return ip;
+  }
+
+  const ip = req.ip ?? req.socket?.remoteAddress ?? null;
+  if (ip === "::1" || ip === "127.0.0.1") return null; // localhost — skip geo
+  return ip ?? null;
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   IP-TO-GEO RESOLUTION
+   Uses ip-api.com (free, no API key, 45 req/min per IP).
+   Returns null on any failure — analytics must never throw.
+ 
+   For production volume, swap this for:
+     • MaxMind GeoLite2 (local DB, unlimited, free with signup)
+     • ipinfo.io (50k/month free)
+     • ip-api.com Pro (unlimited, paid)
+═══════════════════════════════════════════════════════════ */
+
+interface GeoResult {
+  country: string | null;
+  countryCode: string | null;
+  region: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  timezone: string | null;
+  // isp:         string | null;
+}
+
+const _geoCache = new Map<string, { data: GeoResult; expiresAt: number }>();
+const GEO_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours per IP
+
+async function resolveGeo(ip: string): Promise<GeoResult> {
+  const nullResult: GeoResult = {
+    country: null, countryCode: null, region: null,
+    city: null, latitude: null, longitude: null,
+    timezone: null,
+    // isp: null,
+  };
+
+  if (!ip) return nullResult;
+
+  // Check cache first
+  const cached = _geoCache.get(ip);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  try {
+    // ip-api.com — free tier, returns JSON, no API key needed.
+    // Fields param limits response to exactly what we need (faster).
+    const res = await fetch(
+      `http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,countryCode,regionName,city,lat,lon,timezone,isp`,
+      { signal: AbortSignal.timeout(3000) }, // 3 s hard timeout
+    );
+
+    if (!res.ok) return nullResult;
+
+    const data = await res.json();
+
+    if (data.status !== "success") return nullResult;
+
+    const result: GeoResult = {
+      country: data.country ?? null,
+      countryCode: data.countryCode ?? null,
+      region: data.regionName ?? null,
+      city: data.city ?? null,
+      latitude: typeof data.lat === "number" ? data.lat : null,
+      longitude: typeof data.lon === "number" ? data.lon : null,
+      timezone: data.timezone ?? null,
+      // isp:         data.isp         ?? null,
+    };
+
+    _geoCache.set(ip, { data: result, expiresAt: Date.now() + GEO_CACHE_TTL_MS });
+    return result;
+  } catch (err) {
+    console.warn("[analytics] geo lookup failed for", ip, err);
+    return nullResult;
+  }
+}
+
+
+
+/* ═══════════════════════════════════════════════════════════
+   UPSERT VISITOR
+   Finds or creates a visitor record by fingerprint/cookieId.
+═══════════════════════════════════════════════════════════ */
+
+async function upsertVisitor(params: {
+  fingerprint: string;
+  cookieId: string;
+  geo: GeoResult;
+  utm: { source?: string; campaign?: string };
+}) {
+  const { fingerprint, cookieId, geo, utm } = params;
+
+  // Try fingerprint first, then cookie
+  let visitor = await prisma.analyticsVisitor.findFirst({
+    where: { OR: [{ fingerprint }, { cookieId }] },
+  });
+
+  if (!visitor) {
+    visitor = await prisma.analyticsVisitor.create({
+      data: {
+        fingerprint,
+        cookieId,
+        isReturning: false,
+        sessionCount: 0,
+        pageViewCount: 0,
+        firstSeenAt: new Date(),
+        lastSeenAt: new Date(),
+        country: geo.country,
+        countryCode: geo.countryCode,
+        region: geo.region,
+        city: geo.city,
+        initialUtmSource: utm.source ?? null,
+        initialUtmCampaign: utm.campaign ?? null,
+      },
+    });
+  } else {
+    // Update last seen + geo (geo may have been null on first visit)
+    visitor = await prisma.analyticsVisitor.update({
+      where: { id: visitor.id },
+      data: {
+        lastSeenAt: new Date(),
+        isReturning: true,
+        // Only backfill geo if it was missing
+        ...(visitor.country == null && geo.country ? {
+          country: geo.country,
+          countryCode: geo.countryCode,
+          region: geo.region,
+          city: geo.city,
+        } : {}),
+      },
+    });
+  }
+
+  return visitor;
+}
+
 /* ═══════════════════════════════════════════════════════════
    DATE HELPERS
 ═══════════════════════════════════════════════════════════ */
@@ -15,7 +174,7 @@ import {
  * Defaults: from = 30 days ago, to = now.
  */
 function parseDateRange(query: Record<string, any>): { from: Date; to: Date } {
-  const to   = query.to   ? new Date(query.to as string)   : new Date();
+  const to = query.to ? new Date(query.to as string) : new Date();
   const from = query.from ? new Date(query.from as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   return { from, to };
 }
@@ -50,7 +209,7 @@ function fillDays(
 
 /** Clamp pagination params. */
 function paginate(query: Record<string, any>): { page: number; limit: number; skip: number } {
-  const page  = Math.max(1, Number(query.page  ?? 1));
+  const page = Math.max(1, Number(query.page ?? 1));
   const limit = Math.min(100, Math.max(1, Number(query.limit ?? 20)));
   return { page, limit, skip: (page - 1) * limit };
 }
@@ -59,6 +218,295 @@ function paginate(query: Record<string, any>): { page: number; limit: number; sk
 function pctChange(current: number, previous: number): number | null {
   if (previous === 0) return null;
   return Math.round(((current - previous) / previous) * 100 * 10) / 10;
+}
+
+
+
+/* ═══════════════════════════════════════════════════════════
+   POST /analytics/session/start
+   Body: { fingerprint, cookieId, device, referrer, utm, location }
+═══════════════════════════════════════════════════════════ */
+
+export async function sessionStart(req: Request, res: Response) {
+  try {
+    const {
+      fingerprint,
+      cookieId,
+      device = {},
+      referrer = {},
+      utm = {},
+      location: clientHints = {},
+    } = req.body;
+
+    if (!fingerprint || !cookieId) {
+      return sendErrorResponse(res, 400, "fingerprint and cookieId are required");
+    }
+
+    // 1. Resolve geo from the real client IP (authoritative)
+    const clientIp = extractClientIp(req);
+    const geo = clientIp ? await resolveGeo(clientIp) : {
+      country: null, countryCode: null, region: null,
+      city: null, latitude: null, longitude: null,
+      timezone: null, isp: null,
+    };
+
+    // 2. Supplement timezone from client hints if IP geo didn't return one
+    const timezone = geo.timezone ?? clientHints.timezone ?? null;
+
+    // 3. Upsert visitor
+    const visitor = await upsertVisitor({
+      fingerprint,
+      cookieId,
+      geo,
+      utm: { source: utm.source, campaign: utm.campaign },
+    });
+
+    // 4. Create session
+    const session = await prisma.analyticsSession.create({
+      data: {
+        visitorId: visitor.id,
+        startedAt: new Date(),
+        bounced: true,          // default true; flipped on 2nd page view
+        pageViewCount: 0,
+
+        // Device
+        deviceType: device.type ?? "UNKNOWN",
+        browser: device.browser ?? null,
+        browserVersion: device.browserVersion ?? null,
+        os: device.os ?? null,
+        osVersion: device.osVersion ?? null,
+        deviceBrand: device.brand ?? null,
+        deviceModel: device.model ?? null,
+        screenWidth: device.screenWidth ?? null,
+        screenHeight: device.screenHeight ?? null,
+        viewportWidth: device.viewportWidth ?? null,
+        viewportHeight: device.viewportHeight ?? null,
+
+        // Referrer
+        // referrerUrl:    referrer.url  ?? null,
+        // referrerHost:   referrer.host ?? null,
+        // referrerType:   referrer.type ?? "direct",
+        // Referrer
+        referrer: referrer.url ?? null,   // was: referrerUrl
+        referrerHost: referrer.host ?? null,
+        referrerType: referrer.type ?? "direct",
+
+        // UTM
+        utmSource: utm.source ?? null,
+        utmMedium: utm.medium ?? null,
+        utmCampaign: utm.campaign ?? null,
+        utmContent: utm.content ?? null,
+        utmTerm: utm.term ?? null,
+
+        // Geo — resolved from IP (accurate)
+        country: geo.country ?? null,
+        countryCode: geo.countryCode ?? null,
+        region: geo.region ?? null,
+        city: geo.city ?? null,
+        latitude: geo.latitude ?? null,
+        longitude: geo.longitude ?? null,
+        timezone,
+        // isp:         geo.isp         ?? null,
+
+        // Client language (from navigator.language)
+        language: clientHints.language ?? null,
+      },
+    });
+
+    // 5. Increment visitor session count
+    await prisma.analyticsVisitor.update({
+      where: { id: visitor.id },
+      data: { sessionCount: { increment: 1 } },
+    });
+
+    return sendSuccessResponse(res, 200, "Session started", {
+      visitorId: visitor.id,
+      sessionId: session.id,
+    });
+  } catch (err: any) {
+    console.error("[sessionStart]", err);
+    return sendErrorResponse(res, 500, "Failed to start session");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   POST /analytics/session/end
+   Body: { sessionId, durationSec, exitPath }
+═══════════════════════════════════════════════════════════ */
+
+export async function sessionEnd(req: Request, res: Response) {
+  try {
+    const { sessionId, durationSec, exitPath } = req.body;
+    if (!sessionId) return sendErrorResponse(res, 400, "sessionId required");
+
+    await prisma.analyticsSession.update({
+      where: { id: sessionId },
+      data: {
+        endedAt: new Date(),
+        durationSec: typeof durationSec === "number" ? durationSec : null,
+        exitPage: exitPath ?? null,   // was: exitPath
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Session ended");
+  } catch (err: any) {
+    console.error("[sessionEnd]", err);
+    return sendErrorResponse(res, 500, "Failed to end session");
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   POST /analytics/pageview
+   Body: { sessionId, visitorId, url, path, host, title,
+           query, hash, referrer, isSpa, performance }
+═══════════════════════════════════════════════════════════ */
+
+export async function trackPageView(req: Request, res: Response) {
+  try {
+    const {
+      sessionId, visitorId, url, path, host, title,
+      query = null, hash = null, referrer = null,
+      isSpa = false, performance: perf = {},
+    } = req.body;
+
+    if (!sessionId || !visitorId || !path) {
+      return sendErrorResponse(res, 400, "sessionId, visitorId, path required");
+    }
+
+    const pageView = await prisma.analyticsPageView.create({
+      data: {
+        sessionId,
+        visitorId,
+        // url: url ?? null,
+        url: url ?? path, 
+        path,
+        host: host ?? null,
+        title: title ?? null,
+        query,
+        hash,
+        referrer,
+        isSpa,
+        viewedAt: new Date(),
+
+        // Core Web Vitals (may be null on first load — sent with next pageview)
+        lcp: perf.lcp ?? null,
+        fid: perf.fid ?? null,
+        cls: perf.cls ?? null,
+        fcp: perf.fcp ?? null,
+        ttfb: perf.ttfb ?? null,
+      },
+    });
+
+    // Increment session page view count + un-bounce if 2nd+ view
+    const session = await prisma.analyticsSession.update({
+      where: { id: sessionId },
+      data: {
+        pageViewCount: { increment: 1 },
+        bounced: false, // any second page view means not bounced
+      },
+      select: { pageViewCount: true },
+    });
+
+    // First page view: bounced is still true (set in session/start)
+    // If this is the first pageview, revert the bounced=false above
+    if (session.pageViewCount === 1) {
+      await prisma.analyticsSession.update({
+        where: { id: sessionId },
+        data: { bounced: true },
+      });
+    }
+
+    // Increment visitor page view count
+    await prisma.analyticsVisitor.update({
+      where: { id: visitorId },
+      data: { pageViewCount: { increment: 1 } },
+    });
+
+    return sendSuccessResponse(res, 200, "Page view recorded", {
+      pageViewId: pageView.id,
+    });
+  } catch (err: any) {
+    console.error("[trackPageView]", err);
+    return sendErrorResponse(res, 500, "Failed to record page view");
+  }
+}
+
+
+
+/* ═══════════════════════════════════════════════════════════
+   POST /analytics/event
+   Body: { sessionId, visitorId, pageViewId, category, name,
+           label, value, meta, element, pagePath }
+═══════════════════════════════════════════════════════════ */
+
+export async function trackEvent(req: Request, res: Response) {
+  try {
+    const {
+      sessionId, visitorId, pageViewId = null,
+      category = "CUSTOM", name, label = null,
+      value = null, meta = null, element = null,
+      pagePath = null,
+    } = req.body;
+
+    if (!sessionId || !visitorId || !name) {
+      return sendErrorResponse(res, 400, "sessionId, visitorId, name required");
+    }
+
+    // Handle the special page_leave event — update pageview with scroll + time data
+    if (category === "SCROLL" && name === "page_leave" && pageViewId && meta) {
+      await prisma.analyticsPageView.update({
+        where: { id: pageViewId },
+        data: {
+          timeOnPageSec: typeof meta.timeOnPageSec === "number" ? meta.timeOnPageSec : null,
+          maxScrollPct: typeof meta.maxScrollPct === "number" ? meta.maxScrollPct : null,
+        },
+      }).catch(() => { }); // non-fatal if pageview no longer exists
+    }
+
+    // await prisma.analyticsEvent.create({
+    //   data: {
+    //     sessionId,
+    //     visitorId,
+    //     pageViewId,
+    //     category,
+    //     name,
+    //     label,
+    //     value: typeof value === "number" ? value : null,
+    //     meta: meta ? meta : undefined,
+    //     element: element ? element : undefined,
+    //     pagePath,
+    //     occurredAt: new Date(),
+    //   },
+    // });
+
+    await prisma.analyticsEvent.create({
+      data: {
+        sessionId,
+        visitorId,
+        pageViewId,
+        category,
+        name,
+        label,
+        value: typeof value === "number" ? value : null,
+        meta: meta ?? undefined,
+
+        // Flatten the element object into the schema's separate columns
+        elementTag: element?.tag ?? null,
+        elementId: element?.id ?? null,
+        elementClass: element?.class ?? null,
+        elementText: element?.text ?? null,
+        elementHref: element?.href ?? null,
+
+        pagePath,
+        occurredAt: new Date(),
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Event recorded");
+  } catch (err: any) {
+    console.error("[trackEvent]", err);
+    return sendErrorResponse(res, 500, "Failed to record event");
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -71,7 +519,7 @@ export async function getOverview(req: Request, res: Response) {
     const { from, to } = parseDateRange(req.query);
     const span = to.getTime() - from.getTime();
     const prevFrom = new Date(from.getTime() - span);
-    const prevTo   = new Date(from);
+    const prevTo = new Date(from);
 
     /* ── Current period ──────────────────────────────────────── */
     const [
@@ -111,7 +559,7 @@ export async function getOverview(req: Request, res: Response) {
 
       // Previous period comparisons
       prisma.analyticsSession.count({ where: { startedAt: { gte: prevFrom, lte: prevTo } } }),
-      prisma.analyticsPageView.count({ where: { viewedAt:  { gte: prevFrom, lte: prevTo } } }),
+      prisma.analyticsPageView.count({ where: { viewedAt: { gte: prevFrom, lte: prevTo } } }),
       prisma.analyticsSession.findMany({
         where: { startedAt: { gte: prevFrom, lte: prevTo } },
         distinct: ["visitorId"],
@@ -123,19 +571,19 @@ export async function getOverview(req: Request, res: Response) {
 
     const bounceRate = sessions > 0 ? Math.round((bouncedSessions / sessions) * 100 * 10) / 10 : 0;
     const avgSessionDuration = Math.round(durationAgg._avg.durationSec ?? 0);
-    const returningVisitors  = uniqueVisitors - newVisitors;
+    const returningVisitors = uniqueVisitors - newVisitors;
 
     return sendSuccessResponse(res, 200, "Overview fetched", {
       period: { from, to },
       kpis: {
-        sessions:          { value: sessions,          change: pctChange(sessions,          prevSessions)  },
-        pageViews:         { value: pageViews,         change: pctChange(pageViews,         prevPageViews) },
-        uniqueVisitors:    { value: uniqueVisitors,    change: pctChange(uniqueVisitors,    prevUnique)    },
-        newVisitors:       { value: newVisitors                                                            },
-        returningVisitors: { value: returningVisitors                                                      },
-        bounceRate:        { value: bounceRate,        unit: "%" },
-        avgSessionDuration:{ value: avgSessionDuration, unit: "sec" },
-        events:            { value: eventCount },
+        sessions: { value: sessions, change: pctChange(sessions, prevSessions) },
+        pageViews: { value: pageViews, change: pctChange(pageViews, prevPageViews) },
+        uniqueVisitors: { value: uniqueVisitors, change: pctChange(uniqueVisitors, prevUnique) },
+        newVisitors: { value: newVisitors },
+        returningVisitors: { value: returningVisitors },
+        bounceRate: { value: bounceRate, unit: "%" },
+        avgSessionDuration: { value: avgSessionDuration, unit: "sec" },
+        events: { value: eventCount },
       },
     });
   } catch (err: any) {
@@ -188,9 +636,9 @@ export async function getTrafficOverTime(req: Request, res: Response) {
       period: { from, to },
       days: allDays,
       series: {
-        sessions:       fillDays(toRow(sessionRows), allDays),
-        pageViews:      fillDays(toRow(pvRows),      allDays),
-        uniqueVisitors: fillDays(toRow(uvRows),      allDays),
+        sessions: fillDays(toRow(sessionRows), allDays),
+        pageViews: fillDays(toRow(pvRows), allDays),
+        uniqueVisitors: fillDays(toRow(uvRows), allDays),
       },
     });
   } catch (err: any) {
@@ -220,7 +668,7 @@ export async function getTopPages(req: Request, res: Response) {
         by: ["path"],
         where,
         _count: { id: true },
-        _avg:   { timeOnPageSec: true, maxScrollPct: true },
+        _avg: { timeOnPageSec: true, maxScrollPct: true },
         orderBy: { _count: { id: "desc" } },
         skip,
         take: limit,
@@ -246,11 +694,11 @@ export async function getTopPages(req: Request, res: Response) {
     const uvMap = new Map(uvPerPath.map((r) => [r.path, Number(r.uv)]));
 
     const data = rows.map((r) => ({
-      path:              r.path,
-      views:             r._count.id,
-      uniqueVisitors:    uvMap.get(r.path) ?? 0,
-      avgTimeOnPageSec:  Math.round(r._avg.timeOnPageSec ?? 0),
-      avgScrollPct:      Math.round(r._avg.maxScrollPct  ?? 0),
+      path: r.path,
+      views: r._count.id,
+      uniqueVisitors: uvMap.get(r.path) ?? 0,
+      avgTimeOnPageSec: Math.round(r._avg.timeOnPageSec ?? 0),
+      avgScrollPct: Math.round(r._avg.maxScrollPct ?? 0),
     }));
 
     return sendSuccessResponse(res, 200, "Top pages fetched", {
@@ -305,7 +753,7 @@ export async function getTrafficSources(req: Request, res: Response) {
         by: ["utmCampaign", "utmSource", "utmMedium"],
         where: { ...where, utmCampaign: { not: null } },
         _count: { id: true },
-        _avg:  { durationSec: true },
+        _avg: { durationSec: true },
         orderBy: { _count: { id: "desc" } },
         take: 30,
       }),
@@ -316,24 +764,24 @@ export async function getTrafficSources(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "Traffic sources fetched", {
       period: { from, to },
       byType: byType.map((r) => ({
-        type:    r.referrerType ?? "direct",
-        sessions:r._count.id,
-        pct:     total > 0 ? Math.round((r._count.id / total) * 1000) / 10 : 0,
+        type: r.referrerType ?? "direct",
+        sessions: r._count.id,
+        pct: total > 0 ? Math.round((r._count.id / total) * 1000) / 10 : 0,
       })),
       topReferrers: byHost.map((r) => ({
-        host:    r.referrerHost,
-        sessions:r._count.id,
+        host: r.referrerHost,
+        sessions: r._count.id,
       })),
       utmSources: byUtmSource.map((r) => ({
-        source:  r.utmSource,
-        sessions:r._count.id,
+        source: r.utmSource,
+        sessions: r._count.id,
       })),
       campaigns: byUtmCampaign.map((r) => ({
-        campaign:           r.utmCampaign,
-        source:             r.utmSource,
-        medium:             r.utmMedium,
-        sessions:           r._count.id,
-        avgDurationSec:     Math.round(r._avg.durationSec ?? 0),
+        campaign: r.utmCampaign,
+        source: r.utmSource,
+        medium: r.utmMedium,
+        sessions: r._count.id,
+        avgDurationSec: Math.round(r._avg.durationSec ?? 0),
       })),
     });
   } catch (err: any) {
@@ -402,7 +850,7 @@ export async function getDeviceBreakdown(req: Request, res: Response) {
       ORDER BY 2 DESC`;
 
     const total = byDeviceType.reduce((s, r) => s + r._count.id, 0);
-    const pct   = (n: number) => total > 0 ? Math.round((n / total) * 1000) / 10 : 0;
+    const pct = (n: number) => total > 0 ? Math.round((n / total) * 1000) / 10 : 0;
 
     return sendSuccessResponse(res, 200, "Device breakdown fetched", {
       period: { from, to },
@@ -478,17 +926,17 @@ export async function getGeoBreakdown(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "Geo breakdown fetched", {
       period: { from, to },
       countries: byCountry.map((r) => ({
-        country:     r.country,
+        country: r.country,
         countryCode: r.countryCode,
-        sessions:    r._count.id,
-        pct:         total > 0 ? Math.round((r._count.id / total) * 1000) / 10 : 0,
-        coords:      r.countryCode ? coordMap.get(r.countryCode) ?? null : null,
+        sessions: r._count.id,
+        pct: total > 0 ? Math.round((r._count.id / total) * 1000) / 10 : 0,
+        coords: r.countryCode ? coordMap.get(r.countryCode) ?? null : null,
       })),
       cities: byCity.map((r) => ({
-        city:        r.city,
-        country:     r.country,
+        city: r.city,
+        country: r.country,
         countryCode: r.countryCode,
-        sessions:    r._count.id,
+        sessions: r._count.id,
       })),
     });
   } catch (err: any) {
@@ -507,13 +955,13 @@ export async function getEventReport(req: Request, res: Response) {
     const { from, to } = parseDateRange(req.query);
     const { skip, limit, page } = paginate(req.query);
     const category = req.query.category as string | undefined;
-    const name     = req.query.name     as string | undefined;
-    const pagePath = req.query.path     as string | undefined;
+    const name = req.query.name as string | undefined;
+    const pagePath = req.query.path as string | undefined;
 
     const where: any = {
       occurredAt: { gte: from, lte: to },
       ...(category ? { category } : {}),
-      ...(name     ? { name    } : {}),
+      ...(name ? { name } : {}),
       ...(pagePath ? { pagePath: { contains: pagePath } } : {}),
     };
 
@@ -522,9 +970,9 @@ export async function getEventReport(req: Request, res: Response) {
       prisma.analyticsEvent.groupBy({
         by: ["category", "name", "label"],
         where,
-        _count:   { id: true },
-        _avg:     { value:  true },
-        orderBy:  { _count: { id: "desc" } },
+        _count: { id: true },
+        _avg: { value: true },
+        orderBy: { _count: { id: "desc" } },
         skip,
         take: limit,
       }),
@@ -569,25 +1017,25 @@ export async function getEventReport(req: Request, res: Response) {
       period: { from, to },
       meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
       topEvents: topEvents.map((r) => ({
-        category:  r.category,
-        name:      r.name,
-        label:     r.label,
-        count:     r._count.id,
-        avgValue:  r._avg.value != null ? Math.round(r._avg.value * 100) / 100 : null,
+        category: r.category,
+        name: r.name,
+        label: r.label,
+        count: r._count.id,
+        avgValue: r._avg.value != null ? Math.round(r._avg.value * 100) / 100 : null,
       })),
       byCategory: byCategory.map((r) => ({
         category: r.category,
-        count:    r._count.id,
+        count: r._count.id,
       })),
       trend: fillDays(
         eventTrend.map((r) => ({
-          date:  new Date(r.date).toISOString().slice(0, 10),
+          date: new Date(r.date).toISOString().slice(0, 10),
           value: Number(r.count),
         })),
         allDays,
       ),
       topPages: topEventPages.map((r) => ({
-        path:  r.pagePath,
+        path: r.pagePath,
         count: r._count.id,
       })),
     });
@@ -611,8 +1059,8 @@ export async function getEventReport(req: Request, res: Response) {
 export async function getCoreWebVitals(req: Request, res: Response) {
   try {
     const { from, to } = parseDateRange(req.query);
-    const { limit }    = paginate(req.query);
-    const filterPath   = req.query.path as string | undefined;
+    const { limit } = paginate(req.query);
+    const filterPath = req.query.path as string | undefined;
 
     const where: any = {
       viewedAt: { gte: from, lte: to },
@@ -622,15 +1070,15 @@ export async function getCoreWebVitals(req: Request, res: Response) {
     /* ── Site-wide averages ──────────────────────────────────── */
     const siteAvg = await prisma.analyticsPageView.aggregate({
       where,
-      _avg:    { lcp: true, fid: true, cls: true, fcp: true, ttfb: true },
-      _count:  { id: true },
+      _avg: { lcp: true, fid: true, cls: true, fcp: true, ttfb: true },
+      _count: { id: true },
     });
 
     /* ── Per-page averages, ranked by worst LCP ──────────────── */
     const perPage = await prisma.analyticsPageView.groupBy({
       by: ["path"],
       where: { ...where, lcp: { not: null } },
-      _avg:   { lcp: true, fid: true, cls: true, fcp: true, ttfb: true },
+      _avg: { lcp: true, fid: true, cls: true, fcp: true, ttfb: true },
       _count: { id: true },
       orderBy: { _avg: { lcp: "desc" } },
       take: limit,
@@ -665,8 +1113,8 @@ export async function getCoreWebVitals(req: Request, res: Response) {
 
     function vitalsGrade(lcp: number | null, cls: number | null): "good" | "needs improvement" | "poor" | "unknown" {
       if (lcp == null || cls == null) return "unknown";
-      if (lcp < 2500 && cls < 0.1)   return "good";
-      if (lcp < 4000 && cls < 0.25)  return "needs improvement";
+      if (lcp < 2500 && cls < 0.1) return "good";
+      if (lcp < 4000 && cls < 0.25) return "needs improvement";
       return "poor";
     }
 
@@ -674,25 +1122,25 @@ export async function getCoreWebVitals(req: Request, res: Response) {
       period: { from, to },
       siteWide: {
         samples: siteAvg._count.id,
-        lcp:     siteAvg._avg.lcp  != null ? Math.round(siteAvg._avg.lcp)  : null,
-        fid:     siteAvg._avg.fid  != null ? Math.round(siteAvg._avg.fid)  : null,
-        cls:     siteAvg._avg.cls  != null ? Math.round(siteAvg._avg.cls * 1000) / 1000 : null,
-        fcp:     siteAvg._avg.fcp  != null ? Math.round(siteAvg._avg.fcp)  : null,
-        ttfb:    siteAvg._avg.ttfb != null ? Math.round(siteAvg._avg.ttfb) : null,
-        grade:   vitalsGrade(siteAvg._avg.lcp, siteAvg._avg.cls),
+        lcp: siteAvg._avg.lcp != null ? Math.round(siteAvg._avg.lcp) : null,
+        fid: siteAvg._avg.fid != null ? Math.round(siteAvg._avg.fid) : null,
+        cls: siteAvg._avg.cls != null ? Math.round(siteAvg._avg.cls * 1000) / 1000 : null,
+        fcp: siteAvg._avg.fcp != null ? Math.round(siteAvg._avg.fcp) : null,
+        ttfb: siteAvg._avg.ttfb != null ? Math.round(siteAvg._avg.ttfb) : null,
+        grade: vitalsGrade(siteAvg._avg.lcp, siteAvg._avg.cls),
       },
       worstPages: perPage.map((r) => ({
-        path:    r.path,
+        path: r.path,
         samples: r._count.id,
-        lcp:     r._avg.lcp  != null ? Math.round(r._avg.lcp)  : null,
-        fid:     r._avg.fid  != null ? Math.round(r._avg.fid)  : null,
-        cls:     r._avg.cls  != null ? Math.round(r._avg.cls * 1000) / 1000 : null,
-        fcp:     r._avg.fcp  != null ? Math.round(r._avg.fcp)  : null,
-        ttfb:    r._avg.ttfb != null ? Math.round(r._avg.ttfb) : null,
-        grade:   vitalsGrade(r._avg.lcp, r._avg.cls),
+        lcp: r._avg.lcp != null ? Math.round(r._avg.lcp) : null,
+        fid: r._avg.fid != null ? Math.round(r._avg.fid) : null,
+        cls: r._avg.cls != null ? Math.round(r._avg.cls * 1000) / 1000 : null,
+        fcp: r._avg.fcp != null ? Math.round(r._avg.fcp) : null,
+        ttfb: r._avg.ttfb != null ? Math.round(r._avg.ttfb) : null,
+        grade: vitalsGrade(r._avg.lcp, r._avg.cls),
       })),
-      lcpDistribution:  lcpBuckets.map((r)  => ({ bucket: r.bucket,  count: Number(r.count)  })),
-      clsDistribution:  clsBuckets.map((r)  => ({ bucket: r.bucket,  count: Number(r.count)  })),
+      lcpDistribution: lcpBuckets.map((r) => ({ bucket: r.bucket, count: Number(r.count) })),
+      clsDistribution: clsBuckets.map((r) => ({ bucket: r.bucket, count: Number(r.count) })),
     });
   } catch (err: any) {
     console.error("[getCoreWebVitals]", err);
@@ -713,12 +1161,12 @@ export async function getVisitorList(req: Request, res: Response) {
     const where: any = {
       lastSeenAt: { gte: from, lte: to },
     };
-    if (req.query.country)     where.country     = req.query.country;
+    if (req.query.country) where.country = req.query.country;
     if (req.query.isReturning) where.isReturning = req.query.isReturning === "true";
-    if (req.query.accountId)   where.accountId   = req.query.accountId;
+    if (req.query.accountId) where.accountId = req.query.accountId;
     if (req.query.search) {
       where.OR = [
-        { city:    { contains: req.query.search as string, mode: "insensitive" } },
+        { city: { contains: req.query.search as string, mode: "insensitive" } },
         { country: { contains: req.query.search as string, mode: "insensitive" } },
       ];
     }
@@ -730,31 +1178,31 @@ export async function getVisitorList(req: Request, res: Response) {
         take: limit,
         orderBy: { lastSeenAt: "desc" },
         select: {
-          id:            true,
-          fingerprint:   true,
-          cookieId:      true,
-          accountId:     true,
-          sessionCount:  true,
+          id: true,
+          fingerprint: true,
+          cookieId: true,
+          accountId: true,
+          sessionCount: true,
           pageViewCount: true,
-          isReturning:   true,
-          firstSeenAt:   true,
-          lastSeenAt:    true,
-          country:       true,
-          countryCode:   true,
-          region:        true,
-          city:          true,
-          initialUtmSource:   true,
+          isReturning: true,
+          firstSeenAt: true,
+          lastSeenAt: true,
+          country: true,
+          countryCode: true,
+          region: true,
+          city: true,
+          initialUtmSource: true,
           initialUtmCampaign: true,
           // Latest session for device info
           sessions: {
             orderBy: { startedAt: "desc" },
             take: 1,
             select: {
-              deviceType:     true,
-              browser:        true,
-              os:             true,
-              referrerType:   true,
-              utmSource:      true,
+              deviceType: true,
+              browser: true,
+              os: true,
+              referrerType: true,
+              utmSource: true,
             },
           },
         },
@@ -808,9 +1256,9 @@ export async function getVisitorDetail(req: Request, res: Response) {
 
     // Recent events (last 100)
     const events = await prisma.analyticsEvent.findMany({
-      where:   { visitorId },
+      where: { visitorId },
       orderBy: { occurredAt: "desc" },
-      take:    100,
+      take: 100,
       select: {
         id: true, category: true, name: true, label: true,
         value: true, pagePath: true, occurredAt: true,
@@ -837,7 +1285,7 @@ export async function getRealtime(req: Request, res: Response) {
     const [activeSessions, activePageViews, recentEvents, topActivePages] = await Promise.all([
       // Sessions that started within the window AND have not ended
       prisma.analyticsSession.findMany({
-        where:   { startedAt: { gte: since }, endedAt: null },
+        where: { startedAt: { gte: since }, endedAt: null },
         orderBy: { startedAt: "desc" },
         take: 50,
         select: {
@@ -854,31 +1302,31 @@ export async function getRealtime(req: Request, res: Response) {
 
       // Events in the window
       prisma.analyticsEvent.findMany({
-        where:   { occurredAt: { gte: since } },
+        where: { occurredAt: { gte: since } },
         orderBy: { occurredAt: "desc" },
-        take:    20,
+        take: 20,
         select: { id: true, name: true, category: true, pagePath: true, occurredAt: true },
       }),
 
       // Most viewed pages right now
       prisma.analyticsPageView.groupBy({
-        by:      ["path"],
-        where:   { viewedAt: { gte: since } },
-        _count:  { id: true },
+        by: ["path"],
+        where: { viewedAt: { gte: since } },
+        _count: { id: true },
         orderBy: { _count: { id: "desc" } },
-        take:    10,
+        take: 10,
       }),
     ]);
 
     return sendSuccessResponse(res, 200, "Realtime data fetched", {
-      windowMinutes:   windowMin,
+      windowMinutes: windowMin,
       since,
-      activeUsers:     activeSessions.length,
-      pageViews:       activePageViews,
+      activeUsers: activeSessions.length,
+      pageViews: activePageViews,
       activeSessions,
       recentEvents,
       topActivePages: topActivePages.map((r) => ({
-        path:  r.path,
+        path: r.path,
         views: r._count.id,
       })),
     });
@@ -983,7 +1431,7 @@ export async function getRetention(req: Request, res: Response) {
        ORDER BY 1`;
 
     const allDays = daysInRange(from, to);
-    const dayMap  = new Map(dailyTrend.map((r) => [
+    const dayMap = new Map(dailyTrend.map((r) => [
       new Date(r.date).toISOString().slice(0, 10),
       { newVisitors: Number(r.new_visitors), returningVisitors: Number(r.returning_visitors) },
     ]));
@@ -991,19 +1439,19 @@ export async function getRetention(req: Request, res: Response) {
     return sendSuccessResponse(res, 200, "Retention fetched", {
       period: { from, to },
       summary: {
-        newVisitors:       newCount,
+        newVisitors: newCount,
         returningVisitors: returningCount,
         retentionRate: newCount > 0
           ? Math.round((returningCount / newCount) * 1000) / 10
           : 0,
       },
       sessionDepth: sessionDepth.map((r) => ({
-        bucket:   r.bucket,
+        bucket: r.bucket,
         visitors: Number(r.visitors),
       })),
       dailyTrend: allDays.map((d) => ({
-        date:              d,
-        newVisitors:       dayMap.get(d)?.newVisitors       ?? 0,
+        date: d,
+        newVisitors: dayMap.get(d)?.newVisitors ?? 0,
         returningVisitors: dayMap.get(d)?.returningVisitors ?? 0,
       })),
     });
@@ -1052,7 +1500,7 @@ export async function getFunnelAnalysis(req: Request, res: Response) {
       return acc;
     }, []);
 
-    const topOfFunnel    = funnelResult[0]?.visitors ?? 0;
+    const topOfFunnel = funnelResult[0]?.visitors ?? 0;
     const bottomOfFunnel = funnelResult[funnelResult.length - 1]?.visitors ?? 0;
     const overallConvPct = topOfFunnel > 0
       ? Math.round((bottomOfFunnel / topOfFunnel) * 1000) / 10
@@ -1089,12 +1537,12 @@ export async function getDailyRollup(req: Request, res: Response) {
         date: { gte: from, lte: to },
         // If no groupBy, return total rows (all dimensions null)
         ...(groupBy ? {} : {
-          path:         null,
-          country:      null,
-          deviceType:   null,
+          path: null,
+          country: null,
+          deviceType: null,
           referrerType: null,
-          utmCampaign:  null,
-          utmSource:    null,
+          utmCampaign: null,
+          utmSource: null,
         }),
       },
       orderBy: { date: "asc" },
@@ -1103,13 +1551,13 @@ export async function getDailyRollup(req: Request, res: Response) {
     // Aggregate totals across the date range
     const totals = rollups.reduce(
       (acc, r) => ({
-        sessions:          acc.sessions          + r.sessions,
-        pageViews:         acc.pageViews         + r.pageViews,
-        uniqueVisitors:    acc.uniqueVisitors     + r.uniqueVisitors,
-        newVisitors:       acc.newVisitors        + r.newVisitors,
-        returningVisitors: acc.returningVisitors  + r.returningVisitors,
-        bounces:           acc.bounces            + r.bounces,
-        totalDurationSec:  acc.totalDurationSec   + r.totalDurationSec,
+        sessions: acc.sessions + r.sessions,
+        pageViews: acc.pageViews + r.pageViews,
+        uniqueVisitors: acc.uniqueVisitors + r.uniqueVisitors,
+        newVisitors: acc.newVisitors + r.newVisitors,
+        returningVisitors: acc.returningVisitors + r.returningVisitors,
+        bounces: acc.bounces + r.bounces,
+        totalDurationSec: acc.totalDurationSec + r.totalDurationSec,
       }),
       { sessions: 0, pageViews: 0, uniqueVisitors: 0, newVisitors: 0, returningVisitors: 0, bounces: 0, totalDurationSec: 0 },
     );
@@ -1123,10 +1571,10 @@ export async function getDailyRollup(req: Request, res: Response) {
       : 0;
 
     return sendSuccessResponse(res, 200, "Rollup fetched", {
-      period:  { from, to },
+      period: { from, to },
       groupBy: groupBy ?? "none",
-      totals:  { ...totals, bounceRate, avgSessionDuration },
-      rows:    rollups,
+      totals: { ...totals, bounceRate, avgSessionDuration },
+      rows: rollups,
     });
   } catch (err: any) {
     console.error("[getDailyRollup]", err);
