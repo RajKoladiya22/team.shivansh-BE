@@ -1859,6 +1859,15 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
    Dedicated "mark done" endpoint. Surfaces incomplete checklist
    items as a non-blocking warning in the response.
 ───────────────────────────────────────────────────────────── */
+const getDurationMinutes = (start?: Date | string, end?: Date | string) => {
+  if (!start || !end) return 0;
+
+  const diffMs = new Date(end).getTime() - new Date(start).getTime();
+  if (diffMs <= 0) return 0;
+
+  return Math.floor(diffMs / (1000 * 60)); // ms → minutes
+};
+
 export async function completeTaskUser(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
@@ -1877,6 +1886,7 @@ export async function completeTaskUser(req: Request, res: Response) {
         id: true,
         status: true,
         projectId: true,
+        startedAt: true,
         checklist: {
           where: { status: "PENDING" },
           select: { id: true },
@@ -1892,11 +1902,20 @@ export async function completeTaskUser(req: Request, res: Response) {
 
     const pendingChecklistCount = task.checklist.length;
     const completedAt = new Date();
+    let durationMinutes: number | undefined = undefined;
+
+    if (task.startedAt) {
+      durationMinutes = getDurationMinutes(task.startedAt, completedAt);
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.task.update({
         where: { id },
-        data: { status: TaskStatus.COMPLETED, completedAt },
+        data: {
+          status: TaskStatus.COMPLETED, completedAt, loggedMinutes: {
+            increment: durationMinutes, // ✅ adds session time
+          },
+        },
         select: TASK_LIST_SELECT,
       });
 
@@ -1937,6 +1956,7 @@ export async function completeTaskUser(req: Request, res: Response) {
       updatedAt: updated.updatedAt,
       completedBy: accountId,
       note: note ?? null,
+      durationMinutes,
     });
     await triggerTaskNotification({
       taskId: id,

@@ -788,7 +788,7 @@ function applyDayOfMonth(date: Date, dayOfMonth: number | undefined): Date {
  *
  * Returns null if the definition has no dueDate.
  */
-function computeChildDueDate(
+function computeChildDueDateV1(
   task: { startDate: Date | null; createdAt: Date; dueDate: Date | null },
   childStartDate: Date,
 ): Date | null {
@@ -801,6 +801,19 @@ function computeChildDueDate(
   if (offsetMs < 0) return addDays(childStartDate, 1); // dueDate before startDate — malformed definition
   return new Date(childStartDate.getTime() + offsetMs);
 }
+
+function computeChildStartDate(spawnedAt: Date): Date {
+  // Start at 10:00 AM UTC of the spawn day
+  const midnight = toMidnightUTC(spawnedAt);
+  return new Date(midnight.getTime() + 10 * 60 * 60 * 1000); // +10 hours
+}
+
+function computeChildDueDate(childStartDate: Date): Date {
+  // Due at end of the same day (23:59:59.999 UTC)
+  const midnight = toMidnightUTC(childStartDate);
+  return new Date(midnight.getTime() + 86_400_000 - 1);
+}
+
 
 /* ═══════════════════════════════════════════════════════════════
    CORE SPAWN FUNCTION
@@ -905,7 +918,8 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
 
       if (!lastChild) {
         // First instance: the definition's own startDate is the first window.
-        nextWindowStart = toMidnightUTC(task.startDate ?? task.createdAt);
+        // nextWindowStart = toMidnightUTC(task.startDate ?? task.createdAt);
+        nextWindowStart = todayMidnight;
       } else {
         const lastStart = lastChild.startDate
           ? toMidnightUTC(lastChild.startDate)
@@ -976,14 +990,16 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
       );
 
       /* ── 2g. Compute child dueDate ──────────────────────────── */
-      const childDueDate = computeChildDueDate(
-        {
-          startDate: task.startDate,
-          createdAt: task.createdAt,
-          dueDate: task.dueDate,
-        },
-        nextWindowStart,
-      );
+      // const childDueDate = computeChildDueDate(
+      //   {
+      //     startDate: task.startDate,
+      //     createdAt: task.createdAt,
+      //     dueDate: task.dueDate,
+      //   },
+      //   nextWindowStart,
+      // );
+      const childStartDate = computeChildStartDate(now);
+      const childDueDate = computeChildDueDate(childStartDate);
 
       /* ── 2h. Build dedupe metadata (audit only, not used for idempotency) */
       const dedupeKey = `recurring:${task.id}:${nextKey}`;
@@ -1008,7 +1024,7 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
             recurrenceType: TaskRecurrenceType.ONE_TIME,
 
             // Scheduling
-            startDate: nextWindowStart,
+            startDate: childStartDate,
             dueDate: childDueDate,
 
             // Fresh status
