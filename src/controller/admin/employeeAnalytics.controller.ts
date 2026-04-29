@@ -301,6 +301,11 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
                 overdue: bigint;
                 avg_completion_hours: number | null;
                 total_logged_minutes: bigint;
+                completed_on_time: bigint;       // ADD
+                completed_late: bigint;          // ADD
+                completed_no_due_date: bigint;   // ADD
+                avg_days_early: number | null;   // ADD
+                avg_days_late: number | null;    // ADD
             }[]
         >`
       SELECT
@@ -332,8 +337,53 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
           )::numeric, 2
         )                                                         AS avg_completion_hours,
 
-        COALESCE(SUM(t."loggedMinutes") FILTER (WHERE t."loggedMinutes" > 0), 0)
-                                                                  AS total_logged_minutes
+         COALESCE(
+          SUM(t."loggedMinutes") FILTER (WHERE t."loggedMinutes" > 0),
+          0
+        )                                                           AS total_logged_minutes,
+
+        COUNT(DISTINCT t.id) FILTER (
+          WHERE t.status = 'COMPLETED'
+            AND t."completedAt" IS NOT NULL
+            AND t."dueDate" IS NOT NULL
+            AND t."completedAt" <= t."dueDate"
+        )::bigint                                                   AS completed_on_time,
+
+        COUNT(DISTINCT t.id) FILTER (
+          WHERE t.status = 'COMPLETED'
+            AND t."completedAt" IS NOT NULL
+            AND t."dueDate" IS NOT NULL
+            AND t."completedAt" > t."dueDate"
+        )::bigint                                                   AS completed_late,
+
+        COUNT(DISTINCT t.id) FILTER (
+          WHERE t.status = 'COMPLETED'
+            AND t."completedAt" IS NOT NULL
+            AND t."dueDate" IS NULL
+        )::bigint                                                   AS completed_no_due_date,
+
+        ROUND(
+          AVG(
+            EXTRACT(EPOCH FROM (t."dueDate" - t."completedAt")) / 86400.0
+          ) FILTER (
+            WHERE t.status = 'COMPLETED'
+              AND t."completedAt" IS NOT NULL
+              AND t."dueDate" IS NOT NULL
+              AND t."completedAt" <= t."dueDate"
+          )::numeric, 1
+        )                                                           AS avg_days_early,
+
+        ROUND(
+          AVG(
+            EXTRACT(EPOCH FROM (t."completedAt" - t."dueDate")) / 86400.0
+          ) FILTER (
+            WHERE t.status = 'COMPLETED'
+              AND t."completedAt" IS NOT NULL
+              AND t."dueDate" IS NOT NULL
+              AND t."completedAt" > t."dueDate"
+          )::numeric, 1
+        )                                                           AS avg_days_late
+                                                                  
 
       FROM "Account"      a
       JOIN "TaskAssignment" ta ON ta."accountId" = a.id
@@ -346,11 +396,19 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
       GROUP BY a.id, a."firstName", a."lastName", a.avatar, a.designation
       ORDER BY completed DESC, total_assigned DESC
       LIMIT 50
+      
     `;
 
         const leaderboard = leaderboardRows.map((row) => {
             const total = Number(row.total_assigned);
             const completed = Number(row.completed);
+            const completedOnTime = Number(row.completed_on_time);
+            const completedLate = Number(row.completed_late);
+            const completedNoDueDate = Number(row.completed_no_due_date);
+            const onTimeRate =
+                completed === 0
+                    ? 0
+                    : parseFloat(((completedOnTime / completed) * 100).toFixed(1));
             return {
                 accountId: row.account_id,
                 name: `${row.first_name} ${row.last_name}`.trim(),
@@ -374,6 +432,18 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
                     totalLoggedHours: parseFloat(
                         (Number(row.total_logged_minutes) / 60).toFixed(2),
                     ),
+                    dueTimeRetention: {
+                        completedOnTime,
+                        completedLate,
+                        completedNoDueDate,
+                        onTimeRate,                          // % of completed tasks done on/before due date
+                        avgDaysEarly: row.avg_days_early     // avg days early (when early)
+                            ? Number(row.avg_days_early)
+                            : null,
+                        avgDaysLate: row.avg_days_late       // avg days late (when late)
+                            ? Number(row.avg_days_late)
+                            : null,
+                    },
                 },
             };
         });
@@ -546,6 +616,81 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
       GROUP BY 1
       ORDER BY MIN(NOW() - t."dueDate") ASC
     `;
+
+
+        /* ══════════════════════════════════════════════════════════
+       SECTION K2 — Global due-time completion breakdown
+    ══════════════════════════════════════════════════════════ */
+        const globalDueTimeRows = await prisma.$queryRaw<
+            {
+                completed_on_time: bigint;
+                completed_late: bigint;
+                completed_no_due_date: bigint;
+                avg_days_early: number | null;
+                avg_days_late: number | null;
+            }[]
+        >`
+  SELECT
+    COUNT(*) FILTER (
+      WHERE t.status = 'COMPLETED'
+        AND t."completedAt" IS NOT NULL
+        AND t."dueDate" IS NOT NULL
+        AND t."completedAt" <= t."dueDate"
+    )::bigint AS completed_on_time,
+
+    COUNT(*) FILTER (
+      WHERE t.status = 'COMPLETED'
+        AND t."completedAt" IS NOT NULL
+        AND t."dueDate" IS NOT NULL
+        AND t."completedAt" > t."dueDate"
+    )::bigint AS completed_late,
+
+    COUNT(*) FILTER (
+      WHERE t.status = 'COMPLETED'
+        AND t."completedAt" IS NOT NULL
+        AND t."dueDate" IS NULL
+    )::bigint AS completed_no_due_date,
+
+    ROUND(
+      AVG(
+        EXTRACT(EPOCH FROM (t."dueDate" - t."completedAt")) / 86400.0
+      ) FILTER (
+        WHERE t.status = 'COMPLETED'
+          AND t."completedAt" IS NOT NULL
+          AND t."dueDate" IS NOT NULL
+          AND t."completedAt" <= t."dueDate"
+      )::numeric, 1
+    ) AS avg_days_early,
+
+    ROUND(
+      AVG(
+        EXTRACT(EPOCH FROM (t."completedAt" - t."dueDate")) / 86400.0
+      ) FILTER (
+        WHERE t.status = 'COMPLETED'
+          AND t."completedAt" IS NOT NULL
+          AND t."dueDate" IS NOT NULL
+          AND t."completedAt" > t."dueDate"
+      )::numeric, 1
+    ) AS avg_days_late
+
+  FROM "Task" t
+  WHERE t."deletedAt" IS NULL
+    ${rawDateFilter}
+    ${rawProjectFilter}
+    ${accountId
+                ? Prisma.sql`AND EXISTS (
+            SELECT 1 FROM "TaskAssignment" ta
+            WHERE ta."taskId" = t.id AND ta."accountId" = ${accountId}
+          )`
+                : Prisma.empty
+            }
+`;
+
+        const gdt = globalDueTimeRows[0];
+        const globalOnTime = Number(gdt?.completed_on_time ?? 0);
+        const globalLate = Number(gdt?.completed_late ?? 0);
+        const globalNoDue = Number(gdt?.completed_no_due_date ?? 0);
+        const globalCompletedWithDue = globalOnTime + globalLate;
 
         /* ══════════════════════════════════════════════════════════
            SECTION L — Recurring task stats
