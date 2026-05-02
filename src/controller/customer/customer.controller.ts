@@ -1185,10 +1185,8 @@ export async function getCustomerAnalytics(req: Request, res: Response) {
     SELECT COUNT(*)::bigint AS cnt
     FROM "Customer"
     WHERE
-      -- primary mobile columns are empty
       (mobile IS NULL OR mobile = '')
-      AND (normalizedMobile IS NULL OR normalizedMobile = '')
-      -- AND phones JSON array is also absent or empty
+      AND ("normalizedMobile" IS NULL OR "normalizedMobile" = '')
       AND (phones IS NULL OR phones::text = '[]')
       ${rawCreatedAtFilter}
   `
