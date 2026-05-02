@@ -1146,6 +1146,8 @@ export async function getCustomerAnalytics(req: Request, res: Response) {
         ? null
         : (((newThisMonth - newLastMonth) / newLastMonth) * 100).toFixed(1);
 
+
+
     /* ── 3. Missing-data counts (run in parallel) ── */
     const [
       missingEmail,
@@ -1172,12 +1174,25 @@ export async function getCustomerAnalytics(req: Request, res: Response) {
         },
       }),
       // phones is a JSON array — must use raw
-      prisma.$queryRaw<{ cnt: bigint }[]>`
-        SELECT COUNT(*)::bigint AS cnt
-        FROM "Customer"
-        WHERE (phones IS NULL OR phones::text = '[]')
-        ${rawCreatedAtFilter}
-      `,
+      // prisma.$queryRaw<{ cnt: bigint }[]>`
+      //   SELECT COUNT(*)::bigint AS cnt
+      //   FROM "Customer"
+      //   WHERE (phones IS NULL OR phones::text = '[]')
+      //   ${rawCreatedAtFilter}
+      // `,
+      prisma.$queryRaw<{ cnt: bigint }[]>(
+        Prisma.sql`
+    SELECT COUNT(*)::bigint AS cnt
+    FROM "Customer"
+    WHERE
+      -- primary mobile columns are empty
+      (mobile IS NULL OR mobile = '')
+      AND (normalizedMobile IS NULL OR normalizedMobile = '')
+      -- AND phones JSON array is also absent or empty
+      AND (phones IS NULL OR phones::text = '[]')
+      ${rawCreatedAtFilter}
+  `
+      ),
     ]);
 
     const missingPhone = Number(missingPhoneRows[0].cnt);
