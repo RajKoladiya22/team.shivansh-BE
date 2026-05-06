@@ -1908,14 +1908,21 @@ export async function completeTaskUser(req: Request, res: Response) {
       durationMinutes = getDurationMinutes(task.startedAt, completedAt);
     }
 
+    const updateData: any = {
+      status: TaskStatus.COMPLETED,
+      completedAt,
+    };
+
+    if (typeof durationMinutes === "number" && durationMinutes > 0) {
+      updateData.loggedMinutes = {
+        increment: durationMinutes,
+      };
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.task.update({
         where: { id },
-        data: {
-          status: TaskStatus.COMPLETED, completedAt, loggedMinutes: {
-            increment: durationMinutes, // ✅ adds session time
-          },
-        },
+        data: updateData,
         select: TASK_LIST_SELECT,
       });
 
