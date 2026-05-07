@@ -76,24 +76,32 @@ async function resolvePerformerSnapshot(accountId: string) {
 async function resolveTaskRecipients(taskId: string): Promise<string[]> {
   const assignments = await prisma.taskAssignment.findMany({
     where: { taskId },
-    select: { accountId: true, teamId: true },
+    select: {
+      accountId: true,
+      teamId: true,
+    },
   });
 
-  const ids = new Set<string>();
+  const directIds = assignments
+    .map(a => a.accountId)
+    .filter(Boolean) as string[];
 
-  for (const a of assignments) {
-    if (a.accountId) {
-      ids.add(a.accountId);
-    } else if (a.teamId) {
-      const members = await prisma.teamMember.findMany({
-        where: { teamId: a.teamId, isActive: true },
-        select: { accountId: true },
-      });
-      members.forEach((m) => ids.add(m.accountId));
-    }
-  }
+  const teamIds = assignments
+    .map(a => a.teamId)
+    .filter(Boolean) as string[];
 
-  return [...ids];
+  const members = await prisma.teamMember.findMany({
+    where: {
+      teamId: { in: teamIds },
+      isActive: true,
+    },
+    select: { accountId: true },
+  });
+
+  return [...new Set([
+    ...directIds,
+    ...members.map(m => m.accountId),
+  ])];
 }
 
 function emitTaskCreated(recipients: string[], task: Record<string, unknown>) {
@@ -145,6 +153,7 @@ async function isAssignedToTask(
   taskId: string,
   accountId: string,
 ): Promise<boolean> {
+
   const direct = await prisma.taskAssignment.findFirst({
     where: { taskId, accountId },
     select: { id: true },
@@ -483,7 +492,12 @@ export async function createTaskAdmin(req: Request, res: Response) {
       }
 
       return { task: created, recipientIds };
-    });
+    },
+      {
+        timeout: 10000,
+        maxWait: 5000,
+      }
+    );
 
     // ── Fetch full task ───────────────────────────────────────
     const fullTask = await prisma.task.findUnique({
@@ -635,7 +649,11 @@ export async function assignTaskAdmin(req: Request, res: Response) {
       return {
         recipientIds: [...new Set([...newRecipients, ...oldRecipients])],
       };
-    });
+    },
+      {
+        timeout: 10000,
+        maxWait: 5000,
+      });
 
     emitTaskPatch(taskId, recipientIds, {
       assignment: toSnapshot,
@@ -1164,33 +1182,154 @@ export async function getTaskActivityAdmin(req: Request, res: Response) {
 
 /* ─────────────────────────────────────────────────────────────
    GET /admin/tasks/stats
-   Counts grouped by status + overdue count (single groupBy call).
+   Counts grouped by status + overdue count
 ───────────────────────────────────────────────────────────── */
 export async function getTaskStatsAdmin(req: Request, res: Response) {
   try {
     if (!assertAdmin(req, res)) return;
 
-    const { projectId, assignedToAccountId, fromDate, toDate } =
-      req.query as Record<string, string>;
+    const {
+      projectId,
+      assignedToAccountId,
+      fromDate,
+      toDate,
+      isRecurring,
+      isSelfTask,
+      status,
+      priority,
+    } = req.query as Record<string, string>;
 
-    const where: any = { deletedAt: null };
-    if (projectId) where.projectId = projectId;
+    const where: any = {
+      deletedAt: null,
+    };
+
+    /* ─────────────────────────────
+       Filters
+    ───────────────────────────── */
+
+    if (projectId) {
+      where.projectId = projectId;
+    }
+
+    if (isRecurring === "true") {
+      where.isRecurring = true;
+    }
+
+    if (isRecurring === "false") {
+      where.isRecurring = false;
+    }
+
+    if (isSelfTask === "true") {
+      where.isSelfTask = true;
+    }
+
+    if (isSelfTask === "false") {
+      where.isSelfTask = false;
+    }
+
+    if (status) {
+      where.status = {
+        in: status
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      };
+    }
+
+    if (priority) {
+      where.priority = {
+        in: priority
+          .split(",")
+          .map((p) => p.trim())
+          .filter(Boolean),
+      };
+    }
 
     if (fromDate || toDate) {
       where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate);
-      if (toDate) where.createdAt.lte = new Date(toDate);
+
+      if (fromDate) {
+        const start = new Date(fromDate);
+        start.setHours(0, 0, 0, 0);
+
+        where.createdAt.gte = start;
+      }
+
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setHours(23, 59, 59, 999);
+
+        where.createdAt.lte = end;
+      }
     }
 
     if (assignedToAccountId) {
-      where.assignments = { some: { accountId: assignedToAccountId } };
+      where.assignments = {
+        some: {
+          accountId: assignedToAccountId,
+        },
+      };
     }
 
-    const grouped = await prisma.task.groupBy({
-      by: ["status"],
-      where,
-      _count: { _all: true },
-    });
+    /* ─────────────────────────────
+       Overdue filter
+       (preserves existing status filter)
+    ───────────────────────────── */
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const overdueWhere: any = {
+      ...where,
+      dueDate: {
+        lt: today,
+      },
+    };
+
+    // If frontend already filtered statuses,
+    // preserve them while excluding completed/cancelled
+    if (where.status?.in) {
+      const allowedStatuses = where.status.in.filter(
+        (s: string) =>
+          ![
+            'COMPLETED',
+            'CANCELLED',
+          ].includes(s)
+      );
+
+      overdueWhere.status = {
+        in: allowedStatuses,
+      };
+    } else {
+      overdueWhere.status = {
+        notIn: [
+          TaskStatus.COMPLETED,
+          TaskStatus.CANCELLED,
+        ],
+      };
+    }
+
+    /* ─────────────────────────────
+       Queries
+    ───────────────────────────── */
+
+    const [grouped, overdueCount] = await Promise.all([
+      prisma.task.groupBy({
+        by: ["status"],
+        where,
+        _count: {
+          _all: true,
+        },
+      }),
+
+      prisma.task.count({
+        where: overdueWhere,
+      }),
+    ]);
+
+    /* ─────────────────────────────
+       Default stats object
+    ───────────────────────────── */
 
     const stats: Record<string, number> = {
       PENDING: 0,
@@ -1200,28 +1339,129 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
       COMPLETED: 0,
       CANCELLED: 0,
       TOTAL: 0,
-      OVERDUE: 0,
+      OVERDUE: overdueCount,
     };
+
+    /* ─────────────────────────────
+       Fill grouped counts
+    ───────────────────────────── */
 
     for (const row of grouped) {
       stats[row.status] = row._count._all;
       stats.TOTAL += row._count._all;
     }
 
-    stats.OVERDUE = await prisma.task.count({
-      where: {
-        ...where,
-        dueDate: { lt: new Date() },
-        status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] },
-      },
-    });
+    /* ─────────────────────────────
+       Response
+    ───────────────────────────── */
 
-    return sendSuccessResponse(res, 200, "Task stats fetched", stats);
+    return sendSuccessResponse(
+      res,
+      200,
+      "Task stats fetched",
+      stats
+    );
   } catch (err: any) {
     console.error("[getTaskStatsAdmin]", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch stats");
+
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch stats"
+    );
   }
 }
+
+// export async function getTaskStatsAdmin(req: Request, res: Response) {
+//   try {
+//     if (!assertAdmin(req, res)) return;
+
+//     const { projectId,
+//       assignedToAccountId,
+//       fromDate,
+//       toDate,
+//       isRecurring,
+//       isSelfTask,
+//       status,
+//       priority, } =
+//       req.query as Record<string, string>;
+
+//     const where: any = { deletedAt: null };
+//     if (projectId) where.projectId = projectId;
+
+//     if (isRecurring === "true") where.isRecurring = true;
+//     if (isRecurring === "false") where.isRecurring = false;
+
+//     if (isSelfTask === "true") where.isSelfTask = true;
+//     if (isSelfTask === "false") where.isSelfTask = false;
+
+
+//     if (status) {
+//       where.status = {
+//         in: status.split(","),
+//       };
+//     }
+
+//     if (priority) {
+//       where.priority = {
+//         in: priority.split(","),
+//       };
+//     }
+
+//     if (fromDate || toDate) {
+//       where.createdAt = {};
+//       if (fromDate) {
+//         const start = new Date(fromDate);
+//         start.setHours(0, 0, 0, 0);
+//         where.createdAt.gte = start;
+//       }
+//       if (toDate) {
+//         const end = new Date(toDate);
+//         end.setHours(23, 59, 59, 999);
+//         where.createdAt.lte = end;
+//       }
+//     }
+
+//     if (assignedToAccountId) {
+//       where.assignments = { some: { accountId: assignedToAccountId } };
+//     }
+
+//     const grouped = await prisma.task.groupBy({
+//       by: ["status"],
+//       where,
+//       _count: { _all: true },
+//     });
+
+//     const stats: Record<string, number> = {
+//       PENDING: 0,
+//       IN_PROGRESS: 0,
+//       IN_REVIEW: 0,
+//       BLOCKED: 0,
+//       COMPLETED: 0,
+//       CANCELLED: 0,
+//       TOTAL: 0,
+//       OVERDUE: 0,
+//     };
+
+//     for (const row of grouped) {
+//       stats[row.status] = row._count._all;
+//       stats.TOTAL += row._count._all;
+//     }
+
+//     stats.OVERDUE = await prisma.task.count({
+//       where: {
+//         ...where,
+//         dueDate: { lt: new Date() },
+//         status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] },
+//       },
+//     });
+
+//     return sendSuccessResponse(res, 200, "Task stats fetched", stats);
+//   } catch (err: any) {
+//     console.error("[getTaskStatsAdmin]", err);
+//     return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch stats");
+//   }
+// }
 
 /* ─────────────────────────────────────────────────────────────
    GET /admin/tasks/recurring
@@ -3278,44 +3518,114 @@ export async function createSubtaskUser(req: Request, res: Response) {
 export async function getMyTaskStatsUser(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
-    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    if (!accountId) {
+      return sendErrorResponse(res, 401, "Invalid session");
+    }
+
+    /* ─────────────────────────────
+       Team memberships
+    ───────────────────────────── */
 
     const teamMemberships = await prisma.teamMember.findMany({
-      where: { accountId, isActive: true },
-      select: { teamId: true },
+      where: {
+        accountId,
+        isActive: true,
+      },
+      select: {
+        teamId: true,
+      },
     });
+
     const teamIds = teamMemberships.map((m) => m.teamId);
+
+    /* ─────────────────────────────
+       Base filter
+    ───────────────────────────── */
 
     const baseWhere: any = {
       deletedAt: null,
+
       assignments: {
         some: {
           OR: [
-            { accountId },
-            ...(teamIds.length > 0 ? [{ teamId: { in: teamIds } }] : []),
+            {
+              accountId,
+            },
+
+            ...(teamIds.length > 0
+              ? [
+                {
+                  teamId: {
+                    in: teamIds,
+                  },
+                },
+              ]
+              : []),
           ],
         },
       },
     };
 
-    const [grouped, overdue, activeTimer] = await Promise.all([
-      prisma.task.groupBy({
-        by: ["status"],
-        where: baseWhere,
-        _count: { _all: true },
-      }),
-      prisma.task.count({
-        where: {
-          ...baseWhere,
-          dueDate: { lt: new Date() },
-          status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] },
-        },
-      }),
-      prisma.taskTimeEntry.findFirst({
-        where: { accountId, endedAt: null },
-        select: { id: true, taskId: true, startedAt: true },
-      }),
-    ]);
+    /* ─────────────────────────────
+       Overdue filter
+    ───────────────────────────── */
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const overdueWhere: any = {
+      ...baseWhere,
+
+      dueDate: {
+        lt: today,
+      },
+
+      status: {
+        notIn: [
+          TaskStatus.COMPLETED,
+          TaskStatus.CANCELLED,
+        ],
+      },
+    };
+
+    /* ─────────────────────────────
+       Queries
+    ───────────────────────────── */
+
+    const [grouped, overdueCount, activeTimer] =
+      await Promise.all([
+        prisma.task.groupBy({
+          by: ["status"],
+
+          where: baseWhere,
+
+          _count: {
+            _all: true,
+          },
+        }),
+
+        prisma.task.count({
+          where: overdueWhere,
+        }),
+
+        prisma.taskTimeEntry.findFirst({
+          where: {
+            accountId,
+            endedAt: null,
+          },
+
+          select: {
+            id: true,
+            taskId: true,
+            startedAt: true,
+          },
+        }),
+      ]);
+
+    /* ─────────────────────────────
+       Default stats
+    ───────────────────────────── */
 
     const stats: Record<string, number> = {
       PENDING: 0,
@@ -3324,22 +3634,41 @@ export async function getMyTaskStatsUser(req: Request, res: Response) {
       BLOCKED: 0,
       COMPLETED: 0,
       CANCELLED: 0,
+
       TOTAL: 0,
-      OVERDUE: overdue,
+      OVERDUE: overdueCount,
     };
+
+    /* ─────────────────────────────
+       Fill grouped counts
+    ───────────────────────────── */
 
     for (const row of grouped) {
       stats[row.status] = row._count._all;
       stats.TOTAL += row._count._all;
     }
 
-    return sendSuccessResponse(res, 200, "My task stats", {
-      stats,
-      activeTimer: activeTimer ?? null,
-    });
+    /* ─────────────────────────────
+       Response
+    ───────────────────────────── */
+
+    return sendSuccessResponse(
+      res,
+      200,
+      "My task stats",
+      {
+        stats,
+        activeTimer: activeTimer ?? null,
+      }
+    );
   } catch (err: any) {
     console.error("[getMyTaskStatsUser]", err);
-    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch stats");
+
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch stats"
+    );
   }
 }
 
@@ -3823,3 +4152,6 @@ export async function updateTaskRecurrenceAdmin(req: Request, res: Response) {
     return sendErrorResponse(res, 500, err?.message ?? "Failed to update recurrence");
   }
 }
+
+
+// host    all    all    192.168.0.0/16    scram-sha-256

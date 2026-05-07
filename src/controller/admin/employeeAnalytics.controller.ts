@@ -286,6 +286,119 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
            SECTION F — Per-employee leaderboard
            Joins TaskAssignment → Account for name resolution
         ══════════════════════════════════════════════════════════ */
+        //     const leaderboardRows = await prisma.$queryRaw<
+        //         {
+        //             account_id: string;
+        //             first_name: string;
+        //             last_name: string;
+        //             avatar: string | null;
+        //             designation: string | null;
+        //             total_assigned: bigint;
+        //             completed: bigint;
+        //             in_progress: bigint;
+        //             pending: bigint;
+        //             cancelled: bigint;
+        //             overdue: bigint;
+        //             avg_completion_hours: number | null;
+        //             total_logged_minutes: bigint;
+        //             completed_on_time: bigint;       // ADD
+        //             completed_late: bigint;          // ADD
+        //             completed_no_due_date: bigint;   // ADD
+        //             avg_days_early: number | null;   // ADD
+        //             avg_days_late: number | null;    // ADD
+        //         }[]
+        //     >`
+        //   SELECT
+        //     a.id                                                      AS account_id,
+        //     a."firstName"                                             AS first_name,
+        //     a."lastName"                                              AS last_name,
+        //     a.avatar                                                  AS avatar,
+        //     a.designation                                             AS designation,
+
+        //     COUNT(DISTINCT t.id)                                      AS total_assigned,
+
+        //     COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'COMPLETED')  AS completed,
+        //     COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'IN_PROGRESS') AS in_progress,
+        //     COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'PENDING')    AS pending,
+        //     COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'CANCELLED')  AS cancelled,
+
+        //     COUNT(DISTINCT t.id) FILTER (
+        //       WHERE t."dueDate" < NOW()
+        //         AND t.status NOT IN ('COMPLETED','CANCELLED')
+        //     )                                                         AS overdue,
+
+        //     ROUND(
+        //       AVG(
+        //         EXTRACT(EPOCH FROM (t."completedAt" - t."startedAt")) / 3600.0
+        //       ) FILTER (
+        //         WHERE t.status = 'COMPLETED'
+        //           AND t."completedAt" IS NOT NULL
+        //           AND t."startedAt"  IS NOT NULL
+        //       )::numeric, 2
+        //     )                                                         AS avg_completion_hours,
+
+        //      COALESCE(
+        //       SUM(t."loggedMinutes") FILTER (WHERE t."loggedMinutes" > 0),
+        //       0
+        //     )                                                           AS total_logged_minutes,
+
+        //     COUNT(DISTINCT t.id) FILTER (
+        //       WHERE t.status = 'COMPLETED'
+        //         AND t."completedAt" IS NOT NULL
+        //         AND t."dueDate" IS NOT NULL
+        //         AND t."completedAt" <= t."dueDate"
+        //     )::bigint                                                   AS completed_on_time,
+
+        //     COUNT(DISTINCT t.id) FILTER (
+        //       WHERE t.status = 'COMPLETED'
+        //         AND t."completedAt" IS NOT NULL
+        //         AND t."dueDate" IS NOT NULL
+        //         AND t."completedAt" > t."dueDate"
+        //     )::bigint                                                   AS completed_late,
+
+        //     COUNT(DISTINCT t.id) FILTER (
+        //       WHERE t.status = 'COMPLETED'
+        //         AND t."completedAt" IS NOT NULL
+        //         AND t."dueDate" IS NULL
+        //     )::bigint                                                   AS completed_no_due_date,
+
+        //     ROUND(
+        //       AVG(
+        //         EXTRACT(EPOCH FROM (t."dueDate" - t."completedAt")) / 86400.0
+        //       ) FILTER (
+        //         WHERE t.status = 'COMPLETED'
+        //           AND t."completedAt" IS NOT NULL
+        //           AND t."dueDate" IS NOT NULL
+        //           AND t."completedAt" <= t."dueDate"
+        //       )::numeric, 1
+        //     )                                                           AS avg_days_early,
+
+        //     ROUND(
+        //       AVG(
+        //         EXTRACT(EPOCH FROM (t."completedAt" - t."dueDate")) / 86400.0
+        //       ) FILTER (
+        //         WHERE t.status = 'COMPLETED'
+        //           AND t."completedAt" IS NOT NULL
+        //           AND t."dueDate" IS NOT NULL
+        //           AND t."completedAt" > t."dueDate"
+        //       )::numeric, 1
+        //     )                                                           AS avg_days_late
+
+
+        //   FROM "Account"      a
+        //   JOIN "TaskAssignment" ta ON ta."accountId" = a.id
+        //   JOIN "Task"           t  ON t.id = ta."taskId"
+        //                            AND t."deletedAt" IS NULL
+        //   WHERE a."isActive" = TRUE
+        //     ${rawDateFilter}
+        //     ${rawAccountFilter}
+        //     ${rawProjectFilter}
+        //   GROUP BY a.id, a."firstName", a."lastName", a.avatar, a.designation
+        //   ORDER BY completed DESC, total_assigned DESC
+        //   LIMIT 50
+
+        // `;
+
         const leaderboardRows = await prisma.$queryRaw<
             {
                 account_id: string;
@@ -293,111 +406,181 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
                 last_name: string;
                 avatar: string | null;
                 designation: string | null;
+
                 total_assigned: bigint;
                 completed: bigint;
                 in_progress: bigint;
                 pending: bigint;
                 cancelled: bigint;
                 overdue: bigint;
+
                 avg_completion_hours: number | null;
+
                 total_logged_minutes: bigint;
-                completed_on_time: bigint;       // ADD
-                completed_late: bigint;          // ADD
-                completed_no_due_date: bigint;   // ADD
-                avg_days_early: number | null;   // ADD
-                avg_days_late: number | null;    // ADD
+
+                completed_on_time: bigint;
+                completed_late: bigint;
+                completed_no_due_date: bigint;
+
+                avg_days_early: number | null;
+                avg_days_late: number | null;
             }[]
         >`
-      SELECT
-        a.id                                                      AS account_id,
-        a."firstName"                                             AS first_name,
-        a."lastName"                                              AS last_name,
-        a.avatar                                                  AS avatar,
-        a.designation                                             AS designation,
+WITH employee_tasks AS (
+  SELECT DISTINCT
+    ta."accountId"                                AS account_id,
+    t.id                                          AS task_id,
+    t.status,
+    t."dueDate",
+    t."completedAt",
+    t."startedAt",
+    t."createdAt",
+    t."loggedMinutes"
 
-        COUNT(DISTINCT t.id)                                      AS total_assigned,
+  FROM "TaskAssignment" ta
 
-        COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'COMPLETED')  AS completed,
-        COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'IN_PROGRESS') AS in_progress,
-        COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'PENDING')    AS pending,
-        COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'CANCELLED')  AS cancelled,
+  INNER JOIN "Task" t
+    ON t.id = ta."taskId"
 
-        COUNT(DISTINCT t.id) FILTER (
-          WHERE t."dueDate" < NOW()
-            AND t.status NOT IN ('COMPLETED','CANCELLED')
-        )                                                         AS overdue,
+    WHERE t."deletedAt" IS NULL
 
-        ROUND(
-          AVG(
-            EXTRACT(EPOCH FROM (t."completedAt" - t."startedAt")) / 3600.0
-          ) FILTER (
-            WHERE t.status = 'COMPLETED'
-              AND t."completedAt" IS NOT NULL
-              AND t."startedAt"  IS NOT NULL
-          )::numeric, 2
-        )                                                         AS avg_completion_hours,
+    ${projectId
+                ? Prisma.sql`AND t."projectId" = ${projectId}`
+                : Prisma.empty}
 
-         COALESCE(
-          SUM(t."loggedMinutes") FILTER (WHERE t."loggedMinutes" > 0),
-          0
-        )                                                           AS total_logged_minutes,
+    ${fromDate
+                ? Prisma.sql`AND t."createdAt" >= ${fromDate}`
+                : Prisma.empty}
 
-        COUNT(DISTINCT t.id) FILTER (
-          WHERE t.status = 'COMPLETED'
-            AND t."completedAt" IS NOT NULL
-            AND t."dueDate" IS NOT NULL
-            AND t."completedAt" <= t."dueDate"
-        )::bigint                                                   AS completed_on_time,
+    ${toDate
+                ? Prisma.sql`AND t."createdAt" <= ${toDate}`
+                : Prisma.empty}
 
-        COUNT(DISTINCT t.id) FILTER (
-          WHERE t.status = 'COMPLETED'
-            AND t."completedAt" IS NOT NULL
-            AND t."dueDate" IS NOT NULL
-            AND t."completedAt" > t."dueDate"
-        )::bigint                                                   AS completed_late,
+    ${accountId
+                ? Prisma.sql`AND ta."accountId" = ${accountId}`
+                : Prisma.empty}
+)
 
-        COUNT(DISTINCT t.id) FILTER (
-          WHERE t.status = 'COMPLETED'
-            AND t."completedAt" IS NOT NULL
-            AND t."dueDate" IS NULL
-        )::bigint                                                   AS completed_no_due_date,
+SELECT
+  a.id                                           AS account_id,
+  a."firstName"                                  AS first_name,
+  a."lastName"                                   AS last_name,
+  a.avatar                                       AS avatar,
+  a.designation                                  AS designation,
 
-        ROUND(
-          AVG(
-            EXTRACT(EPOCH FROM (t."dueDate" - t."completedAt")) / 86400.0
-          ) FILTER (
-            WHERE t.status = 'COMPLETED'
-              AND t."completedAt" IS NOT NULL
-              AND t."dueDate" IS NOT NULL
-              AND t."completedAt" <= t."dueDate"
-          )::numeric, 1
-        )                                                           AS avg_days_early,
+  COUNT(et.task_id)::bigint                      AS total_assigned,
 
-        ROUND(
-          AVG(
-            EXTRACT(EPOCH FROM (t."completedAt" - t."dueDate")) / 86400.0
-          ) FILTER (
-            WHERE t.status = 'COMPLETED'
-              AND t."completedAt" IS NOT NULL
-              AND t."dueDate" IS NOT NULL
-              AND t."completedAt" > t."dueDate"
-          )::numeric, 1
-        )                                                           AS avg_days_late
-                                                                  
+  COUNT(*) FILTER (
+    WHERE et.status = 'COMPLETED'
+  )::bigint                                      AS completed,
 
-      FROM "Account"      a
-      JOIN "TaskAssignment" ta ON ta."accountId" = a.id
-      JOIN "Task"           t  ON t.id = ta."taskId"
-                               AND t."deletedAt" IS NULL
-      WHERE a."isActive" = TRUE
-        ${rawDateFilter}
-        ${rawAccountFilter}
-        ${rawProjectFilter}
-      GROUP BY a.id, a."firstName", a."lastName", a.avatar, a.designation
-      ORDER BY completed DESC, total_assigned DESC
-      LIMIT 50
-      
-    `;
+  COUNT(*) FILTER (
+    WHERE et.status = 'IN_PROGRESS'
+  )::bigint                                      AS in_progress,
+
+  COUNT(*) FILTER (
+    WHERE et.status = 'PENDING'
+  )::bigint                                      AS pending,
+
+  COUNT(*) FILTER (
+    WHERE et.status = 'CANCELLED'
+  )::bigint                                      AS cancelled,
+
+  COUNT(*) FILTER (
+    WHERE et."dueDate" < NOW()
+      AND et.status NOT IN ('COMPLETED', 'CANCELLED')
+  )::bigint                                      AS overdue,
+
+  ROUND(
+    AVG(
+      EXTRACT(
+         EPOCH FROM (et."completedAt" - et."startedAt")
+      ) / 3600.0
+    ) FILTER (
+      WHERE et.status = 'COMPLETED'
+        AND et."completedAt" IS NOT NULL
+        AND et."startedAt"  IS NOT NULL
+    )::numeric,
+    2
+  )                                              AS avg_completion_hours,
+
+  COALESCE(
+    SUM(et."loggedMinutes"),
+    0
+  )::bigint                                      AS total_logged_minutes,
+
+  COUNT(*) FILTER (
+    WHERE et.status = 'COMPLETED'
+      AND et."completedAt" IS NOT NULL
+      AND et."dueDate" IS NOT NULL
+      AND et."completedAt" <= et."dueDate"
+  )::bigint                                      AS completed_on_time,
+
+  COUNT(*) FILTER (
+    WHERE et.status = 'COMPLETED'
+      AND et."completedAt" IS NOT NULL
+      AND et."dueDate" IS NOT NULL
+      AND et."completedAt" > et."dueDate"
+  )::bigint                                      AS completed_late,
+
+  COUNT(*) FILTER (
+    WHERE et.status = 'COMPLETED'
+      AND et."completedAt" IS NOT NULL
+      AND et."dueDate" IS NULL
+  )::bigint                                      AS completed_no_due_date,
+
+  ROUND(
+    AVG(
+      EXTRACT(
+        EPOCH FROM (
+          et."dueDate" - et."completedAt"
+        )
+      ) / 86400.0
+    ) FILTER (
+      WHERE et.status = 'COMPLETED'
+        AND et."completedAt" <= et."dueDate"
+        AND et."dueDate" IS NOT NULL
+        AND et."completedAt" <= et."dueDate"
+    )::numeric,
+    1
+  )                                              AS avg_days_early,
+
+  ROUND(
+    AVG(
+      EXTRACT(
+        EPOCH FROM (
+          et."completedAt" - et."dueDate"
+        )
+      ) / 86400.0
+    ) FILTER (
+      WHERE et.status = 'COMPLETED'
+        AND et."completedAt" > et."dueDate"
+        AND et."dueDate" IS NOT NULL
+        AND et."completedAt" > et."dueDate"
+    )::numeric,
+    1
+  )                                              AS avg_days_late
+
+FROM employee_tasks et
+
+INNER JOIN "Account" a
+  ON a.id = et.account_id
+
+WHERE a."isActive" = TRUE
+
+GROUP BY
+  a.id,
+  a."firstName",
+  a."lastName",
+  a.avatar,
+  a.designation
+
+ORDER BY
+  completed DESC,
+  total_assigned DESC
+
+LIMIT 50
+`;
 
         const leaderboard = leaderboardRows.map((row) => {
             const total = Number(row.total_assigned);
@@ -499,7 +682,7 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
       WHERE tc."deletedAt" IS NULL
         ${rawDateFilter}
         ${rawProjectFilter}
-        ${rawAccountFilter ? Prisma.sql`AND a.id = ${accountId}` : Prisma.empty}
+        ${accountId ? Prisma.sql`AND a.id = ${accountId}` : Prisma.empty}
       GROUP BY a.id, a."firstName", a."lastName"
       ORDER BY comment_count DESC
       LIMIT 10
@@ -1325,6 +1508,16 @@ async function computeLeadMetrics(
         },
     });
 
+    const leadIds = leads.map((l) => l.id);
+    const leadsWithWork = leadIds.length > 0
+        ? await prisma.lead.findMany({
+            where: { id: { in: leadIds } },
+            select: { id: true, status: true, cost: true, totalWorkSeconds: true, closedAt: true },
+        })
+        : [];
+
+    const workSecMap = new Map(leadsWithWork.map((l) => [l.id, l]));
+
     const toNumber = (val: Prisma.Decimal | null | undefined) =>
         val ? Number(val.toString()) : 0;
 
@@ -1362,6 +1555,7 @@ async function computeLeadMetrics(
                 leadWorkSec += a.WorkSeconds ?? 0;
             }
         }
+
         followUpTotal += lead.followUps.length;
         followUpDone += lead.followUps.filter((f) => f.status === 'DONE').length;
     }
@@ -1456,7 +1650,11 @@ async function computeTaskMetrics(
             completed++;
             if (task.dueDate && task.completedAt) {
                 if (new Date(task.completedAt) <= new Date(task.dueDate)) completedOnTime++;
-                totalCompletionMs += task.completedAt.getTime() - task.createdAt.getTime();
+            }
+
+            if (task.completedAt) {
+                const start = task.startedAt ?? task.createdAt;
+                totalCompletionMs += task.completedAt.getTime() - start.getTime();
             }
         }
 
@@ -1705,9 +1903,16 @@ async function getAggregateMetrics(
         prisma.lead.findMany({
             where: {
                 isActive: true,
-                assignments: { some: { accountId: { in: ids }, isActive: true, assignedAt: { lte: to } } },
+                assignments: {
+                    some: {
+                        accountId: { in: ids },
+                        isActive: true,
+                        assignedAt: { lte: to },
+                    },
+                },
                 status: 'CONVERTED',
-                updatedAt: { gte: from, lte: to },
+                // B9 FIX: require closedAt in window — no updatedAt fallback
+                closedAt: { gte: from, lte: to },
             },
             select: { cost: true },
         }),
@@ -1719,6 +1924,7 @@ async function getAggregateMetrics(
                 deletedAt: null,
             },
         }),
+        // B10 FIX: single query — totalWorkMinutes is already on attendanceLog
         prisma.attendanceLog.findMany({
             where: { accountId: { in: ids }, date: { gte: from, lte: to } },
             select: { accountId: true, status: true, totalWorkMinutes: true },
@@ -1729,6 +1935,8 @@ async function getAggregateMetrics(
     const leadsConverted = leads.length;
 
     let avgAttendanceRate: number | null = null;
+    const workHours = attendanceLogs.reduce((s, l) => s + (l.totalWorkMinutes ?? 0), 0) / 60; // B10 FIX
+
     if (attendanceLogs.length > 0) {
         const workingDays = getWorkingDaysBetween(from, to, excludeSat);
         if (workingDays > 0) {
@@ -1739,13 +1947,14 @@ async function getAggregateMetrics(
                 if (log.status === 'PRESENT') r.present++;
                 if (log.status === 'HALF_DAY') r.half++;
             }
-            const rates = [...byEmp.values()].map((r) => ((r.present + r.half * 0.5) / workingDays) * 100);
-            avgAttendanceRate = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : 0;
+            const rates = [...byEmp.values()].map(
+                (r) => ((r.present + r.half * 0.5) / workingDays) * 100
+            );
+            avgAttendanceRate = rates.length > 0
+                ? rates.reduce((a, b) => a + b, 0) / rates.length
+                : 0;
         }
     }
-
-    // workHours from attendance logs (clock hours — consistent with productivity.attendanceWorkHours)
-    const workHours = attendanceLogs.reduce((s, l) => s + (l.totalWorkMinutes ?? 0), 0) / 60;
 
     return { revenue, tasksCompleted, leadsConverted, avgAttendanceRate, workHours };
 }
@@ -1759,7 +1968,8 @@ async function getMonthlyTrend(
     const last = months[months.length - 1].end;
     const scopeIds = singleAccountId ? [singleAccountId] : allAccountIds;
 
-    const [completedTasks, convertedLeads, attendanceLogs, attendanceSummaries] = await Promise.all([
+    // B12 FIX: single attendance query — it already has totalWorkMinutes
+    const [completedTasks, convertedLeads, attendanceLogs] = await Promise.all([
         prisma.task.findMany({
             where: {
                 assignments: { some: { accountId: { in: scopeIds } } },
@@ -1769,23 +1979,21 @@ async function getMonthlyTrend(
             },
             select: { completedAt: true },
         }),
+        // B11 FIX: filter on closedAt, not updatedAt
         prisma.lead.findMany({
             where: {
                 isActive: true,
-                assignments: { some: { accountId: { in: scopeIds }, isActive: true } },
+                assignments: {
+                    some: { accountId: { in: scopeIds }, isActive: true },
+                },
                 status: 'CONVERTED',
-                updatedAt: { gte: first, lte: last },
+                closedAt: { gte: first, lte: last },
             },
-            select: { updatedAt: true, cost: true },
+            select: { closedAt: true, cost: true },
         }),
         prisma.attendanceLog.findMany({
             where: { accountId: { in: scopeIds }, date: { gte: first, lte: last } },
             select: { date: true, status: true, totalWorkMinutes: true },
-        }),
-        // Separate query to get work hours from attendance minutes
-        prisma.attendanceLog.findMany({
-            where: { accountId: { in: scopeIds }, date: { gte: first, lte: last } },
-            select: { date: true, totalWorkMinutes: true },
         }),
     ]);
 
@@ -1794,7 +2002,10 @@ async function getMonthlyTrend(
             (t) => t.completedAt && t.completedAt >= start && t.completedAt <= end
         ).length;
 
-        const monthLeads = convertedLeads.filter((l) => l.updatedAt >= start && l.updatedAt <= end);
+        // B11 FIX: use closedAt to place revenue in the correct month
+        const monthLeads = convertedLeads.filter(
+            (l) => l.closedAt && l.closedAt >= start && l.closedAt <= end
+        );
         const leadsConverted = monthLeads.length;
         const revenue = monthLeads.reduce((s, l) => s + Number(l.cost ?? 0), 0);
 
@@ -1807,9 +2018,8 @@ async function getMonthlyTrend(
                 ? round(((present + half * 0.5) / workingDays) * 100)
                 : null;
 
-        const workHours = attendanceSummaries
-            .filter((l) => l.date >= start && l.date <= end)
-            .reduce((s, l) => s + (l.totalWorkMinutes ?? 0), 0) / 60;
+        // B12 FIX: totalWorkMinutes is already on monthLogs — no second query needed
+        const workHours = monthLogs.reduce((s, l) => s + (l.totalWorkMinutes ?? 0), 0) / 60;
 
         return {
             month: label,

@@ -910,6 +910,11 @@ model Task {
   @@index([projectId, status]) // filter tasks by project + status (kanban column query)
   @@index([projectId, dueDate]) // filter by project + due date (calendar view)
   @@index([stepId, sortOrder]) // ordered column fetch
+  @@index([deletedAt, status])
+  @@index([projectId, deletedAt])
+  @@index([projectId, deletedAt, status])
+  @@index([dueDate, status])
+  @@index([createdAt, status])
 }
 
 model TaskAssignment {
