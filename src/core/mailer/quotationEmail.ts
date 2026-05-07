@@ -884,14 +884,14 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
               <span style="font-size:22px;font-weight:800;letter-spacing:-0.5px;color:#dc2626;font-family:Georgia,serif;">SHIVANSH</span>
               <span style="font-size:22px;font-weight:800;letter-spacing:-0.5px;color:#fca5a5;margin-left:4px;font-family:Georgia,serif;">INFOSYS</span>
             </div>
-            <div style="font-size:10px;color:#475569;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:16px;">
+            <div style="font-size:10px;color:#607DAB;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:16px;">
               Authorized Tally Partner &nbsp;·&nbsp; Quick Response, Quick Support
             </div>
 
             <!-- Company contact block -->
             <table cellpadding="0" cellspacing="0" role="presentation">
               <tr>
-                <td style="font-size:12px;color:#64748b;line-height:1.8;padding-right:8px;">
+                <td style="font-size:12px;color:#7D93B5;line-height:1.8;padding-right:8px;">
                   📍 214–215 Soham Arcade, Adajan, Surat 395009<br/>
                   📍 105, Ajit Plaza, Vapi, Valsad 396191<br/>
                   📞 8141 703007 &nbsp;/&nbsp; 9484843007<br/>
@@ -904,9 +904,9 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
           <!-- Grand total callout -->
           <td align="right" valign="top" style="white-space:nowrap;">
             <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:16px 20px;text-align:center;">
-              <div style="font-size:9px;color:#64748b;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;">Grand Total</div>
+              <div style="font-size:9px;color:#7D93B5;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;">Grand Total</div>
               <div style="font-size:30px;font-weight:800;color:#ffffff;line-height:1;font-family:Georgia,serif;">₹${fmt(grandTotal)}</div>
-              <div style="font-size:10px;color:#475569;margin-top:4px;">${currency} &nbsp;·&nbsp; incl. taxes</div>
+              <div style="font-size:10px;color:#7D93B5;margin-top:4px;">${currency} &nbsp;·&nbsp; incl. taxes</div>
               ${validUntil ? `<div style="margin-top:10px;font-size:11px;font-weight:700;color:#fbbf24;background:#292524;border-radius:6px;padding:4px 8px;">⏳ Valid till ${fmtDate(validUntil)}</div>` : ""}
             </div>
           </td>
@@ -918,14 +918,14 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
         <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
           <tr>
             <td style="vertical-align:middle;">
-              <span style="font-size:11px;color:#475569;letter-spacing:1px;text-transform:uppercase;font-weight:700;margin-right:12px;">
+              <span style="font-size:11px;color:#91A9CF;letter-spacing:1px;text-transform:uppercase;font-weight:700;margin-right:12px;">
                 ${isReminder ? "⏰ REMINDER" : "📄 QUOTATION"}
               </span>
               <span style="font-size:18px;font-weight:800;color:#f1f5f9;font-family:'Courier New',Courier,monospace;letter-spacing:1px;">${quotationNumber}</span>
-              ${subject ? `<div style="font-size:12px;color:#64748b;margin-top:4px;">${subject}</div>` : ""}
+              ${subject ? `<div style="font-size:12px;color:#91A9CF;margin-top:4px;">${subject}</div>` : ""}
             </td>
             <td align="right" style="vertical-align:middle;">
-              <span style="font-size:11px;color:#475569;">${fmtDate(createdAt)}</span>
+              <span style="font-size:11px;color:#91A9CF;">${fmtDate(createdAt)}</span>
             </td>
           </tr>
         </table>
@@ -962,13 +962,12 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
       <div style="background:#fafafa;border-left:3px solid #dc2626;border-radius:0 8px 8px 0;padding:16px 20px;">
         <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:8px;">Respected Sir / Ma'am,</div>
         <div style="font-size:13px;color:#4b5563;line-height:1.8;">
-          ${
-            introNote
-              ? introNote
-              : isReminder
-              ? `This is a friendly reminder about quotation <strong>${quotationNumber}</strong>. It is still awaiting your review and acceptance. We look forward to your prompt response.`
-              : `Thank you for your valued consideration of our company for your requirements. With respect to your inquiry, please find enclosed herewith our best proposal. We are committed to standing alongside you and your organization with our best support and services.`
-          }
+          ${introNote
+      ? introNote
+      : isReminder
+        ? `This is a friendly reminder about quotation <strong>${quotationNumber}</strong>. It is still awaiting your review and acceptance. We look forward to your prompt response.`
+        : `Thank you for your valued consideration of our company for your requirements. With respect to your inquiry, please find enclosed herewith our best proposal. We are committed to standing alongside you and your organization with our best support and services.`
+    }
         </div>
       </div>
     </td>
@@ -1016,29 +1015,27 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
                 <td style="padding:10px 16px;font-size:13px;color:#374151;text-align:right;font-weight:600;border-bottom:1px solid #f1f5f9;">₹${fmt(subtotal)}</td>
               </tr>
 
-              ${
-                totalDiscount && totalDiscount > 0
-                  ? `<tr style="background:#f0fdf4;">
+              ${totalDiscount && totalDiscount > 0
+      ? `<tr style="background:#f0fdf4;">
                        <td style="padding:10px 16px;font-size:13px;color:#16a34a;border-bottom:1px solid #dcfce7;">
                          <span style="display:inline-block;width:6px;height:6px;background:#16a34a;border-radius:50%;margin-right:6px;vertical-align:middle;"></span>
                          Item Discounts
                        </td>
                        <td style="padding:10px 16px;font-size:13px;color:#16a34a;text-align:right;font-weight:700;border-bottom:1px solid #dcfce7;">−₹${fmt(totalDiscount)}</td>
                      </tr>`
-                  : ""
-              }
+      : ""
+    }
 
-              ${
-                extraDiscountLabel && extraDiscountValue
-                  ? `<tr style="background:#f0fdf4;">
+              ${extraDiscountLabel && extraDiscountValue
+      ? `<tr style="background:#f0fdf4;">
                        <td style="padding:10px 16px;font-size:13px;color:#16a34a;border-bottom:1px solid #dcfce7;">
                          ${extraDiscountLabel}
                          ${extraDiscountNote ? `<div style="font-size:11px;color:#86efac;">${extraDiscountNote}</div>` : ""}
                        </td>
                        <td style="padding:10px 16px;font-size:13px;color:#16a34a;text-align:right;font-weight:700;border-bottom:1px solid #dcfce7;">Applied</td>
                      </tr>`
-                  : ""
-              }
+      : ""
+    }
 
               <!-- Tax row -->
               <tr style="background:#f8fafc;">
@@ -1049,8 +1046,8 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
               <!-- Grand total dark row -->
               <tr style="background:#0f172a;">
                 <td style="padding:14px 16px;">
-                  <div style="font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#475569;">Grand Total</div>
-                  <div style="font-size:10px;color:#334155;margin-top:2px;">${currency} · incl. all taxes</div>
+                  <div style="font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#7D93B5;">Grand Total</div>
+                  <div style="font-size:10px;color:#7184A3;margin-top:2px;">${currency} · incl. all taxes</div>
                 </td>
                 <td style="padding:14px 16px;text-align:right;">
                   <div style="font-size:22px;font-weight:800;color:#ffffff;font-family:Georgia,serif;">₹${fmt(grandTotal)}</div>
@@ -1068,8 +1065,7 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
   ${extraSection}
 
   <!-- ══ FOOTER NOTE ══ -->
-  ${
-    footerNote
+  ${footerNote
       ? `<tr>
            <td style="background:#fffbeb;border-top:2px solid #fde68a;padding:18px 36px;">
              <table cellpadding="0" cellspacing="0" role="presentation">
@@ -1084,7 +1080,7 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
            </td>
          </tr>`
       : ""
-  }
+    }
 
   <!-- ══ CTA SECTION ══ -->
   <tr>
@@ -1127,18 +1123,18 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
     <td style="background:#0f172a;border-radius:0 0 16px 16px;padding:24px 36px;text-align:center;">
       <div style="height:2px;background:linear-gradient(90deg,#dc2626 0%,#ef4444 50%,#fca5a5 100%);border-radius:2px;margin-bottom:18px;"></div>
       <div style="font-family:Georgia,serif;">
-        <span style="font-size:18px;font-weight:800;color:#dc2626;letter-spacing:-0.3px;">SHIVANSH</span>
+        <span style="font-size:18px;font-weight:800;color:#910D20;letter-spacing:-0.3px;">SHIVANSH</span>
         <span style="font-size:18px;font-weight:800;color:#fca5a5;margin-left:4px;letter-spacing:-0.3px;">INFOSYS</span>
       </div>
-      <div style="font-size:10px;color:#874c61;margin-top:3px;letter-spacing:0.5px;">Quick Response – Quick Support</div>
-      <div style="margin-top:10px;font-size:11px;color:#471e2d;line-height:1.6;">
+      <div style="font-size:10px;color:#A4B8DB;margin-top:3px;letter-spacing:0.5px;">Quick Response – Quick Support</div>
+      <div style="margin-top:10px;font-size:11px;color:#768EB8;line-height:1.6;">
         214–215 Soham Arcade, Adajan, Surat 395009 &nbsp;·&nbsp; 105 Ajit Plaza, Vapi 396191
       </div>
-      <div style="margin-top:12px;font-size:10px;color:#1e293b;">
+      <div style="margin-top:12px;font-size:10px;color:#7184A3;">
         &copy; ${year} Shivansh Infosys. All rights reserved. &nbsp;·&nbsp;
-        <a href="https://shivanshinfosys.in/privacy" style="color:#4f303b;text-decoration:none;">Privacy Policy</a>
+        <a href="https://shivanshinfosys.in/privacy" style="color:#7184A3;text-decoration:none;">Privacy Policy</a>
         &nbsp;·&nbsp;
-        <a href="https://shivanshinfosys.in/terms" style="color:#4f303b;text-decoration:none;">Terms of Service</a>
+        <a href="https://shivanshinfosys.in/terms" style="color:#7184A3;text-decoration:none;">Terms of Service</a>
       </div>
     </td>
   </tr>
