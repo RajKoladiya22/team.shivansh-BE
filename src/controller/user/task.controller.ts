@@ -194,6 +194,7 @@ const TASK_LIST_SELECT = {
   startedAt: true,
   completedAt: true,
   isSelfTask: true,
+  isLearning: true,
   sortOrder: true,
   createdAt: true,
   updatedAt: true,
@@ -328,6 +329,7 @@ export async function createTaskAdmin(req: Request, res: Response) {
       isRecurring = false,
       recurrenceType = "ONE_TIME",
       recurrenceRule = null,
+      isLearning = false,
     } = req.body as Record<string, any>;
 
     // ── Validation ─────────────────────────────────────────────
@@ -393,6 +395,7 @@ export async function createTaskAdmin(req: Request, res: Response) {
           isRecurring: Boolean(isRecurring),
           recurrenceType: isRecurring ? recurrenceType : "ONE_TIME",
           recurrenceRule: isRecurring && recurrenceRule ? recurrenceRule : null,
+          isLearning: Boolean(isLearning),
         },
         select: TASK_LIST_SELECT,
       });
@@ -718,6 +721,7 @@ export async function updateTaskAdmin(req: Request, res: Response) {
       "stepId",
       "sortOrder",
       "parentTaskId",
+      "isLearning",
     ];
 
     const data: Record<string, any> = {};
@@ -977,6 +981,8 @@ export async function listTasksAdmin(req: Request, res: Response) {
 
     if (req.query.isRecurring === "true") where.isRecurring = true;
     if (req.query.isRecurring === "false") where.isRecurring = false;
+    if (req.query.isLearning === "true") where.isLearning = true;
+    if (req.query.isLearning === "false") where.isLearning = false;
 
     if (status) where.status = status as TaskStatus;
     if (priority) where.priority = priority as TaskPriority;
@@ -1685,6 +1691,7 @@ export async function createSelfTaskUser(req: Request, res: Response) {
       isRecurring = false,
       recurrenceType = "ONE_TIME",
       recurrenceRule = null,
+      isLearning = false,
     } = req.body as Record<string, any>;
 
     if (!title?.trim())
@@ -1720,6 +1727,7 @@ export async function createSelfTaskUser(req: Request, res: Response) {
           isRecurring: Boolean(isRecurring),
           recurrenceType: isRecurring ? recurrenceType : "ONE_TIME",
           recurrenceRule: isRecurring && recurrenceRule ? recurrenceRule : null,
+          isLearning: Boolean(isLearning),
         },
         select: TASK_LIST_SELECT,
       });
@@ -1849,6 +1857,8 @@ export async function getMyTasksUser(req: Request, res: Response) {
 
     if (isSelfTask === "true") where.isSelfTask = true;
     if (isSelfTask === "false") where.isSelfTask = false;
+    if (req.query.isLearning === "true") where.isLearning = true;
+    if (req.query.isLearning === "false") where.isLearning = false;
 
     if (search?.trim()) {
       where.AND = [
@@ -3214,7 +3224,7 @@ export async function updateSelfTaskUser(req: Request, res: Response) {
     if (!task.isSelfTask || task.createdBy !== accountId)
       return sendErrorResponse(res, 403, "You can only edit your own self-tasks");
 
-    const ALLOWED = ["title", "description", "priority", "dueDate", "startDate", "estimatedMinutes"];
+    const ALLOWED = ["title", "description", "priority", "dueDate", "startDate", "estimatedMinutes", "isLearning",];
     const data: Record<string, any> = {};
     for (const f of ALLOWED) {
       if (req.body[f] !== undefined) data[f] = req.body[f];

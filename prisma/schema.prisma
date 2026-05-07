@@ -855,6 +855,8 @@ model Task {
   // Personal / standalone task (no project)
   isSelfTask Boolean @default(false)
 
+  isLearning Boolean @default(false)
+
   // Sort order within its column (fractional indexing friendly)
   sortOrder Float @default(0)
 
