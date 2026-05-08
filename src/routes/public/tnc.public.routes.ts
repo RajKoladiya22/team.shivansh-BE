@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getTncByToken, acceptTnc } from "../../controller/customer/tnc.controller";
+import { getTncByToken, acceptTnc, acceptTncAndRedirect } from "../../controller/customer/tnc.controller";
 
 
 
@@ -9,6 +9,7 @@ const router = Router();
 // Mount these here or on a dedicated /tnc router (see note below)
 router.get("/:token", getTncByToken);      // front-end loads T&C page
 router.post("/:token/accept", acceptTnc);  // customer clicks Accept
+router.get("/:token/accept-redirect", acceptTncAndRedirect);
 
 
 export default router;
