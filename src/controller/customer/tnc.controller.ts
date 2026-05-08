@@ -353,7 +353,7 @@ export const sendTncEmail = async (req: Request, res: Response) => {
 
         // Two distinct links
         const acceptUrl = `${FRONTEND_URL}/tnc/${token}`;            // review page
-        const directAcceptUrl = `${BACKEND_URL}/tnc/${token}/accept-redirect`; // one-click
+        const directAcceptUrl = `${BACKEND_URL}/api/v1/public/tnc/${token}/accept-redirect`; // one-click
 
         const productNames = parseProductNames(customer.products);
 
