@@ -1378,97 +1378,6 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
   }
 }
 
-// export async function getTaskStatsAdmin(req: Request, res: Response) {
-//   try {
-//     if (!assertAdmin(req, res)) return;
-
-//     const { projectId,
-//       assignedToAccountId,
-//       fromDate,
-//       toDate,
-//       isRecurring,
-//       isSelfTask,
-//       status,
-//       priority, } =
-//       req.query as Record<string, string>;
-
-//     const where: any = { deletedAt: null };
-//     if (projectId) where.projectId = projectId;
-
-//     if (isRecurring === "true") where.isRecurring = true;
-//     if (isRecurring === "false") where.isRecurring = false;
-
-//     if (isSelfTask === "true") where.isSelfTask = true;
-//     if (isSelfTask === "false") where.isSelfTask = false;
-
-
-//     if (status) {
-//       where.status = {
-//         in: status.split(","),
-//       };
-//     }
-
-//     if (priority) {
-//       where.priority = {
-//         in: priority.split(","),
-//       };
-//     }
-
-//     if (fromDate || toDate) {
-//       where.createdAt = {};
-//       if (fromDate) {
-//         const start = new Date(fromDate);
-//         start.setHours(0, 0, 0, 0);
-//         where.createdAt.gte = start;
-//       }
-//       if (toDate) {
-//         const end = new Date(toDate);
-//         end.setHours(23, 59, 59, 999);
-//         where.createdAt.lte = end;
-//       }
-//     }
-
-//     if (assignedToAccountId) {
-//       where.assignments = { some: { accountId: assignedToAccountId } };
-//     }
-
-//     const grouped = await prisma.task.groupBy({
-//       by: ["status"],
-//       where,
-//       _count: { _all: true },
-//     });
-
-//     const stats: Record<string, number> = {
-//       PENDING: 0,
-//       IN_PROGRESS: 0,
-//       IN_REVIEW: 0,
-//       BLOCKED: 0,
-//       COMPLETED: 0,
-//       CANCELLED: 0,
-//       TOTAL: 0,
-//       OVERDUE: 0,
-//     };
-
-//     for (const row of grouped) {
-//       stats[row.status] = row._count._all;
-//       stats.TOTAL += row._count._all;
-//     }
-
-//     stats.OVERDUE = await prisma.task.count({
-//       where: {
-//         ...where,
-//         dueDate: { lt: new Date() },
-//         status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] },
-//       },
-//     });
-
-//     return sendSuccessResponse(res, 200, "Task stats fetched", stats);
-//   } catch (err: any) {
-//     console.error("[getTaskStatsAdmin]", err);
-//     return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch stats");
-//   }
-// }
-
 /* ─────────────────────────────────────────────────────────────
    GET /admin/tasks/recurring
    List all active recurring task definitions with instance counts.
@@ -1668,7 +1577,6 @@ export async function listTaskInstancesAdmin(req: Request, res: Response) {
     return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch instances");
   }
 }
-
 
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2431,9 +2339,12 @@ export async function getTaskCommentsUser(req: Request, res: Response) {
 
     const { id: taskId } = req.params;
 
-    const hasAccess = await isAssignedToTask(taskId, accountId);
-    if (!hasAccess)
-      return sendErrorResponse(res, 403, "You are not assigned to this task");
+    const isAdmin = req.user?.roles?.includes?.("ADMIN");
+    if (!isAdmin) {
+      const hasAccess = await isAssignedToTask(taskId, accountId);
+      if (!hasAccess)
+        return sendErrorResponse(res, 403, "You are not assigned to this task");
+    }
 
     const task = await prisma.task.findUnique({
       where: { id: taskId, deletedAt: null },
@@ -4163,5 +4074,3 @@ export async function updateTaskRecurrenceAdmin(req: Request, res: Response) {
   }
 }
 
-
-// host    all    all    192.168.0.0/16    scram-sha-256
