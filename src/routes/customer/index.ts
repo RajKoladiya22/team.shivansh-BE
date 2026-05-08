@@ -16,6 +16,7 @@ import {
 } from "../../controller/customer/customer.controller";
 import multer from "multer";
 import { sendTncEmail, getTncByToken, acceptTnc } from "../../controller/customer/tnc.controller";
+import { bulkSendTncEmail } from "../../controller/customer/bulkTnc.controller";
 
 const upload = multer({
   storage: multer.memoryStorage(), // important (buffer access)
@@ -56,6 +57,8 @@ router.post("/bulk/import", requireAuth, bulkImportCustomers);
 // ─── Terms & Conditions ───────────────────────────────────────────────────────
 // Admin: generate token + send email to customer
 router.post("/:id/send-tnc", requireAuth, sendTncEmail);
+
+router.post("/bulk-send-tnc", requireAuth, bulkSendTncEmail);
 
 
 export default router;

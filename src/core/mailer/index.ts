@@ -1,3 +1,4 @@
+// src/core/mailer/index.ts
 import nodemailer from "nodemailer";
 import { env } from "../../config/database.config";
 
