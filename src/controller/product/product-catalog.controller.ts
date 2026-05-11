@@ -30,14 +30,47 @@ export async function getProductCatalogList(req: Request, res: Response) {
 
         const where: Prisma.ProductCatalogWhereInput = {};
 
-        if (search) {
+        /* ─────────────────────────────────────
+       Search
+    ───────────────────────────────────── */
+
+        const searchTerm = String(search || "").trim();
+
+        if (searchTerm) {
             where.OR = [
-                { title: { contains: search as string, mode: "insensitive" } },
-                { slug: { contains: search as string, mode: "insensitive" } },
-                { subtitle: { contains: search as string, mode: "insensitive" } },
-                { shortDesc: { contains: search as string, mode: "insensitive" } },
+                {
+                    title: {
+                        contains: searchTerm,
+                        mode: "insensitive",
+                    },
+                },
+
+                {
+                    slug: {
+                        contains: searchTerm,
+                        mode: "insensitive",
+                    },
+                },
+
+                {
+                    subtitle: {
+                        contains: searchTerm,
+                        mode: "insensitive",
+                    },
+                },
+
+                {
+                    shortDesc: {
+                        contains: searchTerm,
+                        mode: "insensitive",
+                    },
+                },
             ];
         }
+
+        /* ─────────────────────────────────────
+           Status Filters
+        ───────────────────────────────────── */
 
         if (status) {
             where.status = status as ProductStatus;
@@ -47,28 +80,81 @@ export async function getProductCatalogList(req: Request, res: Response) {
             where.syncStatus = syncStatus as SyncStatus;
         }
 
-        if (isActive !== undefined) {
-            where.isActive = isActive === "true";
+        /* ─────────────────────────────────────
+           Boolean Filters
+        ───────────────────────────────────── */
+
+        if (isActive === "true") {
+            where.isActive = true;
         }
 
-        if (isTopProduct !== undefined) {
-            where.isTopProduct = isTopProduct === "true";
+        if (isActive === "false") {
+            where.isActive = false;
         }
 
-        if (isLatest !== undefined) {
-            where.isLatest = isLatest === "true";
+        if (isTopProduct === "true") {
+            where.isTopProduct = true;
         }
 
-        if (categorySlug) {
-            where.categorySlugs = { has: categorySlug as string };
+        if (isTopProduct === "false") {
+            where.isTopProduct = false;
         }
 
-        if (industrySlug) {
-            where.industrySlugs = { has: industrySlug as string };
+        if (isLatest === "true") {
+            where.isLatest = true;
         }
 
-        if (tagSlug) {
-            where.tagSlugs = { has: tagSlug as string };
+        if (isLatest === "false") {
+            where.isLatest = false;
+        }
+
+        /* ─────────────────────────────────────
+           Category Filter
+        ───────────────────────────────────── */
+
+        const categorySlugs = String(
+            categorySlug || ""
+        )
+            .split(",")
+            .map((x) => x.trim())
+            .filter(Boolean);
+
+        if (categorySlugs.length > 0) {
+            where.categorySlugs = {
+                hasSome: categorySlugs,
+            };
+        }
+
+        /* ─────────────────────────────────────
+           Industry Filter
+        ───────────────────────────────────── */
+
+        const industrySlugs = String(
+            industrySlug || ""
+        )
+            .split(",")
+            .map((x) => x.trim())
+            .filter(Boolean);
+
+        if (industrySlugs.length > 0) {
+            where.industrySlugs = {
+                hasSome: industrySlugs,
+            };
+        }
+
+        /* ─────────────────────────────────────
+           Tag Filter
+        ───────────────────────────────────── */
+
+        const tagSlugs = String(tagSlug || "")
+            .split(",")
+            .map((x) => x.trim())
+            .filter(Boolean);
+
+        if (tagSlugs.length > 0) {
+            where.tagSlugs = {
+                hasSome: tagSlugs,
+            };
         }
 
         const allowedSortFields = [
