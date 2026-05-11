@@ -1943,6 +1943,7 @@ model Quotation {
 
   // ── Tax ───────────────────────────────────
   taxType       TaxType @default(GST)
+  taxPercent    Decimal? @db.Decimal(5, 2) // e.g. 18.00
   gstin         String? // our company GSTIN
   customerGstin String? // customer GSTIN (for B2B)
   placeOfSupply String? // state code for GST

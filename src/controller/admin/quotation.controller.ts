@@ -42,6 +42,7 @@ export async function createQuotationAdmin(req: Request, res: Response) {
       quotationDate,
       channel,
       taxType,
+      taxPercent,
       gstin,
       customerGstin,
       placeOfSupply,
@@ -112,6 +113,7 @@ export async function createQuotationAdmin(req: Request, res: Response) {
       computed,
       extraDiscountType,
       extraDiscountValue,
+      taxPercent ?? null,
     );
 
     const quotationNumber = await generateQuotationNumber();
@@ -137,6 +139,7 @@ export async function createQuotationAdmin(req: Request, res: Response) {
           extraDiscountValue: extraDiscountValue ?? null,
           extraDiscountNote: extraDiscountNote ?? null,
           taxType: taxType ?? "GST",
+          taxPercent: taxPercent ?? null, 
           gstin: gstin ?? null,
           customerGstin: customerGstin ?? null,
           placeOfSupply: placeOfSupply ?? null,
@@ -357,6 +360,7 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
       quotationDate,
       channel,
       taxType,
+      taxPercent, 
       gstin,
       customerGstin,
       placeOfSupply,
@@ -382,6 +386,7 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
         computed,
         extraDiscountType ?? (existing.extraDiscountType as any),
         toNullableNumber(extraDiscountValue ?? existing.extraDiscountValue),
+        taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent),
       );
       updateData.lineItems = computed;
       updateData.subtotal = financials.subtotal;
@@ -404,6 +409,7 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
         existing.lineItems as any,
         extraDiscountType ?? (existing.extraDiscountType as any),
         toNullableNumber(extraDiscountValue ?? existing.extraDiscountValue),
+        taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent),
       );
       updateData.subtotal = financials.subtotal;
       updateData.totalDiscount = financials.totalDiscount;
@@ -422,6 +428,7 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
       deliveryDays,
       channel,
       taxType,
+      taxPercent,
       gstin,
       customerGstin,
       placeOfSupply,
@@ -746,6 +753,7 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
       validUntil,
       channel,
       taxType,
+      taxPercent,
       gstin,
       customerGstin,
       placeOfSupply,
@@ -783,7 +791,7 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
     // console.log("\n\n edValue--->", edValue);
 
     const computed = computeLineItems(itemsToUse as LineItemInput[]);
-    const financials = computeFinancials(computed, edType as any, edValue);
+    const financials = computeFinancials(computed, edType as any, edValue, taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent),);
 
     const quotationNumber = await generateQuotationNumber();
 
@@ -808,6 +816,7 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
           extraDiscountNote:
             extraDiscountNote ?? (existing.extraDiscountNote as any),
           taxType: (taxType ?? existing.taxType) as any,
+          taxPercent: taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent), 
           gstin: gstin ?? existing.gstin,
           customerGstin: customerGstin ?? existing.customerGstin,
           placeOfSupply: placeOfSupply ?? existing.placeOfSupply,

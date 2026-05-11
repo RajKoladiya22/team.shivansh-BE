@@ -108,6 +108,7 @@ export function computeFinancials(
   lineItems: LineItemComputed[],
   extraDiscountType?: "PERCENTAGE" | "FLAT" | null,
   extraDiscountValue?: number | null,
+  globalTaxPercent?: number | null,
 ): QuotationFinancials {
   let subtotal = 0;
   let totalDiscount = 0;
@@ -118,7 +119,13 @@ export function computeFinancials(
     const lineDiscount = (item.basePrice - item.discountedPrice) * qty;
     subtotal += item.discountedPrice * qty;
     totalDiscount += lineDiscount;
-    totalTax += item.taxAmount;
+     if (globalTaxPercent == null) {
+      totalTax += item.taxAmount;
+    }
+  }
+
+  if (globalTaxPercent != null && globalTaxPercent > 0) {
+    totalTax = parseFloat(((subtotal * globalTaxPercent) / 100).toFixed(2));
   }
 
   let grandTotal = subtotal + totalTax;
@@ -191,6 +198,7 @@ export const quotationFullSelect = {
   extraDiscountValue: true,
   extraDiscountNote: true,
   taxType: true,
+  taxPercent: true,
   gstin: true,
   customerGstin: true,
   placeOfSupply: true,
