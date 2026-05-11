@@ -537,7 +537,11 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
                 <td style="padding:10px 16px;font-size:13px;color:#374151;text-align:right;font-weight:600;border-bottom:1px solid #f1f5f9;">₹${fmt(subtotal)}</td>
               </tr>
 
-
+              <!-- Tax — computed on subtotal, before extra discount -->
+<tr style="background:#f8fafc;">
+  <td style="padding:10px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">${taxLabel}</td>
+  <td style="padding:10px 16px;font-size:13px;color:#374151;text-align:right;font-weight:600;border-bottom:1px solid #f1f5f9;">₹${fmt(taxAmount)}</td>
+</tr>
 
               ${extraDiscountLabel && extraDiscountValue
       ? `<tr style="background:#f0fdf4;">
