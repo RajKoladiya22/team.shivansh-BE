@@ -11,6 +11,7 @@ export const envSchema = z.object({
 
   // Database
   DATABASE_URL: z.string().url(),
+  ADMIN_DATABASE_URL: z.string().url().optional(),
 
   // JWT
   JWT_ACCESS_TOKEN_SECRET: z.string(),

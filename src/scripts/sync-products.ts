@@ -1,0 +1,190 @@
+import crypto from "crypto";
+
+import { prisma } from "../config/database.config";
+import { adminDb } from "../lib/admin-db";
+
+function computeHash(data: unknown) {
+    return crypto
+        .createHash("sha256")
+        .update(JSON.stringify(data))
+        .digest("hex");
+}
+
+function buildSyncPayload(product: any) {
+    return {
+        title: product.title,
+        slug: product.slug,
+        subtitle: product.subtitle,
+        shortDesc: product.shortDesc,
+        description: product.description,
+        pricingModel: (product.pricingModel as any) || "ONE_TIME",
+        basePrice: product.basePrice,
+        discountPercent: product.discountPercent,
+        discountAmount: product.discountAmount,
+        finalPrice: product.finalPrice,
+        introVideoId: product.introVideoId,
+        detailedVideoId: product.detailedVideoId,
+        demoUrl: product.demoUrl,
+        downloadUrl: product.downloadUrl,
+        trialAvailable: product.trialAvailable,
+        status: (product.status as any) || "DRAFT",
+        isTopProduct: product.isTopProduct,
+        isLatest: product.isLatest,
+        seoTitle: product.seoTitle,
+        seoDescription: product.seoDescription,
+        metadata: product.metadata,
+        categorySlugs: product.categorySlugs || [],
+        industrySlugs: product.industrySlugs || [],
+        tagSlugs: product.tagSlugs || [],
+    };
+}
+
+const PRODUCT_QUERY = `
+    SELECT
+      p.id,
+      p.title,
+      p.slug,
+      p.subtitle,
+      p."shortDesc",
+      p.description,
+      p."pricingModel",
+      p."basePrice",
+      p."discountPercent",
+      p."discountAmount",
+      p."finalPrice",
+      p."introVideoId",
+      p."detailedVideoId",
+      p."demoUrl",
+      p."downloadUrl",
+      p."trialAvailable",
+      p.status,
+      p."isTopProduct",
+      p."isLatest",
+      p."seoTitle",
+      p."seoDescription",
+      p.metadata,
+      p."updatedAt",
+
+      COALESCE(
+        ARRAY_AGG(DISTINCT c.slug)
+        FILTER (WHERE c.slug IS NOT NULL),
+        '{}'
+      ) as "categorySlugs",
+
+      COALESCE(
+        ARRAY_AGG(DISTINCT i.slug)
+        FILTER (WHERE i.slug IS NOT NULL),
+        '{}'
+      ) as "industrySlugs",
+
+      COALESCE(
+        ARRAY_AGG(DISTINCT t.slug)
+        FILTER (WHERE t.slug IS NOT NULL),
+        '{}'
+      ) as "tagSlugs"
+
+    FROM "Product" p
+
+    LEFT JOIN "ProductCategory" pc ON pc."productId" = p.id
+    LEFT JOIN "Category" c ON c.id = pc."categoryId"
+    LEFT JOIN "ProductIndustry" pi ON pi."productId" = p.id
+    LEFT JOIN "Industry" i ON i.id = pi."industryId"
+    LEFT JOIN "ProductTag" pt ON pt."productId" = p.id
+    LEFT JOIN "Tag" t ON t.id = pt."tagId"
+`;
+
+async function upsertProduct(product: any) {
+    const syncPayload = buildSyncPayload(product);
+    const hash = computeHash(syncPayload);
+
+    const synced = await prisma.productCatalog.upsert({
+        where: {
+            adminProductId: product.id,
+        },
+        create: {
+            adminProductId: product.id,
+            ...syncPayload,
+            syncHash: hash,
+            syncStatus: "SYNCED",
+            syncedAt: new Date(),
+            sourceUpdatedAt: product.updatedAt,
+            lastSyncAttempt: new Date(),
+        },
+        update: {
+            ...syncPayload,
+            syncHash: hash,
+            syncStatus: "SYNCED",
+            syncedAt: new Date(),
+            sourceUpdatedAt: product.updatedAt,
+            lastSyncAttempt: new Date(),
+            syncError: null,
+            syncVersion: {
+                increment: 1,
+            },
+        },
+    });
+
+    await prisma.productCatalogSyncLog.create({
+        data: {
+            adminProductId: product.id,
+            productCatalogId: synced.id,
+            action: "SYNC",
+            syncStatus: "SYNCED",
+        },
+    });
+
+    return synced;
+}
+
+export async function syncSingleProduct(adminProductId: string) {
+    const result = await adminDb.query(
+        `${PRODUCT_QUERY} WHERE p.id = $1 GROUP BY p.id`,
+        [adminProductId]
+    );
+
+    const product = result.rows[0];
+
+    if (!product) {
+        throw new Error("Product not found");
+    }
+
+    return upsertProduct(product);
+}
+
+export async function syncUpdatedProducts() {
+    const result = await adminDb.query(
+        `${PRODUCT_QUERY} GROUP BY p.id`
+    );
+
+    const existingRecords = await prisma.productCatalog.findMany({
+        select: { adminProductId: true, syncHash: true },
+    });
+
+    const hashMap = new Map(
+        existingRecords.map((r) => [r.adminProductId, r.syncHash])
+    );
+
+    const toSync = result.rows.filter((product) => {
+        const hash = computeHash(buildSyncPayload(product));
+        return hashMap.get(product.id) !== hash;
+    });
+
+    console.log(
+        `[ProductSync] ${toSync.length} changed out of ${result.rows.length} total`
+    );
+
+    const results = await Promise.allSettled(
+        toSync.map((product) => upsertProduct(product))
+    );
+
+    const failed = results.filter((r) => r.status === "rejected");
+    if (failed.length > 0) {
+        console.error(`[ProductSync] ${failed.length} failed to sync`);
+    }
+
+    return {
+        total: result.rows.length,
+        synced: toSync.length,
+        failed: failed.length,
+    };
+}

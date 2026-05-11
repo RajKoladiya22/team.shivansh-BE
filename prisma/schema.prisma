@@ -2441,3 +2441,152 @@ model AnalyticsDailyRollup {
   @@index([date, utmCampaign])          // campaign charts
   @@index([date, referrerType])         // traffic source charts
 }
+
+
+enum SyncStatus {
+  PENDING
+  SYNCED
+  ERROR
+  OUTDATED
+  DELETED
+}
+
+enum ProductStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+  DELETED
+}
+
+enum PricingModel {
+  ONE_TIME
+  SUBSCRIPTION
+  USAGE
+  CUSTOM
+}
+
+model ProductCatalog {
+  id String @id @default(cuid())
+
+  // ─────────────────────────────────────
+  // SOURCE REFERENCE
+  // ─────────────────────────────────────
+
+  adminProductId String @unique
+
+  // ─────────────────────────────────────
+  // CORE PRODUCT DATA (SYNCED)
+  // ─────────────────────────────────────
+
+  title String
+  slug String @unique
+
+  subtitle String?
+  shortDesc String?
+  description String?
+
+  pricingModel PricingModel @default(ONE_TIME)
+
+  basePrice Decimal? @db.Decimal(18, 2)
+  discountPercent Float? @default(0)
+  discountAmount Decimal? @db.Decimal(18, 2)
+  finalPrice Decimal? @db.Decimal(18, 2)
+
+  introVideoId String?
+  detailedVideoId String?
+
+  demoUrl String?
+  downloadUrl String?
+
+  trialAvailable Boolean @default(false)
+
+  status ProductStatus @default(DRAFT)
+
+  isTopProduct Boolean @default(false)
+  isLatest Boolean @default(false)
+
+  seoTitle String?
+  seoDescription String?
+
+  metadata Json?
+
+  // Lightweight classification
+  categorySlugs String[] @default([])
+  industrySlugs String[] @default([])
+  tagSlugs String[] @default([])
+
+  // ─────────────────────────────────────
+  // SYNC TRACKING
+  // ─────────────────────────────────────
+
+  syncStatus SyncStatus @default(PENDING)
+
+  syncHash String?
+
+  syncedAt DateTime?
+  sourceUpdatedAt DateTime?
+
+  lastSyncAttempt DateTime?
+
+  syncError String?
+
+  syncVersion Int @default(1)
+
+  // ─────────────────────────────────────
+  // ERP / CRM ONLY FIELDS
+  // ─────────────────────────────────────
+
+  isActive Boolean @default(true)
+
+  internalNotes String?
+
+  salesPriority Int @default(0)
+
+  // ─────────────────────────────────────
+  // SYSTEM
+  // ─────────────────────────────────────
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // ─────────────────────────────────────
+  // INDEXES
+  // ─────────────────────────────────────
+
+  @@index([adminProductId])
+  @@index([slug])
+
+  @@index([syncStatus])
+
+  @@index([status])
+
+  @@index([syncedAt])
+
+  @@index([sourceUpdatedAt])
+}
+
+model ProductCatalogSyncLog {
+  id String @id @default(cuid())
+
+  adminProductId String
+
+  productCatalogId String?
+
+  action String
+
+  syncStatus SyncStatus
+
+  error String?
+
+  changedFields Json?
+
+  durationMs Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([adminProductId])
+
+  @@index([syncStatus])
+
+  @@index([createdAt])
+}

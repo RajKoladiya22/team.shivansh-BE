@@ -14,6 +14,7 @@ import commonRouter from "./common"
 import publicRouter from "./public"
 import tasksRouter from "./task"
 import analyticsRouter from "./analytics";
+import productsRouter from "./product";
 // import projectsRouter from "./project"
 
 
@@ -34,6 +35,7 @@ router.use("/dsu", dsuRouter);
 router.use("/public", publicRouter);
 router.use("/tasks", tasksRouter);
 router.use("/analytics", analyticsRouter);
+router.use("/products", productsRouter);
 
 
 // export main

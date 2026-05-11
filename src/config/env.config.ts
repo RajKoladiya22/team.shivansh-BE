@@ -11,6 +11,7 @@ export interface EnvConfig {
     nodeEnv: string;
     port: number;
     databaseUrl: string;
+    adminDatabaseUrl?: string;
     jwtAccessExpiresIn?: string;
     apikey: string;
     saltRounds: number;
@@ -41,6 +42,7 @@ const {
     NODE_ENV,
     PORT,
     DATABASE_URL,
+    ADMIN_DATABASE_URL,
     STATIC_TOKEN,
     SALT_ROUNDS,
     JWT_ACCESS_TOKEN_SECRET,
@@ -66,6 +68,7 @@ export const envConfiguration = (): EnvConfig => ({
     nodeEnv: NODE_ENV,
     port: Number(PORT),
     databaseUrl: DATABASE_URL,
+    adminDatabaseUrl: ADMIN_DATABASE_URL,
     apikey: STATIC_TOKEN,
     saltRounds: Number(SALT_ROUNDS),
     jwt: {
