@@ -88,7 +88,7 @@ export function computeLineItems(raw: LineItemInput[]): LineItemComputed[] {
     const taxAmount =
       item.taxType === "NONE" ? 0 : (taxable * taxPercent) / 100;
 
-    const totalPrice = taxable ;
+    const totalPrice = taxable;
     // const totalPrice = taxable + taxAmount;
 
     return {
@@ -119,7 +119,7 @@ export function computeFinancials(
     const lineDiscount = (item.basePrice - item.discountedPrice) * qty;
     subtotal += item.discountedPrice * qty;
     totalDiscount += lineDiscount;
-     if (globalTaxPercent == null) {
+    if (globalTaxPercent == null) {
       totalTax += item.taxAmount;
     }
   }
@@ -303,7 +303,7 @@ function extractCustomerEmail(q: any): string | undefined {
     undefined
   );
 }
- 
+
 /**
  * Maps the full Prisma quotation record to QuotationEmailData.
  * All field names verified against logged DB output.
@@ -316,78 +316,90 @@ function buildEmailData(q: any, isReminder: boolean): QuotationEmailData {
     : undefined;
   const preparedByDesignation = preparer?.designation ?? undefined;
   const preparedByPhone = preparer?.contactPhone ?? preparer?.mobile ?? undefined;
- 
+
+  const extraDiscountAmount =
+    q.extraDiscountValue != null && Number(q.extraDiscountValue) > 0
+      ? parseFloat(
+        (Number(q.subtotal) + Number(q.totalTax) - Number(q.grandTotal)).toFixed(2)
+      )
+      : 0;
+
+  const lineDiscountOnly = q.totalDiscount
+    ? Math.max(parseFloat((Number(q.totalDiscount) - extraDiscountAmount).toFixed(2)), 0)
+    : 0;
+
   // ── Line items ──
   const items = ((q.lineItems ?? []) as any[]).map((item: any) => ({
-    title:         item.name ?? "—",
-    type:          item.unit ?? undefined,
-    qty:           Number(item.qty ?? 1),
-    rate:          Number(item.discountedPrice ?? item.basePrice ?? 0),
-    baseRate:      item.basePrice != null ? Number(item.basePrice) : undefined,
-    discountType:  item.discountType ?? undefined,
+    title: item.name ?? "—",
+    type: item.unit ?? undefined,
+    qty: Number(item.qty ?? 1),
+    rate: Number(item.discountedPrice ?? item.basePrice ?? 0),
+    baseRate: item.basePrice != null ? Number(item.basePrice) : undefined,
+    discountType: item.discountType ?? undefined,
     discountValue: item.discountValue != null ? Number(item.discountValue) : undefined,
-    taxPercent:    item.taxPercent != null ? Number(item.taxPercent) : undefined,
-    amount:        Number(item.totalPrice ?? 0),
+    taxPercent: item.taxPercent != null ? Number(item.taxPercent) : undefined,
+    amount: Number(item.totalPrice ?? 0),
   }));
- 
+
   // ── Customer info ──
   const customerName =
     q.customer?.name ?? q.customerSnapshot?.name ?? "Valued Customer";
   const customerCompanyName =
     q.customer?.customerCompanyName ?? q.customerSnapshot?.companyName ?? undefined;
- 
+
   return {
-    quotationNumber:    q.quotationNumber,
-    quotationUrl:       quotationUrl(q.id),
-    subject:            q.subject ?? undefined,
+    quotationNumber: q.quotationNumber,
+    quotationUrl: quotationUrl(q.id),
+    subject: q.subject ?? undefined,
     customerName,
     customerCompanyName,
-    customerCity:       q.customer?.city ?? q.customerSnapshot?.city ?? undefined,
-    customerState:      q.customer?.state ?? q.customerSnapshot?.state ?? undefined,
-    customerGstin:      q.customerGstin ?? undefined,
-    companyGstin:       q.gstin ?? undefined,
-    companyName:        "Shivansh Infosys",
+    customerCity: q.customer?.city ?? q.customerSnapshot?.city ?? undefined,
+    customerState: q.customer?.state ?? q.customerSnapshot?.state ?? undefined,
+    customerGstin: q.customerGstin ?? undefined,
+    companyGstin: q.gstin ?? undefined,
+    companyName: "Shivansh Infosys",
     preparedByName,
     preparedByDesignation,
     preparedByPhone,
-    grandTotal:         Number(q.grandTotal ?? 0),
-    subtotal:           Number(q.subtotal ?? 0),
-    taxAmount:          Number(q.totalTax ?? 0),
-    totalDiscount:      q.totalDiscount ? Number(q.totalDiscount) : undefined,
-    extraDiscountType:  q.extraDiscountType ?? undefined,
+    grandTotal: Number(q.grandTotal ?? 0),
+    subtotal: Number(q.subtotal ?? 0),
+    taxAmount: Number(q.totalTax ?? 0),
+    totalDiscount: q.totalDiscount ? Number(q.totalDiscount) : undefined,
+    extraDiscountType: q.extraDiscountType ?? undefined,
     extraDiscountValue: q.extraDiscountValue != null ? Number(q.extraDiscountValue) : undefined,
-    extraDiscountNote:  q.extraDiscountNote ?? undefined,
-    taxLabel:           q.taxType ?? "GST",
-    currency:           q.currency ?? "INR",
+    extraDiscountAmount: extraDiscountAmount > 0 ? extraDiscountAmount : undefined, 
+    extraDiscountNote: q.extraDiscountNote ?? undefined,
+    taxLabel: q.taxType ?? "GST",
+    currency: q.currency ?? "INR",
     createdAt:
       q.quotationDate?.toISOString?.() ??
       q.createdAt?.toISOString?.() ??
       new Date().toISOString(),
-    validUntil:      q.validUntil?.toISOString?.() ?? undefined,
+    validUntil: q.validUntil?.toISOString?.() ?? undefined,
     isReminder,
     items,
-    introNote:       q.introNote ?? undefined,
-    termsNote:       q.termsNote ?? undefined,
-    footerNote:      q.footerNote ?? undefined,
-    paymentTerms:    q.paymentTerms ?? undefined,
-    paymentDueDays:  q.paymentDueDays != null ? Number(q.paymentDueDays) : undefined,
-    deliveryScope:   q.deliveryScope ?? undefined,
-    deliveryDays:    q.deliveryDays != null ? Number(q.deliveryDays) : undefined,
+    introNote: q.introNote ?? undefined,
+    termsNote: q.termsNote ?? undefined,
+    footerNote: q.footerNote ?? undefined,
+    paymentTerms: q.paymentTerms ?? undefined,
+    paymentDueDays: q.paymentDueDays != null ? Number(q.paymentDueDays) : undefined,
+    deliveryScope: q.deliveryScope ?? undefined,
+    deliveryDays: q.deliveryDays != null ? Number(q.deliveryDays) : undefined,
   };
 }
- 
+
 export async function trySendQuotationEmail(q: any, isReminder: boolean): Promise<void> {
   const email = extractCustomerEmail(q);
   if (!email) {
     console.info(`[quotation-email] No email for ${q.quotationNumber} — skipping`);
     return;
   }
- 
+
   const data = buildEmailData(q, isReminder);
   const subject = isReminder
     ? `Reminder: Quotation ${data.quotationNumber} from Shivansh Infosys`
     : `Your Quotation ${data.quotationNumber} from Shivansh Infosys`;
- 
+
   try {
     await sendMail(email, subject, quotationEmailHtml(data), quotationEmailText(data));
     console.info(`[quotation-email] ${isReminder ? "Reminder" : "Sent"} ${data.quotationNumber} → ${email} ✓`);
