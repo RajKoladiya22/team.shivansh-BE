@@ -537,16 +537,7 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
                 <td style="padding:10px 16px;font-size:13px;color:#374151;text-align:right;font-weight:600;border-bottom:1px solid #f1f5f9;">₹${fmt(subtotal)}</td>
               </tr>
 
-              ${totalDiscount && totalDiscount > 0
-      ? `<tr style="background:#f0fdf4;">
-                       <td style="padding:10px 16px;font-size:13px;color:#16a34a;border-bottom:1px solid #dcfce7;">
-                         <span style="display:inline-block;width:6px;height:6px;background:#16a34a;border-radius:50%;margin-right:6px;vertical-align:middle;"></span>
-                         Item Discounts
-                       </td>
-                       <td style="padding:10px 16px;font-size:13px;color:#16a34a;text-align:right;font-weight:700;border-bottom:1px solid #dcfce7;">−₹${fmt(totalDiscount)}</td>
-                     </tr>`
-      : ""
-    }
+
 
               ${extraDiscountLabel && extraDiscountValue
       ? `<tr style="background:#f0fdf4;">
@@ -554,16 +545,12 @@ export function quotationEmailHtml(data: QuotationEmailData): string {
                          ${extraDiscountLabel}
                          ${extraDiscountNote ? `<div style="font-size:11px;color:#86efac;">${extraDiscountNote}</div>` : ""}
                        </td>
-                       <td style="padding:10px 16px;font-size:13px;color:#16a34a;text-align:right;font-weight:700;border-bottom:1px solid #dcfce7;">Applied</td>
+                       <td style="padding:10px 16px;font-size:13px;color:#16a34a;text-align:right;font-weight:700;border-bottom:1px solid #dcfce7;">₹${extraDiscountAmount}</td>
                      </tr>`
       : ""
     }
 
-              <!-- Tax row -->
-              <tr style="background:#f8fafc;">
-                <td style="padding:10px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">${taxLabel}</td>
-                <td style="padding:10px 16px;font-size:13px;color:#374151;text-align:right;font-weight:600;border-bottom:1px solid #f1f5f9;">₹${fmt(taxAmount)}</td>
-              </tr>
+
 
               <!-- Grand total dark row -->
               <tr style="background:#0f172a;">
