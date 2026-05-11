@@ -88,7 +88,8 @@ export function computeLineItems(raw: LineItemInput[]): LineItemComputed[] {
     const taxAmount =
       item.taxType === "NONE" ? 0 : (taxable * taxPercent) / 100;
 
-    const totalPrice = taxable + taxAmount;
+    const totalPrice = taxable ;
+    // const totalPrice = taxable + taxAmount;
 
     return {
       ...item,
