@@ -117,6 +117,8 @@ model Account {
   followUpsCreated LeadFollowUp[] @relation("FollowUpCreatedBy")
   followUpsDone    LeadFollowUp[] @relation("FollowUpDoneBy")
 
+  productExpertise UserProductExpertise[]
+
   @@index([isActive])
   @@index([jobType])
   @@index([contactEmail])
@@ -2452,8 +2454,8 @@ enum SyncStatus {
 }
 
 enum ProductStatus {
-  DRAFT
   PUBLISHED
+  DRAFT
   ARCHIVED
   DELETED
 }
@@ -2549,6 +2551,8 @@ model ProductCatalog {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  userExpertise UserProductExpertise[]
+
   // ─────────────────────────────────────
   // INDEXES
   // ─────────────────────────────────────
@@ -2589,4 +2593,62 @@ model ProductCatalogSyncLog {
   @@index([syncStatus])
 
   @@index([createdAt])
+}
+
+enum ExpertiseLevel {
+  EXPERT           // "I'm an expert / I can guide others"
+  CAN_DEMO         // "I can deliver demos / present this"
+  LEARNING         // "I'm actively learning this"
+  GUIDANCE_NEEDED  // "I need guidance / help"
+  NONE
+}
+
+model UserProductExpertise {
+  id String @id @default(cuid())
+
+  // ─────────────────────────────────
+  // Foreign Keys
+  // ─────────────────────────────────
+  userId String
+  user   Account @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  productCatalogId String
+  productCatalog   ProductCatalog @relation(fields: [productCatalogId], references: [id], onDelete: Cascade)
+
+  // ─────────────────────────────────
+  // Core Expertise Tracking
+  // ─────────────────────────────────
+  expertiseLevel ExpertiseLevel @default(NONE)
+
+  // ─────────────────────────────────
+  // Performance & Journey
+  // ─────────────────────────────────
+  yearsOfExperience Int?             // How many years of experience with this product
+  completedProjects Int @default(0)  // Number of projects/demos completed
+  leadsConverted   Int @default(0)   // Number of leads this user converted for this product
+  demoCount        Int @default(0)   // How many times demoed
+  successRate      Float @default(0) // % of leads that converted (leadsConverted / leads assigned)
+
+  // ─────────────────────────────────
+  // Learning Progress
+  // ─────────────────────────────────
+  certifications  Json?  // ["CertA", "CertB"] - product certifications/trainings
+  skills          Json?  // ["Feature1", "Feature2"] - specific features mastered
+  notes           String? // Personal notes, learning goals
+
+  // ─────────────────────────────────
+  // Activity Tracking
+  // ─────────────────────────────────
+  lastDemoAt      DateTime?
+  lastLeadAt      DateTime?
+  lastUpdatedAt   DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+
+  @@unique([userId, productCatalogId])
+  @@index([userId])
+  @@index([productCatalogId])
+  @@index([expertiseLevel])
+  @@index([successRate])
+  @@index([leadsConverted])
 }

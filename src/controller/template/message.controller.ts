@@ -559,7 +559,7 @@ export async function getTemplateById(req: Request, res: Response) {
   try {
     const { id } = req.params;
 
-    console.log("getTemplateById id:", id);
+    // console.log("getTemplateById id:", id);
 
     const userId = req.user?.id ?? null;
     const accountId = await getAccountIdFromReqUser(userId);

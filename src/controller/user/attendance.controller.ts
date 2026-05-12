@@ -315,8 +315,8 @@ export async function userCheckOut(req: Request, res: Response) {
 
       /* 5. Update log */
       const newTotal = log.totalWorkMinutes + sessionMinutes;
-      console.log("\n\n\n\n\n\n newTotal---> ", newTotal);
-      console.log("\n deriveStatus---> ", deriveStatus(newTotal));
+      // console.log("\n\n\n\n\n\n newTotal---> ", newTotal);
+      // console.log("\n deriveStatus---> ", deriveStatus(newTotal));
 
       const updatedLog = await tx.attendanceLog.update({
         where: { id: log.id },

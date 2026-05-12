@@ -1,4 +1,4 @@
-// src/index.ts (or app.ts)
+// src/routes/product/index.ts
 import productCatalogRoutes from "./product-catalog.routes";
 
 import { Router } from "express";

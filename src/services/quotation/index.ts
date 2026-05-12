@@ -390,6 +390,7 @@ function buildEmailData(q: any, isReminder: boolean): QuotationEmailData {
 
 export async function trySendQuotationEmail(q: any, isReminder: boolean): Promise<void> {
   const email = extractCustomerEmail(q);
+  // console.log("\n\n\n\n\n\nemail: \n", email);
   if (!email) {
     console.info(`[quotation-email] No email for ${q.quotationNumber} — skipping`);
     return;

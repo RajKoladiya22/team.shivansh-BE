@@ -82,7 +82,7 @@ export async function sendWhatsAppText({
       }
     );
 
-    console.log("\n\n\n\n\nWhatsApp TEXT response:", response.data);
+    // console.log("\n\n\n\n\nWhatsApp TEXT response:", response.data);
     return response.data;
   } catch (error: any) {
     console.error("WhatsApp TEXT failed:", error.response?.data || error.message);
@@ -120,7 +120,7 @@ export async function sendWhatsAppTemplate({
       }
     );
 
-    console.log("\n\n\n\nWhatsApp TEMPLATE response:", response.data);
+    // console.log("\n\n\n\nWhatsApp TEMPLATE response:", response.data);
     return response.data;
   } catch (error: any) {
     console.error("WhatsApp TEMPLATE failed:", error.response?.data || error.message);
@@ -159,7 +159,7 @@ export async function sendWhatsAppSmart({
     resp?.status === "0" &&
     resp?.message?.toLowerCase().includes("24 hour")
   ) {
-    console.log("\n\n⚠️ Outside 24h → using TEMPLATE");
+    // console.log("\n\n⚠️ Outside 24h → using TEMPLATE");
 
     return await sendWhatsAppTemplate({
       phoneNumber: normalized,
@@ -194,7 +194,7 @@ export async function createWhatsAppSubscriber({
       }
     );
 
-    console.log("\n\nSubscriber create response:", response.data);
+    // console.log("\n\nSubscriber create response:", response.data);
 
     return response.data;
   } catch (error: any) {

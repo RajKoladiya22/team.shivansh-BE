@@ -69,9 +69,9 @@ export const bulkSendTncEmail = async (req: Request, res: Response) => {
     }
 
     // ── Run bulk processor ────────────────────────────────────────────────────
-    console.log(
-      `[bulkTnc] Starting — mode=${mode} batchSize=${batchSize ?? 10} dryRun=${dryRun}`,
-    );
+    // console.log(
+    //   `[bulkTnc] Starting — mode=${mode} batchSize=${batchSize ?? 10} dryRun=${dryRun}`,
+    // );
 
     const result = await runBulkTncEmail({
       mode,
@@ -81,9 +81,9 @@ export const bulkSendTncEmail = async (req: Request, res: Response) => {
       customerIds,
     });
 
-    console.log(
-      `[bulkTnc] Done — sent=${result.sent} skipped=${result.skipped} failed=${result.failed} duration=${result.durationMs}ms`,
-    );
+    // console.log(
+    //   `[bulkTnc] Done — sent=${result.sent} skipped=${result.skipped} failed=${result.failed} duration=${result.durationMs}ms`,
+    // );
 
     // ── Respond ───────────────────────────────────────────────────────────────
     const message = result.dryRun

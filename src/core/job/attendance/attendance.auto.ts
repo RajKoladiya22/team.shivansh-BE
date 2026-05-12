@@ -32,7 +32,7 @@ export async function autoFinalizeAttendance() {
     0
   );
 
-  console.log("Running auto attendance finalizer for:", today);
+  // console.log("Running auto attendance finalizer for:", today);
 
   const accounts = await prisma.account.findMany({
     where: { isActive: true },
@@ -192,5 +192,5 @@ export async function autoFinalizeAttendance() {
     });
   }
 
-  console.log("Auto attendance finalization completed.");
+  // console.log("Auto attendance finalization completed.");
 }

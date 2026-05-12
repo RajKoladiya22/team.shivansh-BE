@@ -538,7 +538,7 @@ export async function sendQuotationAdmin(req: Request, res: Response) {
       return q;
     });
 
-    console.log("\n\n\n\n\n\n\n\n\n\n\nsend updated", updated, "\n\n\n");
+    // console.log("\n\n\n\n\n\n\n\n\n\n\nsend updated", updated, "\n\n\n");
 
     void trySendQuotationEmail(updated, false);
 
@@ -612,7 +612,7 @@ export async function remindQuotationAdmin(req: Request, res: Response) {
       return q;
     });
 
-    console.log("\n\n\n\n\n\n\n\n\n\n\nremind updated", updated, "\n\n\n");
+    // console.log("\n\n\n\n\n\n\n\n\n\n\nremind updated", updated, "\n\n\n");
 
 
     void trySendQuotationEmail(updated, true);

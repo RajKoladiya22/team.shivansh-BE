@@ -1,6 +1,10 @@
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import { Prisma, SyncStatus, ProductStatus } from "@prisma/client";
+import {
+    sendErrorResponse,
+    sendSuccessResponse,
+} from "../../core/utils/httpResponse";
 
 // ─────────────────────────────────────
 // GET /product-catalog
@@ -28,43 +32,34 @@ export async function getProductCatalogList(req: Request, res: Response) {
         const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)));
         const skip = (pageNum - 1) * limitNum;
 
-        const where: Prisma.ProductCatalogWhereInput = {};
+        const where: any = {};
 
         /* ─────────────────────────────────────
-       Search
-    ───────────────────────────────────── */
+            Search
+        ───────────────────────────────────── */
+        function normalizeSearch(search?: string): string[] {
+            if (!search || typeof search !== "string") {
+                return [];
+            }
 
-        const searchTerm = String(search || "").trim();
+            return search
+                .toLowerCase()
+                .replace(/[^\w\s]/g, " ")
+                .split(/\s+/)
+                .filter(Boolean);
+        }
+
+        const searchTerm = normalizeSearch(search as string);
 
         if (searchTerm) {
-            where.OR = [
-                {
+            where.AND = [
+                ...(where.AND || []),
+                ...searchTerm.map((word) => ({
                     title: {
-                        contains: searchTerm,
+                        contains: word,
                         mode: "insensitive",
                     },
-                },
-
-                {
-                    slug: {
-                        contains: searchTerm,
-                        mode: "insensitive",
-                    },
-                },
-
-                {
-                    subtitle: {
-                        contains: searchTerm,
-                        mode: "insensitive",
-                    },
-                },
-
-                {
-                    shortDesc: {
-                        contains: searchTerm,
-                        mode: "insensitive",
-                    },
-                },
+                })),
             ];
         }
 
@@ -178,7 +173,15 @@ export async function getProductCatalogList(req: Request, res: Response) {
                 where,
                 skip,
                 take: limitNum,
-                orderBy: { [orderByField]: orderByDir },
+                orderBy: [
+                    {
+                        status: "asc",
+                    },
+                    {
+                        [orderByField]: orderByDir,
+                    },
+                ],
+
                 select: {
                     id: true,
                     adminProductId: true,
@@ -186,7 +189,8 @@ export async function getProductCatalogList(req: Request, res: Response) {
                     slug: true,
                     subtitle: true,
                     shortDesc: true,
-                    pricingModel: true,
+                    introVideoId: true,
+                    detailedVideoId: true,
                     basePrice: true,
                     discountPercent: true,
                     discountAmount: true,
@@ -196,16 +200,9 @@ export async function getProductCatalogList(req: Request, res: Response) {
                     isTopProduct: true,
                     isLatest: true,
                     isActive: true,
-                    salesPriority: true,
                     categorySlugs: true,
                     industrySlugs: true,
                     tagSlugs: true,
-                    syncStatus: true,
-                    syncedAt: true,
-                    syncVersion: true,
-                    lastSyncAttempt: true,
-                    syncError: true,
-                    sourceUpdatedAt: true,
                     createdAt: true,
                     updatedAt: true,
                 },
@@ -213,10 +210,11 @@ export async function getProductCatalogList(req: Request, res: Response) {
             prisma.productCatalog.count({ where }),
         ]);
 
-        return res.json({
-            success: true,
+
+
+        return sendSuccessResponse(res, 200, "TDLs catalog list fetched", {
             data: products,
-            pagination: {
+            meta: {
                 page: pageNum,
                 limit: limitNum,
                 total,
@@ -227,10 +225,8 @@ export async function getProductCatalogList(req: Request, res: Response) {
         });
     } catch (error) {
         console.error("[ProductCatalog] getProductCatalogList error", error);
-        return res.status(500).json({
-            success: false,
-            message: "Failed to fetch product catalog list",
-        });
+
+        return sendErrorResponse(res, 500, "Failed to fetch TDLs catalog list");
     }
 }
 
@@ -252,17 +248,13 @@ export async function getProductCatalogById(req: Request, res: Response) {
                 message: "Product not found",
             });
         }
-
-        return res.json({
-            success: true,
+        
+        return sendSuccessResponse(res, 200, "Details of TDL fetched", {
             data: product,
         });
     } catch (error) {
         console.error("[ProductCatalog] getProductCatalogById error", error);
-        return res.status(500).json({
-            success: false,
-            message: "Failed to fetch product",
-        });
+         return sendErrorResponse(res, 500, "Failed to fetch TDL details");
     }
 }
 

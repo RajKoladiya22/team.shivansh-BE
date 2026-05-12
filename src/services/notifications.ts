@@ -251,9 +251,9 @@ export async function triggerAssignmentNotification({
           }
         );
       } catch (pushError: any) {
-        console.log("❌ Web push failed:", sub.endpoint);
-        console.log("Status:", pushError?.statusCode);
-        console.log("Body:", pushError?.body);
+        // console.log("❌ Web push failed:", sub.endpoint);
+        // console.log("Status:", pushError?.statusCode);
+        // console.log("Body:", pushError?.body);
 
         // Optional: auto-remove invalid subscription
         if (pushError?.statusCode === 404 || pushError?.statusCode === 410) {

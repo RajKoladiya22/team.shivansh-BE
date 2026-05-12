@@ -15,6 +15,7 @@ import publicRouter from "./public"
 import tasksRouter from "./task"
 import analyticsRouter from "./analytics";
 import productsRouter from "./product";
+import expertiseRouter from "./expertise";
 // import projectsRouter from "./project"
 
 
@@ -36,6 +37,7 @@ router.use("/public", publicRouter);
 router.use("/tasks", tasksRouter);
 router.use("/analytics", analyticsRouter);
 router.use("/products", productsRouter);
+router.use("/expertise", expertiseRouter);
 
 
 // export main

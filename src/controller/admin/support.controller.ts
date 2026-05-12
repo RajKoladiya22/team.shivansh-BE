@@ -644,7 +644,7 @@ export async function getLeadCountByStatusAdmin(
       if (toDate) where.createdAt.lte = new Date(toDate);
     }
 
-    console.log("type of where:", typeof where, where);
+    // console.log("type of where:", typeof where, where);
     
     /**
      * Use groupBy (single DB roundtrip, very fast)
