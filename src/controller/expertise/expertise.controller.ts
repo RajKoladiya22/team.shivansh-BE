@@ -14,7 +14,7 @@ import {
 export async function setUserExpertise(req: Request, res: Response) {
     try {
         const userId = (req as any).user?.accountId; // from auth middleware req.user?.accountId
-        const { productCatalogId, expertiseLevel, notes, yearsOfExperience } =
+        const { productCatalogId, expertiseLevel, notes, yearsOfExperience, skills } =
             req.body;
 
         if (
@@ -64,12 +64,14 @@ export async function setUserExpertise(req: Request, res: Response) {
                 expertiseLevel,
                 notes,
                 yearsOfExperience: yearsOfExperience || undefined,
+                skills: skills || []
             },
             update: {
                 expertiseLevel,
                 notes,
                 yearsOfExperience: yearsOfExperience || undefined,
                 lastUpdatedAt: new Date(),
+                skills: skills || []
             },
             include: {
                 user: {
@@ -86,6 +88,7 @@ export async function setUserExpertise(req: Request, res: Response) {
                         id: true,
                         title: true,
                         slug: true,
+                        introVideoId: true,
                     },
                 },
             },
@@ -156,6 +159,7 @@ export async function getMyExpertise(req: Request, res: Response) {
                         basePrice: true,
                         finalPrice: true,
                         categorySlugs: true,
+                        introVideoId: true,
                     },
                 },
             },
@@ -332,6 +336,7 @@ export async function getTeamSkillMatrix(req: Request, res: Response) {
                         id: true,
                         title: true,
                         slug: true,
+                        introVideoId: true,
                     },
                 },
             },
