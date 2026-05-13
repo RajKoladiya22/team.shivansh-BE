@@ -234,13 +234,100 @@ export async function getProductCatalogList(req: Request, res: Response) {
 // GET /product-catalog/:id
 // ─────────────────────────────────────
 
+// export async function getProductCatalogById(req: Request, res: Response) {
+//     try {
+//         const { id } = req.params;
+
+//         const product = await prisma.productCatalog.findUnique({
+//             where: { id },
+//         });
+
+//         if (!product) {
+//             return res.status(404).json({
+//                 success: false,
+//                 message: "Product not found",
+//             });
+//         }
+        
+//         return sendSuccessResponse(res, 200, "Details of TDL fetched", {
+//             data: product,
+//         });
+//     } catch (error) {
+//         console.error("[ProductCatalog] getProductCatalogById error", error);
+//          return sendErrorResponse(res, 500, "Failed to fetch TDL details");
+//     }
+// }
+
 export async function getProductCatalogById(req: Request, res: Response) {
     try {
         const { id } = req.params;
+        const userId = (req as any).user?.accountId;
 
-        const product = await prisma.productCatalog.findUnique({
-            where: { id },
-        });
+        const [product, selfExpertise, experts] = await Promise.all([
+            prisma.productCatalog.findUnique({
+                where: { id },
+            }),
+
+            // Logged-in user's own expertise for this product (null if not marked)
+            userId
+                ? prisma.userProductExpertise.findUnique({
+                      where: {
+                          userId_productCatalogId: {
+                              userId,
+                              productCatalogId: id,
+                          },
+                      },
+                      select: {
+                          id: true,
+                          expertiseLevel: true,
+                          yearsOfExperience: true,
+                          completedProjects: true,
+                          leadsConverted: true,
+                          demoCount: true,
+                          successRate: true,
+                          skills: true,
+                          certifications: true,
+                          notes: true,
+                          lastDemoAt: true,
+                          lastLeadAt: true,
+                          lastUpdatedAt: true,
+                          createdAt: true,
+                      },
+                  })
+                : Promise.resolve(null),
+
+            // All users who have marked expertise for this product
+            prisma.userProductExpertise.findMany({
+                where: {
+                    productCatalogId: id,
+                    expertiseLevel: { not: "NONE" },
+                },
+                orderBy: [
+                    { expertiseLevel: "asc" }, // EXPERT → CAN_DEMO → LEARNING → GUIDANCE_NEEDED
+                    { leadsConverted: "desc" },
+                ],
+                select: {
+                    id: true,
+                    expertiseLevel: true,
+                    yearsOfExperience: true,
+                    completedProjects: true,
+                    leadsConverted: true,
+                    demoCount: true,
+                    successRate: true,
+                    lastDemoAt: true,
+                    lastUpdatedAt: true,
+                    user: {
+                        select: {
+                            id: true,
+                            firstName: true,
+                            lastName: true,
+                            avatar: true,
+                            designation: true,
+                        },
+                    },
+                },
+            }),
+        ]);
 
         if (!product) {
             return res.status(404).json({
@@ -248,13 +335,48 @@ export async function getProductCatalogById(req: Request, res: Response) {
                 message: "Product not found",
             });
         }
-        
+
+        // Group experts by level for easy frontend consumption
+        const expertsByLevel: Record<string, typeof experts> = {};
+        for (const e of experts) {
+            if (!expertsByLevel[e.expertiseLevel]) {
+                expertsByLevel[e.expertiseLevel] = [];
+            }
+            expertsByLevel[e.expertiseLevel].push(e);
+        }
+
+        // Coverage summary
+        const expertiseSummary = {
+            totalMarked: experts.length,
+            expertCount: experts.filter((e) => e.expertiseLevel === "EXPERT").length,
+            canDemoCount: experts.filter((e) => e.expertiseLevel === "CAN_DEMO").length,
+            learningCount: experts.filter((e) => e.expertiseLevel === "LEARNING").length,
+            guidanceCount: experts.filter((e) => e.expertiseLevel === "GUIDANCE_NEEDED").length,
+            totalLeadsConverted: experts.reduce((s, e) => s + e.leadsConverted, 0),
+            avgSuccessRate:
+                experts.length > 0
+                    ? parseFloat(
+                          (
+                              experts.reduce((s, e) => s + e.successRate, 0) /
+                              experts.length
+                          ).toFixed(2)
+                      )
+                    : 0,
+            isCovered: experts.some((e) => e.expertiseLevel === "EXPERT"),
+        };
+
         return sendSuccessResponse(res, 200, "Details of TDL fetched", {
-            data: product,
+            data: {
+                ...product,
+                selfExpertise,          // null if user hasn't marked this product
+                experts,                // flat list ordered by level → leads converted
+                expertsByLevel,         // { EXPERT: [...], CAN_DEMO: [...], ... }
+                expertiseSummary,
+            },
         });
     } catch (error) {
         console.error("[ProductCatalog] getProductCatalogById error", error);
-         return sendErrorResponse(res, 500, "Failed to fetch TDL details");
+        return sendErrorResponse(res, 500, "Failed to fetch TDL details");
     }
 }
 

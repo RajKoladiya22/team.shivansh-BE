@@ -246,203 +246,488 @@ export async function adminGetEmployeeExpertiseList(
 // skills, certifications, notes, and activity timestamps.
 // ─────────────────────────────────────
 
-export async function adminGetEmployeeExpertiseDetail(
-    req: Request,
-    res: Response
-) {
-    try {
-        const { employeeId } = req.params;
-        const { expertiseLevel, sortBy = "lastUpdatedAt", sortOrder = "desc" } =
-            req.query;
+// export async function adminGetEmployeeExpertiseDetail(
+//     req: Request,
+//     res: Response
+// ) {
+//     try {
+//         const { employeeId } = req.params;
+//         const { expertiseLevel, sortBy = "lastUpdatedAt", sortOrder = "desc", page = "1",
+//             limit = "20" } =
+//             req.query;
 
-        // ── Fetch the employee ──
+//         // ── Fetch the employee ──
+//         const account = await prisma.account.findUnique({
+//             where: { id: employeeId },
+//             select: {
+//                 id: true,
+//                 firstName: true,
+//                 lastName: true,
+//                 contactEmail: true,
+//                 avatar: true,
+//                 designation: true,
+//                 createdAt: true,
+//             },
+//         });
+
+//         if (!account) {
+//             return sendErrorResponse(res, 404, "Employee not found");
+//         }
+
+//         // ── Build expertise where ──
+//         const expertiseWhere: Prisma.UserProductExpertiseWhereInput = {
+//             userId: employeeId,
+//         };
+
+//         if (expertiseLevel) {
+//             expertiseWhere.expertiseLevel = expertiseLevel as ExpertiseLevel;
+//         }
+
+//         // ── Sort ──
+//         const allowedSortFields = [
+//             "lastUpdatedAt",
+//             "expertiseLevel",
+//             "leadsConverted",
+//             "successRate",
+//             "demoCount",
+//             "yearsOfExperience",
+//             "createdAt",
+//         ];
+//         const orderByField = allowedSortFields.includes(sortBy as string)
+//             ? (sortBy as string)
+//             : "lastUpdatedAt";
+//         const orderByDir = sortOrder === "asc" ? "asc" : "desc";
+
+//         // ── Fetch expertise entries ──
+//         const expertiseEntries = await prisma.userProductExpertise.findMany({
+//             where: expertiseWhere,
+//             orderBy: { [orderByField]: orderByDir },
+//             include: {
+//                 productCatalog: {
+//                     select: {
+//                         id: true,
+//                         title: true,
+//                         slug: true,
+//                         subtitle: true,
+//                         finalPrice: true,
+//                         basePrice: true,
+//                         categorySlugs: true,
+//                         industrySlugs: true,
+//                         isTopProduct: true,
+//                         isLatest: true,
+//                         status: true,
+//                         pricingModel: true,
+//                         introVideoId: true,
+//                     },
+//                 },
+//             },
+//         });
+
+//         // ── Build summary stats ──
+//         const expertCount = expertiseEntries.filter(
+//             (e) => e.expertiseLevel === "EXPERT"
+//         ).length;
+//         const canDemoCount = expertiseEntries.filter(
+//             (e) => e.expertiseLevel === "CAN_DEMO"
+//         ).length;
+//         const learningCount = expertiseEntries.filter(
+//             (e) => e.expertiseLevel === "LEARNING"
+//         ).length;
+//         const guidanceCount = expertiseEntries.filter(
+//             (e) => e.expertiseLevel === "GUIDANCE_NEEDED"
+//         ).length;
+//         const noneCount = expertiseEntries.filter(
+//             (e) => e.expertiseLevel === "NONE"
+//         ).length;
+//         const totalLeadsConverted = expertiseEntries.reduce(
+//             (s, e) => s + e.leadsConverted,
+//             0
+//         );
+//         const totalDemos = expertiseEntries.reduce(
+//             (s, e) => s + e.demoCount,
+//             0
+//         );
+//         const totalCompletedProjects = expertiseEntries.reduce(
+//             (s, e) => s + e.completedProjects,
+//             0
+//         );
+//         const avgSuccessRate =
+//             expertiseEntries.length > 0
+//                 ? expertiseEntries.reduce((s, e) => s + e.successRate, 0) /
+//                 expertiseEntries.length
+//                 : 0;
+
+//         // Top performing products (by leads converted)
+//         const topProducts = [...expertiseEntries]
+//             .sort((a, b) => b.leadsConverted - a.leadsConverted)
+//             .slice(0, 5)
+//             .map((e) => ({
+//                 productId: e.productCatalogId,
+//                 productTitle: e.productCatalog.title,
+//                 productSlug: e.productCatalog.slug,
+//                 expertiseLevel: e.expertiseLevel,
+//                 leadsConverted: e.leadsConverted,
+//                 successRate: e.successRate,
+//                 demoCount: e.demoCount,
+//             }));
+
+//         // Level breakdown for chart / UI display
+//         const levelBreakdown: Record<ExpertiseLevel, number> = {
+//             EXPERT: expertCount,
+//             CAN_DEMO: canDemoCount,
+//             LEARNING: learningCount,
+//             GUIDANCE_NEEDED: guidanceCount,
+//             NONE: noneCount
+//         };
+
+//         // Category coverage: which category slugs does the employee cover?
+//         const categoryCoverage: Record<string, number> = {};
+//         for (const e of expertiseEntries) {
+//             for (const cat of e.productCatalog.categorySlugs ?? []) {
+//                 categoryCoverage[cat] = (categoryCoverage[cat] ?? 0) + 1;
+//             }
+//         }
+
+//         // Format entries for response — parse JSON fields safely
+//         const formattedEntries = expertiseEntries.map((e) => ({
+//             id: e.id,
+//             productCatalogId: e.productCatalogId,
+//             product: e.productCatalog,
+//             expertiseLevel: e.expertiseLevel,
+//             yearsOfExperience: e.yearsOfExperience ?? null,
+//             completedProjects: e.completedProjects,
+//             leadsConverted: e.leadsConverted,
+//             demoCount: e.demoCount,
+//             successRate: e.successRate,
+//             skills: safeParseJson(e.skills),
+//             certifications: safeParseJson(e.certifications),
+//             notes: e.notes ?? null,
+//             lastDemoAt: e.lastDemoAt ?? null,
+//             lastLeadAt: e.lastLeadAt ?? null,
+//             lastUpdatedAt: e.lastUpdatedAt,
+//             createdAt: e.createdAt,
+//         }));
+
+//         return sendSuccessResponse(
+//             res,
+//             200,
+//             "Employee expertise detail fetched",
+//             {
+//                 employee: {
+//                     id: account.id,
+//                     firstName: account.firstName,
+//                     lastName: account.lastName,
+//                     contactEmail: account.contactEmail,
+//                     avatar: account.avatar,
+//                     designation: account.designation,
+//                     memberSince: account.createdAt,
+//                 },
+//                 summary: {
+//                     totalProducts: expertiseEntries.length,
+//                     expertCount,
+//                     canDemoCount,
+//                     learningCount,
+//                     guidanceCount,
+//                     totalLeadsConverted,
+//                     totalDemos,
+//                     totalCompletedProjects,
+//                     avgSuccessRate: parseFloat(avgSuccessRate.toFixed(2)),
+//                     levelBreakdown,
+//                     categoryCoverage,
+//                     topProducts,
+//                 },
+//                 expertise: formattedEntries,
+//             }
+//         );
+//     } catch (error) {
+//         console.error(
+//             "[AdminExpertise] adminGetEmployeeExpertiseDetail error",
+//             error
+//         );
+//         return sendErrorResponse(res, 500, "Failed to fetch employee expertise detail");
+//     }
+// }
+
+export async function adminGetEmployeeExpertiseDetail(req: Request, res: Response) {
+    try {
+        const {
+            employeeId } = req.params;
+        const {
+            expertiseLevel,
+            sortBy = "lastUpdatedAt",
+            sortOrder = "desc",
+            page = "1",
+            limit = "20",
+            dateFilter,   // "this_week" | "last_week" | "this_month" | "last_month" | "last_6_months" | "this_year" | "last_year"
+            dateFrom,     // ISO string — custom range start (overrides dateFilter)
+            dateTo,       // ISO string — custom range end (overrides dateFilter)
+        } = req.query;
+
         const account = await prisma.account.findUnique({
             where: { id: employeeId },
             select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                contactEmail: true,
-                avatar: true,
-                designation: true,
-                createdAt: true,
+                id: true, firstName: true, lastName: true,
+                contactEmail: true, avatar: true, designation: true, createdAt: true,
             },
         });
+        if (!account) return sendErrorResponse(res, 404, "Employee not found");
 
-        if (!account) {
-            return sendErrorResponse(res, 404, "Employee not found");
+        // ── Date range resolution ──────────────────────────────────────────
+        // Custom range takes priority; named presets are computed from now (UTC).
+        
+        let createdAtFilter: Prisma.DateTimeFilter | undefined;
+
+        if (dateFrom || dateTo) {
+            // Explicit range — both sides optional
+            createdAtFilter = {
+                ...(dateFrom ? { gte: new Date(dateFrom as string) } : {}),
+                ...(dateTo   ? { lte: new Date(dateTo   as string) } : {}),
+            };
+        } else if (dateFilter) {
+            const now = new Date();
+
+            // Helpers — all produce UTC midnight boundaries
+            const startOfDay = (d: Date): Date => {
+                const x = new Date(d);
+                x.setUTCHours(0, 0, 0, 0);
+                return x;
+            };
+            const startOfWeek = (d: Date): Date => {
+                // Monday-based ISO week
+                const x = startOfDay(d);
+                const day = x.getUTCDay(); // 0 = Sun
+                const diff = (day === 0 ? -6 : 1 - day);
+                x.setUTCDate(x.getUTCDate() + diff);
+                return x;
+            };
+            const startOfMonth = (d: Date): Date => {
+                return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+            };
+            const startOfYear = (d: Date): Date => {
+                return new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+            };
+            const endOfDay = (d: Date): Date => {
+                const x = new Date(d);
+                x.setUTCHours(23, 59, 59, 999);
+                return x;
+            };
+
+            switch (dateFilter as string) {
+                case "this_week": {
+                    createdAtFilter = { gte: startOfWeek(now) };
+                    break;
+                }
+                case "last_week": {
+                    const thisWeekStart = startOfWeek(now);
+                    const lastWeekStart = new Date(thisWeekStart);
+                    lastWeekStart.setUTCDate(lastWeekStart.getUTCDate() - 7);
+                    const lastWeekEnd = new Date(thisWeekStart);
+                    lastWeekEnd.setUTCMilliseconds(-1); // 1ms before this week
+                    createdAtFilter = { gte: lastWeekStart, lte: lastWeekEnd };
+                    break;
+                }
+                case "this_month": {
+                    createdAtFilter = { gte: startOfMonth(now) };
+                    break;
+                }
+                case "last_month": {
+                    const thisMonthStart = startOfMonth(now);
+                    const lastMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+                    const lastMonthEnd = new Date(thisMonthStart);
+                    lastMonthEnd.setUTCMilliseconds(-1);
+                    createdAtFilter = { gte: lastMonthStart, lte: lastMonthEnd };
+                    break;
+                }
+                case "last_6_months": {
+                    const sixMonthsAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 6, now.getUTCDate()));
+                    createdAtFilter = { gte: sixMonthsAgo };
+                    break;
+                }
+                case "this_year": {
+                    createdAtFilter = { gte: startOfYear(now) };
+                    break;
+                }
+                case "last_year": {
+                    const lastYearStart = new Date(Date.UTC(now.getUTCFullYear() - 1, 0, 1));
+                    const lastYearEnd   = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+                    lastYearEnd.setUTCMilliseconds(-1);
+                    createdAtFilter = { gte: lastYearStart, lte: lastYearEnd };
+                    break;
+                }
+                // unknown preset — ignore
+            }
         }
 
-        // ── Build expertise where ──
+        // ── Where clauses ──────────────────────────────────────────────────
+
+        // Filtered where (for the page query + count — respects level + date)
         const expertiseWhere: Prisma.UserProductExpertiseWhereInput = {
             userId: employeeId,
+            ...(expertiseLevel ? { expertiseLevel: expertiseLevel as ExpertiseLevel } : {}),
+            ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
         };
 
-        if (expertiseLevel) {
-            expertiseWhere.expertiseLevel = expertiseLevel as ExpertiseLevel;
-        }
+        // Stats where (always global — no level filter, but DOES apply date filter
+        // so summary stats reflect the same time window the user is browsing)
+        const statsWhere: Prisma.UserProductExpertiseWhereInput = {
+            userId: employeeId,
+            ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
+        };
 
-        // ── Sort ──
+        // ── Sort ───────────────────────────────────────────────────────────
+
         const allowedSortFields = [
-            "lastUpdatedAt",
-            "expertiseLevel",
-            "leadsConverted",
-            "successRate",
-            "demoCount",
-            "yearsOfExperience",
-            "createdAt",
+            "lastUpdatedAt", "expertiseLevel", "leadsConverted",
+            "successRate", "demoCount", "yearsOfExperience", "createdAt",
         ];
         const orderByField = allowedSortFields.includes(sortBy as string)
-            ? (sortBy as string)
-            : "lastUpdatedAt";
+            ? (sortBy as string) : "lastUpdatedAt";
         const orderByDir = sortOrder === "asc" ? "asc" : "desc";
 
-        // ── Fetch expertise entries ──
-        const expertiseEntries = await prisma.userProductExpertise.findMany({
-            where: expertiseWhere,
-            orderBy: { [orderByField]: orderByDir },
-            include: {
-                productCatalog: {
-                    select: {
-                        id: true,
-                        title: true,
-                        slug: true,
-                        subtitle: true,
-                        finalPrice: true,
-                        basePrice: true,
-                        categorySlugs: true,
-                        industrySlugs: true,
-                        isTopProduct: true,
-                        isLatest: true,
-                        status: true,
-                        pricingModel: true,
-                        introVideoId: true,
+        // ── Pagination ─────────────────────────────────────────────────────
+
+        const pageNum  = Math.max(1, parseInt(page  as string, 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20));
+        const skip     = (pageNum - 1) * limitNum;
+
+        // ── DB queries (parallel) ──────────────────────────────────────────
+
+        const [totalCount, expertiseEntries, allForStats] = await Promise.all([
+            // 1. filtered count (drives pagination)
+            prisma.userProductExpertise.count({ where: expertiseWhere }),
+
+            // 2. current page with full product include
+            prisma.userProductExpertise.findMany({
+                where: expertiseWhere,
+                orderBy: { [orderByField]: orderByDir },
+                skip,
+                take: limitNum,
+                include: {
+                    productCatalog: {
+                        select: {
+                            id: true, title: true, slug: true, subtitle: true,
+                            finalPrice: true, basePrice: true, categorySlugs: true,
+                            industrySlugs: true, isTopProduct: true, isLatest: true,
+                            status: true, pricingModel: true, introVideoId: true,
+                        },
                     },
                 },
-            },
-        });
+            }),
 
-        // ── Build summary stats ──
-        const expertCount = expertiseEntries.filter(
-            (e) => e.expertiseLevel === "EXPERT"
-        ).length;
-        const canDemoCount = expertiseEntries.filter(
-            (e) => e.expertiseLevel === "CAN_DEMO"
-        ).length;
-        const learningCount = expertiseEntries.filter(
-            (e) => e.expertiseLevel === "LEARNING"
-        ).length;
-        const guidanceCount = expertiseEntries.filter(
-            (e) => e.expertiseLevel === "GUIDANCE_NEEDED"
-        ).length;
-        const noneCount = expertiseEntries.filter(
-            (e) => e.expertiseLevel === "NONE"
-        ).length;
-        const totalLeadsConverted = expertiseEntries.reduce(
-            (s, e) => s + e.leadsConverted,
-            0
-        );
-        const totalDemos = expertiseEntries.reduce(
-            (s, e) => s + e.demoCount,
-            0
-        );
-        const totalCompletedProjects = expertiseEntries.reduce(
-            (s, e) => s + e.completedProjects,
-            0
-        );
-        const avgSuccessRate =
-            expertiseEntries.length > 0
-                ? expertiseEntries.reduce((s, e) => s + e.successRate, 0) /
-                expertiseEntries.length
-                : 0;
+            // 3. lightweight all-rows for summary stats (same time window, no level filter)
+            prisma.userProductExpertise.findMany({
+                where: statsWhere,
+                select: {
+                    expertiseLevel: true,
+                    leadsConverted: true,
+                    demoCount: true,
+                    completedProjects: true,
+                    successRate: true,
+                    productCatalogId: true,
+                    productCatalog: {
+                        select: { title: true, slug: true, categorySlugs: true },
+                    },
+                },
+            }),
+        ]);
 
-        // Top performing products (by leads converted)
-        const topProducts = [...expertiseEntries]
+        // ── Summary (computed from all rows in the time window) ────────────
+
+        const expertCount          = allForStats.filter(e => e.expertiseLevel === "EXPERT").length;
+        const canDemoCount         = allForStats.filter(e => e.expertiseLevel === "CAN_DEMO").length;
+        const learningCount        = allForStats.filter(e => e.expertiseLevel === "LEARNING").length;
+        const guidanceCount        = allForStats.filter(e => e.expertiseLevel === "GUIDANCE_NEEDED").length;
+        const noneCount            = allForStats.filter(e => e.expertiseLevel === "NONE").length;
+        const totalLeadsConverted  = allForStats.reduce((s, e) => s + e.leadsConverted, 0);
+        const totalDemos           = allForStats.reduce((s, e) => s + e.demoCount, 0);
+        const totalCompletedProjects = allForStats.reduce((s, e) => s + e.completedProjects, 0);
+        const avgSuccessRate       = allForStats.length > 0
+            ? allForStats.reduce((s, e) => s + e.successRate, 0) / allForStats.length : 0;
+
+        const topProducts = [...allForStats]
             .sort((a, b) => b.leadsConverted - a.leadsConverted)
             .slice(0, 5)
-            .map((e) => ({
-                productId: e.productCatalogId,
-                productTitle: e.productCatalog.title,
-                productSlug: e.productCatalog.slug,
+            .map(e => ({
+                productId:     e.productCatalogId,
+                productTitle:  e.productCatalog.title,
+                productSlug:   e.productCatalog.slug,
                 expertiseLevel: e.expertiseLevel,
                 leadsConverted: e.leadsConverted,
-                successRate: e.successRate,
-                demoCount: e.demoCount,
+                successRate:    e.successRate,
+                demoCount:      e.demoCount,
             }));
 
-        // Level breakdown for chart / UI display
-        const levelBreakdown: Record<ExpertiseLevel, number> = {
-            EXPERT: expertCount,
-            CAN_DEMO: canDemoCount,
-            LEARNING: learningCount,
-            GUIDANCE_NEEDED: guidanceCount,
-            NONE: noneCount
-        };
-
-        // Category coverage: which category slugs does the employee cover?
         const categoryCoverage: Record<string, number> = {};
-        for (const e of expertiseEntries) {
+        for (const e of allForStats) {
             for (const cat of e.productCatalog.categorySlugs ?? []) {
                 categoryCoverage[cat] = (categoryCoverage[cat] ?? 0) + 1;
             }
         }
 
-        // Format entries for response — parse JSON fields safely
-        const formattedEntries = expertiseEntries.map((e) => ({
-            id: e.id,
+        // ── Format page entries ────────────────────────────────────────────
+
+        const formattedEntries = expertiseEntries.map(e => ({
+            id:               e.id,
             productCatalogId: e.productCatalogId,
-            product: e.productCatalog,
-            expertiseLevel: e.expertiseLevel,
+            product:          e.productCatalog,
+            expertiseLevel:   e.expertiseLevel,
             yearsOfExperience: e.yearsOfExperience ?? null,
             completedProjects: e.completedProjects,
-            leadsConverted: e.leadsConverted,
-            demoCount: e.demoCount,
-            successRate: e.successRate,
-            skills: safeParseJson(e.skills),
-            certifications: safeParseJson(e.certifications),
-            notes: e.notes ?? null,
-            lastDemoAt: e.lastDemoAt ?? null,
-            lastLeadAt: e.lastLeadAt ?? null,
-            lastUpdatedAt: e.lastUpdatedAt,
-            createdAt: e.createdAt,
+            leadsConverted:   e.leadsConverted,
+            demoCount:        e.demoCount,
+            successRate:      e.successRate,
+            skills:           safeParseJson(e.skills),
+            certifications:   safeParseJson(e.certifications),
+            notes:            e.notes ?? null,
+            lastDemoAt:       e.lastDemoAt ?? null,
+            lastLeadAt:       e.lastLeadAt ?? null,
+            lastUpdatedAt:    e.lastUpdatedAt,
+            createdAt:        e.createdAt,
         }));
 
-        return sendSuccessResponse(
-            res,
-            200,
-            "Employee expertise detail fetched",
-            {
-                employee: {
-                    id: account.id,
-                    firstName: account.firstName,
-                    lastName: account.lastName,
-                    contactEmail: account.contactEmail,
-                    avatar: account.avatar,
-                    designation: account.designation,
-                    memberSince: account.createdAt,
+        const totalPages = Math.ceil(totalCount / limitNum);
+
+        // ── Applied filter summary (so the client can show "Showing: Last Month") ──
+        const appliedDateFilter = dateFrom || dateTo
+            ? { type: "custom" as const, from: dateFrom ?? null, to: dateTo ?? null }
+            : dateFilter
+            ? { type: dateFilter as string }
+            : null;
+
+        return sendSuccessResponse(res, 200, "Employee expertise detail fetched", {
+            employee: {
+                id: account.id, firstName: account.firstName, lastName: account.lastName,
+                contactEmail: account.contactEmail, avatar: account.avatar,
+                designation: account.designation, memberSince: account.createdAt,
+            },
+            summary: {
+                totalProducts: allForStats.length,
+                expertCount, canDemoCount, learningCount, guidanceCount,
+                totalLeadsConverted, totalDemos, totalCompletedProjects,
+                avgSuccessRate: parseFloat(avgSuccessRate.toFixed(2)),
+                levelBreakdown: {
+                    EXPERT: expertCount, CAN_DEMO: canDemoCount,
+                    LEARNING: learningCount, GUIDANCE_NEEDED: guidanceCount, NONE: noneCount,
                 },
-                summary: {
-                    totalProducts: expertiseEntries.length,
-                    expertCount,
-                    canDemoCount,
-                    learningCount,
-                    guidanceCount,
-                    totalLeadsConverted,
-                    totalDemos,
-                    totalCompletedProjects,
-                    avgSuccessRate: parseFloat(avgSuccessRate.toFixed(2)),
-                    levelBreakdown,
-                    categoryCoverage,
-                    topProducts,
-                },
-                expertise: formattedEntries,
-            }
-        );
+                categoryCoverage,
+                topProducts,
+            },
+            expertise: formattedEntries,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: totalCount,
+                totalPages,
+                hasNext: pageNum < totalPages,
+                hasPrev: pageNum > 1,
+            },
+            appliedFilters: {
+                expertiseLevel: expertiseLevel ?? null,
+                dateFilter: appliedDateFilter,
+            },
+        });
     } catch (error) {
-        console.error(
-            "[AdminExpertise] adminGetEmployeeExpertiseDetail error",
-            error
-        );
+        console.error("[AdminExpertise] adminGetEmployeeExpertiseDetail error", error);
         return sendErrorResponse(res, 500, "Failed to fetch employee expertise detail");
     }
 }
