@@ -61,7 +61,7 @@ export async function autoFinalizeAttendance() {
 
         await tx.account.update({
           where: { id: acc.id },
-          data: { isAvailable: false, isBusy: false },
+          data: { isAvailable: false, isBusy: false, activeLeadId: null, },
         });
 
         return;
@@ -169,12 +169,17 @@ export async function autoFinalizeAttendance() {
         totalMinutes = 0;
       }
 
+      const lastCheckoutLog = updatedLogs
+        .filter((c) => c.type === CheckType.CHECK_OUT)
+        .sort((a, b) => b.checkedAt.getTime() - a.checkedAt.getTime())[0];
+
       await tx.attendanceLog.update({
         where: { id: log.id },
         data: {
           hasOpenSession: false,
-          lastCheckOut:
-            totalMinutes > 0 ? sixPM : log.lastCheckOut ?? null,
+          lastCheckOut: lastCheckoutLog?.checkedAt ?? null,
+          // lastCheckOut:
+          //   totalMinutes > 0 ? sixPM : log.lastCheckOut ?? null,
           totalWorkMinutes: totalMinutes,
           status: hasCheckIn
             ? deriveStatus(totalMinutes)
@@ -182,13 +187,36 @@ export async function autoFinalizeAttendance() {
         },
       });
 
+
+      const account = await tx.account.findUnique({
+        where: { id: acc.id },
+        select: {
+          activeLeadId: true,
+        },
+      });
+
+      if (account?.activeLeadId) {
+        await tx.lead.update({
+          where: {
+            id: account.activeLeadId,
+          },
+          data: {
+            isWorking: false,
+          },
+        });
+      }
+
       await tx.account.update({
         where: { id: acc.id },
         data: {
           isAvailable: false,
           isBusy: false,
+          activeLeadId: null,
         },
       });
+
+
+
     });
   }
 

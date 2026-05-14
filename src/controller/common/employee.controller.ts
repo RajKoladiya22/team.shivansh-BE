@@ -230,6 +230,14 @@ export async function listEmployees(req: Request, res: Response) {
 //   }
 // }
 
+export function toDateOnly(date: Date = new Date()): Date {
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate()
+  );
+}
+
 /**
  * GET /common/employees/:id
  * Employee full detail — profile + today's activity snapshot
@@ -256,6 +264,8 @@ export async function getEmployeeById(req: Request, res: Response) {
 
     const todayEnd = new Date();
     todayEnd.setUTCHours(23, 59, 59, 999);
+
+    const today = toDateOnly();
 
     // ── Parallel fetches ───────────────────────────────────────────────────
     const [
@@ -323,7 +333,7 @@ export async function getEmployeeById(req: Request, res: Response) {
         where: {
           accountId_date: {
             accountId: id,
-            date: todayStart,
+            date: today,
           },
         },
         select: {
@@ -697,6 +707,9 @@ export async function getEmployeeById(req: Request, res: Response) {
         checkLogs: todayAttendance.checkLogs,
       }
       : null;
+
+
+
 
     // ── Compose response ──────────────────────────────────────────────────
     const response = {

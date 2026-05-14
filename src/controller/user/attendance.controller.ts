@@ -419,6 +419,9 @@ export async function userGetTodayAttendance(req: Request, res: Response) {
       include: { checkLogs: { orderBy: { checkedAt: "asc" } } },
     });
 
+    // console.log("\n\n\n\n\n\nlog->\n", log);
+    
+
     return sendSuccessResponse(res, 200, "Today's attendance fetched", {
       date: today,
       attendance: log ?? null,
