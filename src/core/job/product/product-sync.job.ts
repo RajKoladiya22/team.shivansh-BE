@@ -3,6 +3,7 @@ import cron from "node-cron";
 import { syncUpdatedProducts } from "../../../scripts/sync-products";
 
 export function registerProductSyncJob() {
+  // cron.schedule("* * * * *", async () => { every 1min
   cron.schedule("0 */12 * * *", async () => {
     console.log("[ProductSync] Started");
 

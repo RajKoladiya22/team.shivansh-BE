@@ -36,6 +36,56 @@ interface LeadProductItem {
  */
 const normalizeMobile = (m: unknown) => String(m ?? "").replace(/\D/g, "");
 
+function normalizeLeadProductsSafe(raw: unknown): LeadProductItem[] {
+  if (Array.isArray(raw)) {
+    // ✅ Already an array — return as-is
+    return raw.filter(p => p && typeof p === 'object') as LeadProductItem[];
+  }
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    // ✅ Single object — wrap in array (backward compat)
+    return [raw as LeadProductItem];
+  }
+  // ✅ Null/undefined/invalid — return empty array
+  return [];
+}
+
+function deriveLeadMetaSafe(products: LeadProductItem[], fallbackCost: any = null) {
+  const productTitle =
+    products
+      .map((p) => p?.title)
+      .filter(Boolean)
+      .join(", ") || null;
+
+  const totalCost = products.reduce((sum, p) => {
+    return sum + (p?.cost ? Number(p.cost) : 0);
+  }, 0) || null;
+
+  return {
+    productTitle,
+    totalCost: totalCost !== null ? totalCost : (fallbackCost ? Number(fallbackCost) : null),
+  };
+}
+
+function buildCustomerProductEntriesSafe(
+  products: LeadProductItem[]
+): Array<{
+  id: string;
+  name: string;
+  price?: number | null;
+  slug?: string | null;
+  status: string;
+  addedAt: Date;
+}> {
+  return products.map((p) => ({
+    id: p.id || randomUUID(),
+    name: p.title,
+    price: p.cost != null ? Number(p.cost) : null,
+    slug: p.slug ?? null,
+    status: "ACTIVE",
+    addedAt: new Date(),
+  }));
+}
+
 export async function getUserIdFromAccountId(
   accountId: string,
 ): Promise<string | null> {
@@ -187,9 +237,25 @@ async function syncProductCostToEntities(
     where: { leadId, status: "DRAFT" },
     select: {
       id: true,
-      lineItems: true,
       extraDiscountType: true,
       extraDiscountValue: true,
+      lineItems: {
+        select: {
+          id: true,
+          productCatalogId: true,
+          productSlug: true,
+          name: true,
+          qty: true,
+          basePrice: true,
+          discountType: true,
+          discountValue: true,
+          taxType: true,
+          taxPercent: true,
+          taxAmount: true,
+          totalPrice: true,
+          discountedPrice: true,
+        },
+      },
     },
   });
 
@@ -204,7 +270,7 @@ async function syncProductCostToEntities(
         (productTitle && item.name === productTitle) ||
         (oldTitle && item.name === oldTitle);
 
-      if (!matches) return item;
+      if (!matches) return { id: item.id, data: null };
       changed = true;
 
       // Recompute line totals with new basePrice
@@ -230,6 +296,24 @@ async function syncProductCostToEntities(
     });
 
     if (!changed) continue;
+
+    // Update each changed line item row individually
+    for (const li of updatedItems) {
+      if (!li.data) continue;
+      await tx.quotationLineItem.update({
+        where: { id: li.id },
+        data: li.data,
+      });
+    }
+
+    // Recompute quotation-level financials from the merged item list
+    const mergedItems = items.map((item) => {
+      const updated = updatedItems.find((u) => u.id === item.id);
+      return updated?.data
+        ? { ...item, ...updated.data }
+        : item;
+    });
+
 
     // Recompute quotation-level financials
     let subtotal = 0,
@@ -259,10 +343,19 @@ async function syncProductCostToEntities(
     totalDiscount += extraDiscount;
     const grandTotal = Math.max(subtotal - extraDiscount + totalTax, 0);
 
+    // await tx.quotation.update({
+    //   where: { id: q.id },
+    //   data: {
+    //     lineItems: updatedItems,
+    //     subtotal: parseFloat(subtotal.toFixed(2)),
+    //     totalDiscount: parseFloat(totalDiscount.toFixed(2)),
+    //     totalTax: parseFloat(totalTax.toFixed(2)),
+    //     grandTotal: parseFloat(grandTotal.toFixed(2)),
+    //   },
+    // });
     await tx.quotation.update({
       where: { id: q.id },
       data: {
-        lineItems: updatedItems,
         subtotal: parseFloat(subtotal.toFixed(2)),
         totalDiscount: parseFloat(totalDiscount.toFixed(2)),
         totalTax: parseFloat(totalTax.toFixed(2)),
@@ -365,6 +458,193 @@ async function closeFollowUpsOnStatusChange(
     }
   }
 }
+
+async function resolveProductCatalogId(
+  tx: any,
+  product: LeadProductItem | null | undefined,
+): Promise<{ catalogId: string | null; catalogData: any }> {
+  if (!product?.id) return { catalogId: null, catalogData: null };
+
+  try {
+    // Try match by adminProductId first (likely admin DB reference)
+    let catalog = await tx.productCatalog.findUnique({
+      where: { adminProductId: product.id },
+      select: { id: true, title: true, slug: true },
+    });
+
+    // If not found, try match by cuid (already a ProductCatalog.id)
+    if (!catalog) {
+      catalog = await tx.productCatalog.findUnique({
+        where: { id: product.id },
+        select: { id: true, title: true, slug: true },
+      });
+    }
+
+    return {
+      catalogId: catalog?.id ?? null,
+      catalogData: catalog,
+    };
+  } catch {
+    return { catalogId: null, catalogData: null };
+  }
+}
+
+/**
+ * Helper: Sync product changes from Lead to CustomerProduct
+ * Updates or creates CustomerProduct entries with ProductCatalog linking
+ *
+ * Called inside transaction when lead.product or lead.productTitle changes
+ */
+async function syncLeadProductToCustomer(
+  tx: any,
+  params: {
+    leadId: string;
+    customerId: string | null;
+    newProduct: LeadProductItem | Record<string, any>;
+    oldProduct: LeadProductItem | Record<string, any>;
+    performerAccountId: string;
+  },
+): Promise<void> {
+  const { leadId, customerId, newProduct, oldProduct, performerAccountId } = params;
+
+  if (!customerId) return;
+
+  const customer = await tx.customer.findUnique({
+    where: { id: customerId },
+    select: { id: true, products: true },
+  });
+
+  if (!customer) return;
+
+  // ── 1. Resolve old product title (for matching + cleanup) ─────────────────
+  const oldTitle = (oldProduct as any)?.title || null;
+  const oldId = (oldProduct as any)?.id || null;
+
+  // ── 2. Resolve new product title & catalog ────────────────────────────────
+  const newTitle = (newProduct as any)?.title || (newProduct as any)?.name || null;
+  const newId = (newProduct as any)?.id || null;
+  const newSlug = (newProduct as any)?.slug || null;
+  const newCost = (newProduct as any)?.cost || null;
+  const newIntroVideoId = (newProduct as any)?.introVideoId || null;
+
+  // ── 3. Resolve ProductCatalog for new product ──────────────────────────────
+  let catalogId: string | null = null;
+  let catalogData: any = null;
+
+  if (newId) {
+    // Try match by adminProductId first
+    let catalog = await tx.productCatalog.findUnique({
+      where: { adminProductId: newId },
+      select: { id: true, title: true, slug: true },
+    });
+
+    // Fallback: try by cuid
+    if (!catalog) {
+      catalog = await tx.productCatalog.findUnique({
+        where: { id: newId },
+        select: { id: true, title: true, slug: true },
+      });
+    }
+
+    catalogId = catalog?.id ?? null;
+    catalogData = catalog;
+  }
+
+  // ── 4. Update customer.products JSON (legacy) ──────────────────────────────
+  const cp: any = customer.products ?? { active: [], history: [] };
+  if (!Array.isArray(cp.active)) cp.active = [];
+  if (!Array.isArray(cp.history)) cp.history = [];
+
+  // Find matching entry by old title or old ID
+  const activeIdx = cp.active.findIndex((p: any) => {
+    if (oldId && p.id === oldId) return true;
+    if (oldTitle && p.name === oldTitle) return true;
+    return false;
+  });
+
+  if (activeIdx !== -1) {
+    // Update existing entry
+    cp.active[activeIdx].name = newTitle ?? oldTitle ?? "Unknown Product";
+    cp.active[activeIdx].price = newCost ?? (cp.active[activeIdx].price ?? null);
+    cp.active[activeIdx].slug = newSlug ?? cp.active[activeIdx].slug ?? null;
+    if (newId) cp.active[activeIdx].id = newId;
+  } else if (newTitle) {
+    // No match found — add as new active product
+    cp.active.push({
+      id: newId || randomUUID(),
+      name: newTitle,
+      price: newCost ?? null,
+      slug: newSlug ?? null,
+      status: "ACTIVE",
+      addedAt: new Date(),
+    });
+  }
+
+  // ── 5. Upsert into CustomerProduct (normalized) ─────────────────────────────
+  if (newTitle) {
+    await tx.customerProduct.upsert({
+      where: {
+        id: (
+          await tx.customerProduct.findFirst({
+            where: {
+              customerId,
+              ...(catalogId ? { productCatalogId: catalogId } : {}),
+              productTitle: newTitle,
+            },
+            select: { id: true },
+          })
+        )?.id ?? `temp-${randomUUID()}`, // non-existent forces create
+      },
+      update: {
+        productTitle: newTitle,
+        isActive: true,
+        meta: {
+          price: newCost ?? null,
+          slug: newSlug ?? null,
+          introVideoId: newIntroVideoId ?? null,
+        },
+      },
+      create: {
+        customerId,
+        productCatalogId: catalogId,
+        productTitle: newTitle,
+        isActive: true,
+        meta: {
+          price: newCost ?? null,
+          slug: newSlug ?? null,
+          introVideoId: newIntroVideoId ?? null,
+        },
+      },
+    });
+
+    // Mark old product as inactive (if different)
+    if (oldTitle && oldTitle !== newTitle) {
+      await tx.customerProduct.updateMany({
+        where: {
+          customerId,
+          productTitle: oldTitle,
+        },
+        data: {
+          isActive: false,
+          meta: { reason: "Replaced by lead update", replacedWith: newTitle },
+        },
+      });
+    }
+  }
+
+  // ── 6. Persist changes to customer.products ────────────────────────────────
+  await tx.customer.update({
+    where: { id: customerId },
+    data: {
+      products: cp,
+      updatedAt: new Date(),
+    },
+  });
+
+  // ── 7. Log the sync action ────────────────────────────────────────────────
+  // (Optional: add to activity log if needed)
+}
+
 
 /* ==========================
    ADMIN CONTROLLER ACTIONS
@@ -533,6 +813,54 @@ export async function createLeadAdmin(req: Request, res: Response) {
         });
       }
 
+      // ── 1.5. Create CustomerProduct entries for each product ────────────────
+      // This links products to ProductCatalog via adminProductId or cuid match
+      if (products && products.length > 0) {
+        for (const product of products) {
+          const { catalogId, catalogData } = await resolveProductCatalogId(
+            tx,
+            product,
+          );
+
+          await tx.customerProduct.upsert({
+            where: {
+              // Fallback: find by customer + catalog + title combination
+              id: (
+                await tx.customerProduct.findFirst({
+                  where: {
+                    customerId: customer.id,
+                    ...(catalogId ? { productCatalogId: catalogId } : {}),
+                    productTitle: product.title,
+                  },
+                  select: { id: true },
+                })
+              )?.id ?? `temp-${randomUUID()}`, // non-existent ID forces create
+            },
+            update: {
+              productTitle: product.title,
+              isActive: true,
+              meta: {
+                price: product.cost ?? null,
+                slug: product.slug ?? null,
+                introVideoId: product.introVideoId ?? null,
+              },
+            },
+            create: {
+              customerId: customer.id,
+              productCatalogId: catalogId,
+              productTitle: product.title,
+              isActive: true,
+              meta: {
+                price: product.cost ?? null,
+                slug: product.slug ?? null,
+                introVideoId: product.introVideoId ?? null,
+              },
+            },
+          });
+        }
+      }
+
+
       // ── 2. Create Lead ──────────────────────────────────────────────────────
       //
       // lead.product stores the full normalised array (or single object for
@@ -572,6 +900,18 @@ export async function createLeadAdmin(req: Request, res: Response) {
             : undefined,
         },
       });
+
+      // ── 2.5. Link primary product to Lead (future enhancement) If Lead schema is updated to include productCatalogId FK:
+      if (products && products.length > 0) {
+        const primaryProduct = products[0];
+        const { catalogId } = await resolveProductCatalogId(tx, primaryProduct);
+        if (catalogId) {
+          await tx.lead.update({
+            where: { id: created.id },
+            data: { productCatalogId: catalogId },
+          });
+        }
+      }
 
       // ── 3. Assignment ───────────────────────────────────────────────────────
       await tx.leadAssignment.create({
@@ -765,6 +1105,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         remark: true,
         customerId: true,
         product: true,
+        productCatalogId: true,
         productTitle: true,
         isImportant: true,
         assignments: {
@@ -781,13 +1122,75 @@ export async function updateLeadAdmin(req: Request, res: Response) {
     };
 
     if (data.status === "CLOSED") statusMark.close = true;
-    if (data.status === "DEMO_DONE") {
+    if (
+      data.status === "DEMO_DONE" &&
+      existing.productCatalogId &&
+      performerAccountId
+    ) {
       statusMark.demo = true;
       data.demoDoneAt = new Date();
+
+      // console.log("\n\n\n\n\n\n\n\n existing.productCatalogId->\n", existing.productCatalogId);
+
+
+      await prisma.userProductExpertise.upsert({
+        where: {
+          userId_productCatalogId: {
+            userId: performerAccountId,
+            productCatalogId: existing.productCatalogId,
+          },
+        },
+        create: {
+          userId: performerAccountId,
+          productCatalogId: existing.productCatalogId,
+
+          demoCount: 1,
+
+          lastDemoAt: new Date(),
+          lastLeadAt: new Date(),
+
+        },
+
+        update: {
+          demoCount: {
+            increment: 1,
+          },
+          lastDemoAt: new Date(),
+          lastLeadAt: new Date(),
+        },
+      });
+
+      // console.log("\n update->\n", update);
+
     }
-    if (data.status === "CONVERTED") {
+    if (data.status === "CONVERTED" &&
+      existing.productCatalogId &&
+      performerAccountId) {
       statusMark.converted = true;
       data.closedAt = new Date();
+      await prisma.userProductExpertise.upsert({
+        where: {
+          userId_productCatalogId: {
+            userId: performerAccountId,
+            productCatalogId: existing.productCatalogId,
+          },
+        },
+        create: {
+          userId: performerAccountId,
+          productCatalogId: existing.productCatalogId,
+
+          leadsConverted: 1,
+
+          lastLeadAt: new Date(),
+
+        },
+        update: {
+          leadsConverted: {
+            increment: 1,
+          },
+          lastLeadAt: new Date(),
+        },
+      });
     }
 
     // only assign if something changed
@@ -864,6 +1267,25 @@ export async function updateLeadAdmin(req: Request, res: Response) {
           productTitle:
             (existing.product as any)?.title ?? existing.productTitle ?? null,
           newCost: Number(data.cost),
+        });
+      }
+
+      // ── Sync product changes to CustomerProduct ────────────────────────────
+      if (data.product || data.productTitle) {
+        const newProduct = data.product || {
+          title: data.productTitle,
+          cost: data.cost ?? existing.cost,
+        };
+
+        await syncLeadProductToCustomer(tx, {
+          leadId: id,
+          customerId: existing.customerId,
+          newProduct,
+          oldProduct: (existing.product as any) ?? {
+            title: existing.productTitle,
+            cost: existing.cost,
+          },
+          performerAccountId,
         });
       }
 
@@ -1255,6 +1677,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
           createdAt: true,
           updatedAt: true,
           isImportant: true,
+          productCatalogId: true,
 
           followUps: {
             where: { status: "PENDING" },
@@ -1511,6 +1934,8 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
 
         isWorking: true,
         totalWorkSeconds: true,
+
+        productCatalogId: true,
 
         createdAt: true,
         updatedAt: true,
@@ -2946,28 +3371,69 @@ export async function addLeadProductsAdmin(req: Request, res: Response) {
           }
 
           // Upsert current products into active
-          for (const lp of currentProducts) {
-            const existingIdx = cp.active.findIndex(
-              (a: any) => a.id === lp.id || a.name === lp.title,
-            );
+          // for (const lp of currentProducts) {
+          //   const existingIdx = cp.active.findIndex(
+          //     (a: any) => a.id === lp.id || a.name === lp.title,
+          //   );
 
-            if (existingIdx !== -1) {
-              // Update name + price
-              cp.active[existingIdx].name = lp.title;
-              if (lp.cost != null) {
-                cp.active[existingIdx].price = Number(lp.cost);
-              }
-            } else {
-              // Add as new active product
-              cp.active.push({
-                id: lp.id,
-                name: lp.title,
-                price: lp.cost != null ? Number(lp.cost) : null,
-                slug: lp.slug ?? null,
-                addedAt: new Date(),
-                status: "ACTIVE",
-              });
-            }
+          //   if (existingIdx !== -1) {
+          //     // Update name + price
+          //     cp.active[existingIdx].name = lp.title;
+          //     if (lp.cost != null) {
+          //       cp.active[existingIdx].price = Number(lp.cost);
+          //     }
+          //   } else {
+          //     // Add as new active product
+          //     cp.active.push({
+          //       id: lp.id,
+          //       name: lp.title,
+          //       price: lp.cost != null ? Number(lp.cost) : null,
+          //       slug: lp.slug ?? null,
+          //       addedAt: new Date(),
+          //       status: "ACTIVE",
+          //     });
+          //   }
+          // }
+          // Also upsert into CustomerProduct relation (new normalized model)
+          for (const lp of currentProducts) {
+            // Try to find matching catalog entry
+            const catalog = await tx.productCatalog.findFirst({
+              where: {
+                OR: [
+                  { slug: lp.slug ?? "" },
+                  { title: lp.title },
+                ],
+              },
+              select: { id: true, title: true },
+            });
+
+            await tx.customerProduct.upsert({
+              where: {
+                // need a unique constraint — use findFirst + conditional create
+                // since there's no unique on (customerId, productTitle) alone
+                id: (
+                  await tx.customerProduct.findFirst({
+                    where: {
+                      customerId: lead.customerId!,
+                      ...(catalog ? { productCatalogId: catalog.id } : { productTitle: lp.title }),
+                    },
+                    select: { id: true },
+                  })
+                )?.id ?? "nonexistent", // will fall through to create
+              },
+              update: {
+                productTitle: lp.title,
+                isActive: true,
+                ...(lp.cost != null ? { meta: { price: Number(lp.cost) } } : {}),
+              },
+              create: {
+                customerId: lead.customerId!,
+                productCatalogId: catalog?.id ?? null,
+                productTitle: lp.title,
+                isActive: true,
+                meta: lp.cost != null ? { price: Number(lp.cost) } : {},
+              },
+            });
           }
 
           await tx.customer.update({

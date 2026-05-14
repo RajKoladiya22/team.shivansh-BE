@@ -130,7 +130,7 @@ export async function createQuotationAdmin(req: Request, res: Response) {
           createdBy: performerAccountId,
           preparedBy: preparedBy ?? null,
           leadId: leadId ?? null,
-          lineItems: computed as any,
+          // lineItems: computed as any,
           subtotal: financials.subtotal,
           totalDiscount: financials.totalDiscount,
           totalTax: financials.totalTax,
@@ -139,7 +139,7 @@ export async function createQuotationAdmin(req: Request, res: Response) {
           extraDiscountValue: extraDiscountValue ?? null,
           extraDiscountNote: extraDiscountNote ?? null,
           taxType: taxType ?? "GST",
-          taxPercent: taxPercent ?? null, 
+          taxPercent: taxPercent ?? null,
           gstin: gstin ?? null,
           customerGstin: customerGstin ?? null,
           placeOfSupply: placeOfSupply ?? null,
@@ -157,7 +157,30 @@ export async function createQuotationAdmin(req: Request, res: Response) {
           tags: tags ?? [],
           version: 1,
         },
-        select: quotationFullSelect,
+        select: { id: true },
+      });
+
+      await tx.quotationLineItem.createMany({
+        data: computed.map((item: any) => ({
+          quotationId: q.id,
+          productCatalogId: item.productCatalogId ?? null,
+          position: item.position,
+          productSlug: item.productSlug ?? null,
+          name: item.name,
+          description: item.description ?? null,
+          hsn: item.hsn ?? null,
+          qty: item.qty ?? 1,
+          unit: item.unit ?? null,
+          basePrice: item.basePrice,
+          discountType: item.discountType ?? null,
+          discountValue: item.discountValue ?? null,
+          discountedPrice: item.discountedPrice ?? null,
+          taxType: item.taxType ?? null,
+          taxPercent: item.taxPercent ?? null,
+          taxAmount: item.taxAmount ?? null,
+          totalPrice: item.totalPrice,
+          notes: item.notes ?? null,
+        })),
       });
 
       await tx.quotationActivity.create({
@@ -173,7 +196,10 @@ export async function createQuotationAdmin(req: Request, res: Response) {
         },
       });
 
-      return q;
+      return tx.quotation.findUniqueOrThrow({
+        where: { id: q.id },
+        select: quotationFullSelect,
+      });
     });
 
     return sendSuccessResponse(res, 201, "Quotation created", quotation);
@@ -326,18 +352,23 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
       return sendErrorResponse(res, 401, "Invalid session user");
 
     const { id } = req.params;
+
+    // ── Fetch existing WITH line items (relation now) ──────────────────────
     const existing = await prisma.quotation.findFirst({
       where: { id, deletedAt: null },
+      include: {
+        lineItems: true, // ← needed for copy-forward logic below
+        ...(() => {
+          // quotationFullSelect may conflict with include — use select only for the response
+          // fetch separately; here we just need the data fields
+          const { lineItems: _li, ...rest } = quotationFullSelect as any;
+          return {};
+        })(),
+      },
     });
     if (!existing) return sendErrorResponse(res, 404, "Quotation not found");
 
-    const locked: string[] = [
-      "ACCEPTED",
-      "CONVERTED",
-      "CANCELLED",
-      "REJECTED",
-      "EXPIRED",
-    ];
+    const locked = ["ACCEPTED", "CONVERTED", "CANCELLED", "REJECTED", "EXPIRED"];
     if (locked.includes(existing.status)) {
       return sendErrorResponse(
         res,
@@ -360,7 +391,7 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
       quotationDate,
       channel,
       taxType,
-      taxPercent, 
+      taxPercent,
       gstin,
       customerGstin,
       placeOfSupply,
@@ -374,39 +405,47 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
 
     const updateData: any = {};
 
-    // recompute if line items changed
+    // ── Line item shape for compute functions ──────────────────────────────
+    // existing.lineItems is QuotationLineItem[] — map to the shape computeLineItems expects
+    const existingItemsAsInput = existing.lineItems.map((li) => ({
+      position: li.position,
+      productCatalogId: li.productCatalogId ?? undefined,
+      productSlug: li.productSlug ?? undefined,
+      name: li.name,
+      description: li.description ?? undefined,
+      hsn: li.hsn ?? undefined,
+      qty: li.qty,
+      unit: li.unit ?? undefined,
+      basePrice: Number(li.basePrice),
+      discountType: li.discountType ?? undefined,
+      discountValue: li.discountValue ? Number(li.discountValue) : undefined,
+      discountedPrice: li.discountedPrice ? Number(li.discountedPrice) : undefined,
+      taxType: li.taxType ?? undefined,
+      taxPercent: li.taxPercent ? Number(li.taxPercent) : undefined,
+      taxAmount: li.taxAmount ? Number(li.taxAmount) : undefined,
+      totalPrice: Number(li.totalPrice),
+      notes: li.notes ?? undefined,
+    }));
+
+    // ── Compute financials ─────────────────────────────────────────────────
+    let newComputedItems: ReturnType<typeof computeLineItems> | null = null;
+
     if (rawItems && Array.isArray(rawItems) && rawItems.length > 0) {
-      const computed = computeLineItems(rawItems as LineItemInput[]);
-      // const financials = computeFinancials(
-      //   computed,
-      //   extraDiscountType ?? (existing.extraDiscountType as any),
-      //   extraDiscountValue ?? Number(existing.extraDiscountValue),
-      // );
+      newComputedItems = computeLineItems(rawItems as LineItemInput[]);
       const financials = computeFinancials(
-        computed,
+        newComputedItems,
         extraDiscountType ?? (existing.extraDiscountType as any),
         toNullableNumber(extraDiscountValue ?? existing.extraDiscountValue),
         taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent),
       );
-      updateData.lineItems = computed;
       updateData.subtotal = financials.subtotal;
       updateData.totalDiscount = financials.totalDiscount;
       updateData.totalTax = financials.totalTax;
       updateData.grandTotal = financials.grandTotal;
-    } else if (
-      extraDiscountType !== undefined ||
-      extraDiscountValue !== undefined
-    ) {
-      // extra discount changed but no new line items — recompute from existing
-      const existing2 = await prisma.quotation.findUnique({ where: { id } });
-      const computed = existing2!.lineItems as any[];
-      // const financials = computeFinancials(
-      //   computed as any,
-      //   extraDiscountType ?? (existing.extraDiscountType as any),
-      //   extraDiscountValue ?? Number(existing.extraDiscountValue),
-      // );
+    } else if (extraDiscountType !== undefined || extraDiscountValue !== undefined) {
+      // extra discount changed but no new line items — recompute from existing relation rows
       const financials = computeFinancials(
-        existing.lineItems as any,
+        existingItemsAsInput as any,
         extraDiscountType ?? (existing.extraDiscountType as any),
         toNullableNumber(extraDiscountValue ?? existing.extraDiscountValue),
         taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent),
@@ -447,12 +486,46 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
     if (quotationDate !== undefined)
       updateData.quotationDate = new Date(quotationDate);
 
+    // ── Transaction: update quotation + replace line items if changed ──────
     const updated = await prisma.$transaction(async (tx) => {
+      // If new line items were provided, delete old rows and insert new ones
+      if (newComputedItems && newComputedItems.length > 0) {
+        await tx.quotationLineItem.deleteMany({ where: { quotationId: id } });
+
+        await tx.quotationLineItem.createMany({
+          data: newComputedItems.map((item: any) => {
+            // Resolve productCatalogId if the incoming item has a productId
+            // (productId here refers to your adminProductId — pass it through your cache or skip)
+            return {
+              quotationId: id,
+              productCatalogId: item.productCatalogId ?? null, // set if your computeLineItems returns it
+              position: item.position,
+              productSlug: item.productSlug ?? null,
+              name: item.name,
+              description: item.description ?? null,
+              hsn: item.hsn ?? null,
+              qty: item.qty ?? 1,
+              unit: item.unit ?? null,
+              basePrice: item.basePrice,
+              discountType: item.discountType ?? null,
+              discountValue: item.discountValue ?? null,
+              discountedPrice: item.discountedPrice ?? null,
+              taxType: item.taxType ?? null,
+              taxPercent: item.taxPercent ?? null,
+              taxAmount: item.taxAmount ?? null,
+              totalPrice: item.totalPrice,
+              notes: item.notes ?? null,
+            };
+          }),
+        });
+      }
+
       const q = await tx.quotation.update({
         where: { id },
         data: updateData,
         select: quotationFullSelect,
       });
+
       await tx.quotationActivity.create({
         data: {
           quotationId: id,
@@ -461,17 +534,14 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
           meta: { fields: Object.keys(updateData) },
         },
       });
+
       return q;
     });
 
     return sendSuccessResponse(res, 200, "Quotation updated", updated);
   } catch (err: any) {
     console.error("Update quotation error:", err);
-    return sendErrorResponse(
-      res,
-      500,
-      err?.message ?? "Failed to update quotation",
-    );
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to update quotation");
   }
 }
 
@@ -734,9 +804,74 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
       return sendErrorResponse(res, 401, "Invalid session user");
 
     const { id } = req.params;
+    // const existing = await prisma.quotation.findFirst({
+    //   where: { id, deletedAt: null },
+
+    //   select: quotationFullSelect,
+    // });
     const existing = await prisma.quotation.findFirst({
       where: { id, deletedAt: null },
-      select: quotationFullSelect,
+      // include: {
+      //   lineItems: true, // ← needed for copy-forward logic below
+      //   ...(() => {
+      //     // quotationFullSelect may conflict with include — use select only for the response
+      //     // fetch separately; here we just need the data fields
+      //     const { lineItems: _li, ...rest } = quotationFullSelect as any;
+      //     return {};
+      //   })(),
+      // },
+      // Use a plain select that covers all scalar fields needed below
+      select: {
+        id: true,
+        quotationNumber: true,
+        channel: true,
+        customerId: true,
+        customerSnapshot: true,
+        preparedBy: true,
+        leadId: true,
+        extraDiscountType: true,
+        extraDiscountValue: true,
+        extraDiscountNote: true,
+        taxType: true,
+        taxPercent: true,
+        gstin: true,
+        customerGstin: true,
+        placeOfSupply: true,
+        validUntil: true,
+        subject: true,
+        introNote: true,
+        termsNote: true,
+        footerNote: true,
+        paymentTerms: true,
+        paymentDueDays: true,
+        deliveryScope: true,
+        deliveryDays: true,
+        tags: true,
+        version: true,
+        parentId: true,
+        lineItems: {
+          orderBy: { position: "asc" },
+          select: {
+            position: true,
+            productCatalogId: true,
+            productSlug: true,
+            name: true,
+            description: true,
+            hsn: true,
+            qty: true,
+            unit: true,
+            basePrice: true,
+            discountType: true,
+            discountValue: true,
+            discountedPrice: true,
+            taxType: true,
+            taxPercent: true,
+            taxAmount: true,
+            totalPrice: true,
+            notes: true,
+          },
+        },
+      },
     });
     if (!existing) return sendErrorResponse(res, 404, "Quotation not found");
 
@@ -764,8 +899,6 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
       tags,
     } = req.body as Record<string, any>;
 
-    // console.log("\n\n extraDiscountType--->", extraDiscountType);
-    // console.log("\n\n extraDiscountValue--->", extraDiscountValue);
 
     // use new line items if provided, otherwise copy from parent
     const itemsToUse = rawItems?.length
@@ -806,7 +939,7 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
           createdBy: performerAccountId,
           preparedBy: existing.preparedBy,
           leadId: existing.leadId,
-          lineItems: computed as any,
+          // lineItems: computed as any,
           subtotal: financials.subtotal,
           totalDiscount: financials.totalDiscount,
           totalTax: financials.totalTax,
@@ -816,7 +949,7 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
           extraDiscountNote:
             extraDiscountNote ?? (existing.extraDiscountNote as any),
           taxType: (taxType ?? existing.taxType) as any,
-          taxPercent: taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent), 
+          taxPercent: taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent),
           gstin: gstin ?? existing.gstin,
           customerGstin: customerGstin ?? existing.customerGstin,
           placeOfSupply: placeOfSupply ?? existing.placeOfSupply,
@@ -835,7 +968,30 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
           version: existing.version + 1,
           parentId: existing.parentId ?? existing.id, // link to root
         },
-        select: quotationFullSelect,
+        select: { id: true, version: true },
+      });
+
+      await tx.quotationLineItem.createMany({
+        data: computed.map((item: any) => ({
+          quotationId: q.id,
+          productCatalogId: item.productCatalogId ?? null,
+          position: item.position,
+          productSlug: item.productSlug ?? null,
+          name: item.name,
+          description: item.description ?? null,
+          hsn: item.hsn ?? null,
+          qty: item.qty ?? 1,
+          unit: item.unit ?? null,
+          basePrice: item.basePrice,
+          discountType: item.discountType ?? null,
+          discountValue: item.discountValue ?? null,
+          discountedPrice: item.discountedPrice ?? null,
+          taxType: item.taxType ?? null,
+          taxPercent: item.taxPercent ?? null,
+          taxAmount: item.taxAmount ?? null,
+          totalPrice: item.totalPrice,
+          notes: item.notes ?? null,
+        })),
       });
 
       await tx.quotationActivity.create({
@@ -851,7 +1007,10 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
         },
       });
 
-      return q;
+      return tx.quotation.findUniqueOrThrow({
+        where: { id: q.id },
+        select: quotationFullSelect,
+      });
     });
 
     return sendSuccessResponse(res, 201, "Revised quotation created", revised);

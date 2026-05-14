@@ -15,4 +15,4 @@ cron.schedule("55 18 * * 1-6", async () => {
 
 registerRecurringTaskJob();
 
-// registerProductSyncJob();
+registerProductSyncJob();

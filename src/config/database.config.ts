@@ -1,3 +1,4 @@
+// src/config/database.config
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { config } from "dotenv";

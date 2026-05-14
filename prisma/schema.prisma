@@ -1223,6 +1223,9 @@ model Lead {
   cost                Decimal? @db.Decimal(12, 2)
   remark              String?
 
+  productCatalogId String?
+  productCatalog   ProductCatalog? @relation(fields: [productCatalogId], references: [id])
+
   isActive  Boolean @default(true)
   isWorking Boolean @default(false)
   isImportant Boolean @default(false) 
@@ -1393,6 +1396,7 @@ model Customer {
 
   // Multi Product + History
   products Json?
+  customerProducts CustomerProduct[]
 
   notes    String?
   isActive Boolean @default(true)
@@ -1419,6 +1423,33 @@ model Customer {
   @@index([businessCategory])
   @@index([createdAt])
   @@index([isActive, createdAt])
+}
+
+model CustomerProduct {
+  id         String @id @default(cuid())
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  productCatalogId String?
+  productCatalog   ProductCatalog? @relation(fields: [productCatalogId], references: [id], onDelete: SetNull)
+
+  // Snapshot/metadata at time of purchase
+  productTitle    String           // frozen name
+  tallySerial     String?          // license serial if applicable
+  purchasedAt     DateTime?
+  expiresAt       DateTime?        // for subscriptions
+  licenseKey      String?
+  notes           String?
+  meta            Json?            // any extra data (version, AMC info, etc.)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([productCatalogId])
 }
 
 // ------------------------------------------------------------------
@@ -1863,6 +1894,8 @@ enum TaxType {
   GST
   IGST
   NONE
+  CGST
+  SGST
 }
 
 // ─────────────────────────────────────────────
@@ -1907,7 +1940,8 @@ model Quotation {
 
   // ── Line Items (product snapshots) ────────
   // Stored as JSON since products live in a separate DB
-  lineItems Json
+  // lineItems Json
+  lineItems QuotationLineItem[]  
   // [
   //   {
   //     position: 1,                     // display order
@@ -2020,6 +2054,38 @@ model Quotation {
   @@index([leadId])
   @@index([quotationNumber])
   @@index([parentId])
+}
+
+model QuotationLineItem {
+  id          String @id @default(cuid())
+
+  quotationId String
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  // Live FK — nullable because custom/ad-hoc line items may have no catalog product
+  productCatalogId String?
+  productCatalog   ProductCatalog? @relation(fields: [productCatalogId], references: [id], onDelete: SetNull)
+
+  // Snapshot (frozen at time of quotation creation — never changes)
+  position        Int
+  productSlug     String?
+  name            String          // snapshot of title
+  description     String?
+  hsn             String?
+  qty             Int             @default(1)
+  unit            String?
+  basePrice       Decimal         @db.Decimal(14, 2)
+  discountType    DiscountType?
+  discountValue   Decimal?        @db.Decimal(10, 2)
+  discountedPrice Decimal?         @db.Decimal(14, 2)
+  taxType         TaxType?         @default(GST)
+  taxPercent      Decimal?        @db.Decimal(5, 2)
+  taxAmount       Decimal?         @db.Decimal(14, 2)
+  totalPrice      Decimal         @db.Decimal(14, 2)
+  notes           String?
+
+  @@index([quotationId])
+  @@index([productCatalogId])
 }
 
 // ─────────────────────────────────────────────
@@ -2543,6 +2609,10 @@ model ProductCatalog {
   internalNotes String?
 
   salesPriority Int @default(0)
+
+  leads Lead[]
+  customerProducts CustomerProduct[]
+  quotationLineItems QuotationLineItem[]
 
   // ─────────────────────────────────────
   // SYSTEM
