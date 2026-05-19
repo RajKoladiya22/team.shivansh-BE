@@ -1242,6 +1242,20 @@ model Lead {
   productTitle        String?
   cost                Decimal? @db.Decimal(12, 2)
   remark              String?
+  states              Json?
+  // [
+  //   {
+  //     "id": "uuid",
+  //     "text": "Called customer, interested in demo",
+  //     "by": {
+  //       "accountId": "",
+  //       "firstName": "",
+  //       "lastName": "",
+  //       "avatar": ""
+  //     },
+  //     "at": "2026-05-19T10:00:00.000Z"
+  //   }
+  // ]
 
   productCatalogId String?
   // productCatalog   ProductCatalog? @relation(fields: [productCatalogId], references: [id])

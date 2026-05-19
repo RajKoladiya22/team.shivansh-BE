@@ -191,6 +191,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
                     demoCount: true,
                     statusMark: true,
                     totalWorkSeconds: true,
+                    states: true,
                     createdAt: true,
                     updatedAt: true,
                     isImportant: true,

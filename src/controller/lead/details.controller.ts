@@ -29,6 +29,7 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
         customerName: true,
         mobileNumber: true,
         product: true,
+        states: true,
         productTitle: true,
         cost: true,
         remark: true,

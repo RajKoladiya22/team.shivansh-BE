@@ -29,7 +29,7 @@ import {
   deleteFollowUp,
   sendLeadReminder,
 } from "../../controller/admin/lead.controller";
-import { createLeadAdmin } from "../../controller/lead/create.controller";
+import { createLeadAdmin, addLeadState } from "../../controller/lead/create.controller";
 import { updateLeadAdmin, updateLeadProductAdmin, addLeadProductsAdmin, updateLeadCustomerAdmin } from "../../controller/lead/update.controller";
 import { listLeadsAdmin, getLeadCountByStatusAdmin, getLeadValueStatsAdmin, getLeadActivityTimelineAdmin } from "../../controller/lead/list.controller";
 import { getLeadByIdAdmin } from "../../controller/lead/details.controller";
@@ -43,6 +43,7 @@ const router = Router();
 
 router.patch("/leads/:id/product", requireAuth, updateLeadProductAdmin);
 router.post("/leads/:id/products", requireAuth, addLeadProductsAdmin);
+router.post("/leads/:id/states", requireAuth, addLeadState);
 
 router
   .route("/leads")
