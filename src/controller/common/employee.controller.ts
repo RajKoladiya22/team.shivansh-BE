@@ -11,6 +11,155 @@ import {
  * GET /employees
  * Universal employee directory
  */
+// export async function listEmployees(req: Request, res: Response) {
+//   try {
+//     const {
+//       search,
+//       teamId,
+//       role,
+//       designation,
+//       jobType,
+//       isActive = "true",
+//       isBusy,
+//       productCatalogId,
+//       page = "1",
+//       limit = "20",
+//     } = req.query as Record<string, string>;
+
+//     const pageNumber = Math.max(Number(page), 1);
+//     const pageSize = Math.min(Number(limit), 100);
+
+//     const where: any = {};
+
+//     // Active employees only by default
+//     if (isActive !== "all") {
+//       where.isActive = isActive === "true";
+//     }
+
+//     if (jobType) where.jobType = jobType;
+//     if (designation) {
+//       where.designation = { contains: designation, mode: "insensitive" };
+//     }
+
+//     if (isBusy !== undefined) {
+//       if (isBusy === "true") {
+//         where.isBusy = true;
+//       } else if (isBusy === "false") {
+//         where.isBusy = false;
+//       } else {
+//         return res.status(400).json({
+//           message: "isBusy must be 'true' or 'false'",
+//         });
+//       }
+//     }
+
+//     if (search) {
+//       where.OR = [
+//         { firstName: { contains: search, mode: "insensitive" } },
+//         { lastName: { contains: search, mode: "insensitive" } },
+//         { contactPhone: { contains: search } },
+//         { contactEmail: { contains: search, mode: "insensitive" } },
+//         { registerNumber: { contains: search, mode: "insensitive" } },
+//       ];
+//     }
+
+//     if (teamId) {
+//       where.teams = {
+//         some: { teamId, isActive: true },
+//       };
+//     }
+
+//     if (role) {
+//       where.user = {
+//         roles: {
+//           has: role as any,
+//         },
+//       };
+//     }
+
+//     const [total, accounts] = await prisma.$transaction([
+//       prisma.account.count({ where }),
+//       prisma.account.findMany({
+//         where,
+//         skip: (pageNumber - 1) * pageSize,
+//         take: pageSize,
+//         orderBy: productCatalogId
+//           ? { firstName: "asc" }
+//           : { firstName: "asc" },
+//         select: {
+//           id: true,
+//           registerNumber: true,
+//           firstName: true,
+//           lastName: true,
+//           designation: true,
+//           contactPhone: true,
+//           contactEmail: true,
+//           avatar: true,
+//           isBusy: true,
+//           isAvailable: true,
+//           teams: {
+//             where: { isActive: true },
+//             select: {
+//               team: { select: { id: true, name: true } },
+//             },
+//           },
+//           productExpertise: productCatalogId
+//             ? {
+//               where: { productCatalogId },
+//               select: {
+//                 expertiseLevel: true,
+//                 leadsCount: true,
+//                 leadsConverted: true,
+//                 demoCount: true,
+//                 successRate: true,
+//                 lastLeadAt: true,
+//                 lastDemoAt: true,
+//                 yearsOfExperience: true,
+//                 skills: true,
+//                 certifications: true,
+//               },
+//               take: 1,
+//             }
+//             : false,
+//         },
+//       }),
+//     ]);
+
+//     const data = accounts.map((a) => ({
+//       id: a.id,
+//       registerNumber: a.registerNumber,
+//       name: `${a.firstName} ${a.lastName}`.trim(),
+//       firstName: a.firstName,
+//       lastName: a.lastName,
+//       designation: a.designation,
+//       contactPhone: a.contactPhone,
+//       contactEmail: a.contactEmail,
+//       avatar: a.avatar,
+//       isBusy: a.isBusy,
+//       isAvailable: a.isAvailable,
+//       //   roles: a.user?.roles ?? [],
+//       teams: a.teams.map((t) => t.team),
+//     }));
+
+//     return sendSuccessResponse(res, 200, "Employees fetched", {
+//       data,
+//       meta: {
+//         page: pageNumber,
+//         limit: pageSize,
+//         total,
+//         totalPages: Math.ceil(total / pageSize),
+//       },
+//     });
+//   } catch (err: any) {
+//     console.error("listEmployees error:", err);
+//     return sendErrorResponse(
+//       res,
+//       500,
+//       err?.message ?? "Failed to fetch employees",
+//     );
+//   }
+// }
+
 export async function listEmployees(req: Request, res: Response) {
   try {
     const {
@@ -21,6 +170,7 @@ export async function listEmployees(req: Request, res: Response) {
       jobType,
       isActive = "true",
       isBusy,
+      productCatalogId, // ← new
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
@@ -30,27 +180,13 @@ export async function listEmployees(req: Request, res: Response) {
 
     const where: any = {};
 
-    // Active employees only by default
-    if (isActive !== "all") {
-      where.isActive = isActive === "true";
-    }
-
+    if (isActive !== "all") where.isActive = isActive === "true";
     if (jobType) where.jobType = jobType;
-    if (designation) {
-      where.designation = { contains: designation, mode: "insensitive" };
-    }
-
-    if (isBusy !== undefined) {
-      if (isBusy === "true") {
-        where.isBusy = true;
-      } else if (isBusy === "false") {
-        where.isBusy = false;
-      } else {
-        return res.status(400).json({
-          message: "isBusy must be 'true' or 'false'",
-        });
-      }
-    }
+    if (designation) where.designation = { contains: designation, mode: "insensitive" };
+    if (isBusy === "true") where.isBusy = true;
+    else if (isBusy === "false") where.isBusy = false;
+    else if (isBusy !== undefined)
+      return res.status(400).json({ message: "isBusy must be 'true' or 'false'" });
 
     if (search) {
       where.OR = [
@@ -62,19 +198,31 @@ export async function listEmployees(req: Request, res: Response) {
       ];
     }
 
-    if (teamId) {
-      where.teams = {
-        some: { teamId, isActive: true },
-      };
+    if (teamId) where.teams = { some: { teamId, isActive: true } };
+    if (role) where.user = { roles: { has: role as any } };
+
+    // When filtering by product, only return employees who have expertise recorded
+    // Resolve adminProductId → real ProductCatalog.id
+    let resolvedCatalogId: string | null = null;
+    if (productCatalogId) {
+      const catalog = await prisma.productCatalog.findFirst({
+        where: {
+          OR: [
+            { id: productCatalogId },
+            { adminProductId: productCatalogId },
+          ],
+        },
+        select: { id: true },
+      });
+      resolvedCatalogId = catalog?.id ?? null;
     }
 
-    if (role) {
-      where.user = {
-        roles: {
-          has: role as any,
-        },
-      };
-    }
+    // Use resolvedCatalogId everywhere productCatalogId was used
+    // if (resolvedCatalogId) {
+    //   where.productExpertise = {
+    //     some: { productCatalogId: resolvedCatalogId },
+    //   };
+    // }
 
     const [total, accounts] = await prisma.$transaction([
       prisma.account.count({ where }),
@@ -94,34 +242,88 @@ export async function listEmployees(req: Request, res: Response) {
           avatar: true,
           isBusy: true,
           isAvailable: true,
-          //   user: {
-          //     select: { roles: true },
-          //   },
           teams: {
             where: { isActive: true },
-            select: {
-              team: { select: { id: true, name: true } },
-            },
+            select: { team: { select: { id: true, name: true } } },
           },
+          // Only pull the specific product's expertise row when requested
+          productExpertise: resolvedCatalogId
+            ? {
+              where: { productCatalogId: resolvedCatalogId },
+              select: {
+                expertiseLevel: true,
+                leadsCount: true,
+                leadsConverted: true,
+                demoCount: true,
+                successRate: true,
+                lastLeadAt: true,
+                lastDemoAt: true,
+                yearsOfExperience: true,
+                skills: true,
+                certifications: true,
+              },
+              take: 1,
+            }
+            : false,
         },
       }),
     ]);
 
-    const data = accounts.map((a) => ({
-      id: a.id,
-      registerNumber: a.registerNumber,
-      name: `${a.firstName} ${a.lastName}`.trim(),
-      firstName: a.firstName,
-      lastName: a.lastName,
-      designation: a.designation,
-      contactPhone: a.contactPhone,
-      contactEmail: a.contactEmail,
-      avatar: a.avatar,
-      isBusy: a.isBusy,
-      isAvailable: a.isAvailable,
-      //   roles: a.user?.roles ?? [],
-      teams: a.teams.map((t) => t.team),
-    }));
+    const data = accounts
+      .map((a) => {
+        const expertise = resolvedCatalogId
+          ? ((a as any).productExpertise?.[0] ?? null)
+          : undefined;
+
+        return {
+          id: a.id,
+          registerNumber: a.registerNumber,
+          name: `${a.firstName} ${a.lastName}`.trim(),
+          firstName: a.firstName,
+          lastName: a.lastName,
+          designation: a.designation,
+          contactPhone: a.contactPhone,
+          contactEmail: a.contactEmail,
+          avatar: a.avatar,
+          isBusy: a.isBusy,
+          isAvailable: a.isAvailable,
+          teams: a.teams.map((t) => t.team),
+          // Only included when productCatalogId is in the request
+          ...(resolvedCatalogId !== null && {
+            expertise: expertise
+              ? {
+                level: expertise.expertiseLevel,
+                leadsCount: expertise.leadsCount,
+                leadsConverted: expertise.leadsConverted,
+                demoCount: expertise.demoCount,
+                successRate: expertise.successRate,
+                lastLeadAt: expertise.lastLeadAt,
+                lastDemoAt: expertise.lastDemoAt,
+                yearsOfExperience: expertise.yearsOfExperience,
+                skills: expertise.skills,
+                certifications: expertise.certifications,
+              }
+              : null,
+          }),
+        };
+      })
+      // Sort by expertise level when filtering by product:
+      // EXPERT → CAN_DEMO → LEARNING → GUIDANCE_NEEDED → NONE
+      .sort((a: any, b: any) => {
+        if (!resolvedCatalogId) return 0;
+        const order: Record<string, number> = {
+          EXPERT: 0,
+          CAN_DEMO: 1,
+          LEARNING: 2,
+          GUIDANCE_NEEDED: 3,
+          NONE: 4,
+        };
+        const la = order[a.expertise?.level ?? "NONE"] ?? 4;
+        const lb = order[b.expertise?.level ?? "NONE"] ?? 4;
+        if (la !== lb) return la - lb;
+        // Secondary: more leads handled first
+        return (b.expertise?.leadsCount ?? 0) - (a.expertise?.leadsCount ?? 0);
+      });
 
     return sendSuccessResponse(res, 200, "Employees fetched", {
       data,
@@ -134,11 +336,7 @@ export async function listEmployees(req: Request, res: Response) {
     });
   } catch (err: any) {
     console.error("listEmployees error:", err);
-    return sendErrorResponse(
-      res,
-      500,
-      err?.message ?? "Failed to fetch employees",
-    );
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch employees");
   }
 }
 

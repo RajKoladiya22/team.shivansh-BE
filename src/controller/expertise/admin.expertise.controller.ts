@@ -113,6 +113,7 @@ export async function adminGetEmployeeExpertiseList(
             canDemoCount: number;
             learningCount: number;
             guidanceCount: number;
+            noneCount: number;
             totalLeadsConverted: number;
             totalDemos: number;
             totalCompletedProjects: number;
@@ -127,6 +128,7 @@ export async function adminGetEmployeeExpertiseList(
             const canDemoCount = ep.filter((e) => e.expertiseLevel === "CAN_DEMO").length;
             const learningCount = ep.filter((e) => e.expertiseLevel === "LEARNING").length;
             const guidanceCount = ep.filter((e) => e.expertiseLevel === "GUIDANCE_NEEDED").length;
+            const noneCount = ep.filter((e) => e.expertiseLevel === "NONE").length;
             const totalLeadsConverted = ep.reduce((s, e) => s + e.leadsConverted, 0);
             const totalDemos = ep.reduce((s, e) => s + e.demoCount, 0);
             const totalCompletedProjects = ep.reduce((s, e) => s + e.completedProjects, 0);
@@ -155,6 +157,7 @@ export async function adminGetEmployeeExpertiseList(
                 canDemoCount,
                 learningCount,
                 guidanceCount,
+                noneCount,
                 totalLeadsConverted,
                 totalDemos,
                 totalCompletedProjects,
@@ -246,207 +249,6 @@ export async function adminGetEmployeeExpertiseList(
 // skills, certifications, notes, and activity timestamps.
 // ─────────────────────────────────────
 
-// export async function adminGetEmployeeExpertiseDetail(
-//     req: Request,
-//     res: Response
-// ) {
-//     try {
-//         const { employeeId } = req.params;
-//         const { expertiseLevel, sortBy = "lastUpdatedAt", sortOrder = "desc", page = "1",
-//             limit = "20" } =
-//             req.query;
-
-//         // ── Fetch the employee ──
-//         const account = await prisma.account.findUnique({
-//             where: { id: employeeId },
-//             select: {
-//                 id: true,
-//                 firstName: true,
-//                 lastName: true,
-//                 contactEmail: true,
-//                 avatar: true,
-//                 designation: true,
-//                 createdAt: true,
-//             },
-//         });
-
-//         if (!account) {
-//             return sendErrorResponse(res, 404, "Employee not found");
-//         }
-
-//         // ── Build expertise where ──
-//         const expertiseWhere: Prisma.UserProductExpertiseWhereInput = {
-//             userId: employeeId,
-//         };
-
-//         if (expertiseLevel) {
-//             expertiseWhere.expertiseLevel = expertiseLevel as ExpertiseLevel;
-//         }
-
-//         // ── Sort ──
-//         const allowedSortFields = [
-//             "lastUpdatedAt",
-//             "expertiseLevel",
-//             "leadsConverted",
-//             "successRate",
-//             "demoCount",
-//             "yearsOfExperience",
-//             "createdAt",
-//         ];
-//         const orderByField = allowedSortFields.includes(sortBy as string)
-//             ? (sortBy as string)
-//             : "lastUpdatedAt";
-//         const orderByDir = sortOrder === "asc" ? "asc" : "desc";
-
-//         // ── Fetch expertise entries ──
-//         const expertiseEntries = await prisma.userProductExpertise.findMany({
-//             where: expertiseWhere,
-//             orderBy: { [orderByField]: orderByDir },
-//             include: {
-//                 productCatalog: {
-//                     select: {
-//                         id: true,
-//                         title: true,
-//                         slug: true,
-//                         subtitle: true,
-//                         finalPrice: true,
-//                         basePrice: true,
-//                         categorySlugs: true,
-//                         industrySlugs: true,
-//                         isTopProduct: true,
-//                         isLatest: true,
-//                         status: true,
-//                         pricingModel: true,
-//                         introVideoId: true,
-//                     },
-//                 },
-//             },
-//         });
-
-//         // ── Build summary stats ──
-//         const expertCount = expertiseEntries.filter(
-//             (e) => e.expertiseLevel === "EXPERT"
-//         ).length;
-//         const canDemoCount = expertiseEntries.filter(
-//             (e) => e.expertiseLevel === "CAN_DEMO"
-//         ).length;
-//         const learningCount = expertiseEntries.filter(
-//             (e) => e.expertiseLevel === "LEARNING"
-//         ).length;
-//         const guidanceCount = expertiseEntries.filter(
-//             (e) => e.expertiseLevel === "GUIDANCE_NEEDED"
-//         ).length;
-//         const noneCount = expertiseEntries.filter(
-//             (e) => e.expertiseLevel === "NONE"
-//         ).length;
-//         const totalLeadsConverted = expertiseEntries.reduce(
-//             (s, e) => s + e.leadsConverted,
-//             0
-//         );
-//         const totalDemos = expertiseEntries.reduce(
-//             (s, e) => s + e.demoCount,
-//             0
-//         );
-//         const totalCompletedProjects = expertiseEntries.reduce(
-//             (s, e) => s + e.completedProjects,
-//             0
-//         );
-//         const avgSuccessRate =
-//             expertiseEntries.length > 0
-//                 ? expertiseEntries.reduce((s, e) => s + e.successRate, 0) /
-//                 expertiseEntries.length
-//                 : 0;
-
-//         // Top performing products (by leads converted)
-//         const topProducts = [...expertiseEntries]
-//             .sort((a, b) => b.leadsConverted - a.leadsConverted)
-//             .slice(0, 5)
-//             .map((e) => ({
-//                 productId: e.productCatalogId,
-//                 productTitle: e.productCatalog.title,
-//                 productSlug: e.productCatalog.slug,
-//                 expertiseLevel: e.expertiseLevel,
-//                 leadsConverted: e.leadsConverted,
-//                 successRate: e.successRate,
-//                 demoCount: e.demoCount,
-//             }));
-
-//         // Level breakdown for chart / UI display
-//         const levelBreakdown: Record<ExpertiseLevel, number> = {
-//             EXPERT: expertCount,
-//             CAN_DEMO: canDemoCount,
-//             LEARNING: learningCount,
-//             GUIDANCE_NEEDED: guidanceCount,
-//             NONE: noneCount
-//         };
-
-//         // Category coverage: which category slugs does the employee cover?
-//         const categoryCoverage: Record<string, number> = {};
-//         for (const e of expertiseEntries) {
-//             for (const cat of e.productCatalog.categorySlugs ?? []) {
-//                 categoryCoverage[cat] = (categoryCoverage[cat] ?? 0) + 1;
-//             }
-//         }
-
-//         // Format entries for response — parse JSON fields safely
-//         const formattedEntries = expertiseEntries.map((e) => ({
-//             id: e.id,
-//             productCatalogId: e.productCatalogId,
-//             product: e.productCatalog,
-//             expertiseLevel: e.expertiseLevel,
-//             yearsOfExperience: e.yearsOfExperience ?? null,
-//             completedProjects: e.completedProjects,
-//             leadsConverted: e.leadsConverted,
-//             demoCount: e.demoCount,
-//             successRate: e.successRate,
-//             skills: safeParseJson(e.skills),
-//             certifications: safeParseJson(e.certifications),
-//             notes: e.notes ?? null,
-//             lastDemoAt: e.lastDemoAt ?? null,
-//             lastLeadAt: e.lastLeadAt ?? null,
-//             lastUpdatedAt: e.lastUpdatedAt,
-//             createdAt: e.createdAt,
-//         }));
-
-//         return sendSuccessResponse(
-//             res,
-//             200,
-//             "Employee expertise detail fetched",
-//             {
-//                 employee: {
-//                     id: account.id,
-//                     firstName: account.firstName,
-//                     lastName: account.lastName,
-//                     contactEmail: account.contactEmail,
-//                     avatar: account.avatar,
-//                     designation: account.designation,
-//                     memberSince: account.createdAt,
-//                 },
-//                 summary: {
-//                     totalProducts: expertiseEntries.length,
-//                     expertCount,
-//                     canDemoCount,
-//                     learningCount,
-//                     guidanceCount,
-//                     totalLeadsConverted,
-//                     totalDemos,
-//                     totalCompletedProjects,
-//                     avgSuccessRate: parseFloat(avgSuccessRate.toFixed(2)),
-//                     levelBreakdown,
-//                     categoryCoverage,
-//                     topProducts,
-//                 },
-//                 expertise: formattedEntries,
-//             }
-//         );
-//     } catch (error) {
-//         console.error(
-//             "[AdminExpertise] adminGetEmployeeExpertiseDetail error",
-//             error
-//         );
-//         return sendErrorResponse(res, 500, "Failed to fetch employee expertise detail");
-//     }
-// }
 
 export async function adminGetEmployeeExpertiseDetail(req: Request, res: Response) {
     try {
@@ -620,6 +422,7 @@ export async function adminGetEmployeeExpertiseDetail(req: Request, res: Respons
                 select: {
                     expertiseLevel: true,
                     leadsConverted: true,
+                    leadsCount: true,
                     demoCount: true,
                     completedProjects: true,
                     successRate: true,
@@ -639,6 +442,7 @@ export async function adminGetEmployeeExpertiseDetail(req: Request, res: Respons
         const guidanceCount        = allForStats.filter(e => e.expertiseLevel === "GUIDANCE_NEEDED").length;
         const noneCount            = allForStats.filter(e => e.expertiseLevel === "NONE").length;
         const totalLeadsConverted  = allForStats.reduce((s, e) => s + e.leadsConverted, 0);
+        const totalLeadsCount = allForStats.reduce((s, e) => s + e.leadsCount, 0);
         const totalDemos           = allForStats.reduce((s, e) => s + e.demoCount, 0);
         const totalCompletedProjects = allForStats.reduce((s, e) => s + e.completedProjects, 0);
         const avgSuccessRate       = allForStats.length > 0
@@ -646,7 +450,7 @@ export async function adminGetEmployeeExpertiseDetail(req: Request, res: Respons
 
         const topProducts = [...allForStats]
             .sort((a, b) => b.leadsConverted - a.leadsConverted)
-            .slice(0, 5)
+            .slice(0, 7)
             .map(e => ({
                 productId:     e.productCatalogId,
                 productTitle:  e.productCatalog.title,
@@ -702,7 +506,7 @@ export async function adminGetEmployeeExpertiseDetail(req: Request, res: Respons
             },
             summary: {
                 totalProducts: allForStats.length,
-                expertCount, canDemoCount, learningCount, guidanceCount,
+                expertCount, canDemoCount, learningCount, guidanceCount, noneCount, totalLeadsCount,
                 totalLeadsConverted, totalDemos, totalCompletedProjects,
                 avgSuccessRate: parseFloat(avgSuccessRate.toFixed(2)),
                 levelBreakdown: {

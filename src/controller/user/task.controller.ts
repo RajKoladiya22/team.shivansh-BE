@@ -1596,6 +1596,8 @@ export async function createSelfTaskUser(req: Request, res: Response) {
       startDate,
       estimatedMinutes,
       labels = [],
+      checklist = [],
+      note,
       isRecurring = false,
       recurrenceType = "ONE_TIME",
       recurrenceRule = null,
@@ -1647,6 +1649,7 @@ export async function createSelfTaskUser(req: Request, res: Response) {
           type: AssignmentType.ACCOUNT,
           accountId,
           assignedBy: accountId,
+          note: note ?? null,
           status: TaskStatus.PENDING,
         },
       });
@@ -1661,6 +1664,33 @@ export async function createSelfTaskUser(req: Request, res: Response) {
           })),
           skipDuplicates: true,
         });
+      }
+
+      // ── Checklist items ────────────────────────────────────
+      if (Array.isArray(checklist) && checklist.length > 0) {
+        const validItems = checklist.filter(
+          (item: any) => item?.title?.trim()
+        );
+
+        if (validItems.length > 0) {
+          await tx.checklistItem.createMany({
+            data: validItems.map(
+              (
+                item: { title: string; assignedTo?: string; dueDate?: string },
+                idx: number
+              ) => ({
+                taskId: created.id,
+                title: item.title.trim(),
+                order: idx,
+                status: "PENDING" as const,
+                assignedTo: item.assignedTo ?? null,
+                dueDate: item.dueDate ? new Date(item.dueDate) : null,
+                createdBy: accountId,
+              })
+            ),
+            skipDuplicates: true,
+          });
+        }
       }
 
       // ── Activity ──────────────────────────────────────────────────────────

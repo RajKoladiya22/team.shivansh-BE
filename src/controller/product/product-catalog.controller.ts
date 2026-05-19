@@ -234,30 +234,6 @@ export async function getProductCatalogList(req: Request, res: Response) {
 // GET /product-catalog/:id
 // ─────────────────────────────────────
 
-// export async function getProductCatalogById(req: Request, res: Response) {
-//     try {
-//         const { id } = req.params;
-
-//         const product = await prisma.productCatalog.findUnique({
-//             where: { id },
-//         });
-
-//         if (!product) {
-//             return res.status(404).json({
-//                 success: false,
-//                 message: "Product not found",
-//             });
-//         }
-        
-//         return sendSuccessResponse(res, 200, "Details of TDL fetched", {
-//             data: product,
-//         });
-//     } catch (error) {
-//         console.error("[ProductCatalog] getProductCatalogById error", error);
-//          return sendErrorResponse(res, 500, "Failed to fetch TDL details");
-//     }
-// }
-
 export async function getProductCatalogById(req: Request, res: Response) {
     try {
         const { id } = req.params;
@@ -352,6 +328,7 @@ export async function getProductCatalogById(req: Request, res: Response) {
             canDemoCount: experts.filter((e) => e.expertiseLevel === "CAN_DEMO").length,
             learningCount: experts.filter((e) => e.expertiseLevel === "LEARNING").length,
             guidanceCount: experts.filter((e) => e.expertiseLevel === "GUIDANCE_NEEDED").length,
+            noneCount: experts.filter((e) => e.expertiseLevel === "NONE").length,
             totalLeadsConverted: experts.reduce((s, e) => s + e.leadsConverted, 0),
             avgSuccessRate:
                 experts.length > 0
@@ -364,7 +341,9 @@ export async function getProductCatalogById(req: Request, res: Response) {
                     : 0,
             isCovered: experts.some((e) => e.expertiseLevel === "EXPERT"),
         };
-
+        
+        // console.log("\n\n\n\n\n\n\n\n\n\n expertiseSummary-?>\n", expertiseSummary);
+        
         return sendSuccessResponse(res, 200, "Details of TDL fetched", {
             data: {
                 ...product,
