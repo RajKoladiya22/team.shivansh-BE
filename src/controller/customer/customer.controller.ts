@@ -324,6 +324,7 @@ export async function getCustomerDetails(req: Request, res: Response) {
             lastName: true,
           },
         },
+        customerProducts : true
       },
     });
 

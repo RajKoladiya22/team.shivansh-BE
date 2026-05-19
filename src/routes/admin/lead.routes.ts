@@ -7,21 +7,21 @@ import {
 } from "../../core/middleware/auth";
 
 import {
-  createLeadAdmin,
-  assignLeadAdmin,
-  updateLeadAdmin,
-  closeLeadAdmin,
-  listLeadsAdmin,
-  getLeadActivityTimelineAdmin,
-  getLeadCountByStatusAdmin,
+  // createLeadAdmin,
+  // updateLeadAdmin,
+  // listLeadsAdmin,
+  // getLeadByIdAdmin,
+  // assignLeadAdmin,
+  // closeLeadAdmin,
+  // deleteLeadPermanentAdmin,
+  // updateLeadProductAdmin,
+  // addLeadProductsAdmin,
+  // getLeadCountByStatusAdmin,
+  // getLeadValueStatsAdmin,
+  // getLeadActivityTimelineAdmin,
+  // updateLeadCustomerAdmin,
   addLeadHelperAdmin,
   removeLeadHelperAdmin,
-  getLeadByIdAdmin,
-  deleteLeadPermanentAdmin,
-  updateLeadCustomerAdmin,
-  updateLeadProductAdmin,
-  getLeadValueStatsAdmin,
-  addLeadProductsAdmin,
   createFollowUp,
   updateFollowUp,
   getLeadFollowUps,
@@ -29,36 +29,20 @@ import {
   deleteFollowUp,
   sendLeadReminder,
 } from "../../controller/admin/lead.controller";
+import { createLeadAdmin } from "../../controller/lead/create.controller";
+import { updateLeadAdmin, updateLeadProductAdmin, addLeadProductsAdmin, updateLeadCustomerAdmin } from "../../controller/lead/update.controller";
+import { listLeadsAdmin, getLeadCountByStatusAdmin, getLeadValueStatsAdmin, getLeadActivityTimelineAdmin } from "../../controller/lead/list.controller";
+import { getLeadByIdAdmin } from "../../controller/lead/details.controller";
+import { assignLeadAdmin } from "../../controller/lead/reassign.controller";
+import { closeLeadAdmin } from "../../controller/lead/close.controller";
+import { deleteLeadPermanentAdmin } from "../../controller/lead/delete.controller";
 
 const router = Router();
 
 /* ================= LEADS / SUPPORT ================= */
 
-/**
- * Create Lead / Support
- * POST /admin/leads
- */
-// router.post(
-//   "/leads",
-//   requireAuth,
-//   requireRole("SALES", "ADMIN"),
-//   requirePermission("ALL", "VIEW_LEADS"),
-//   createLeadAdmin,
-// );
-
-// /**
-//  * List Leads
-//  * GET /admin/leads
-//  */
-// router.get(
-//   "/leads",
-//   requireAuth,
-//   requireRole("SALES", "ADMIN"),
-//   requirePermission("ALL", "VIEW_LEADS"),
-//   listLeadsAdmin,
-// );
-
 router.patch("/leads/:id/product", requireAuth, updateLeadProductAdmin);
+router.post("/leads/:id/products", requireAuth, addLeadProductsAdmin);
 
 router
   .route("/leads")
@@ -191,7 +175,7 @@ router.get(
 
 router.get("/leads/stats/value", requireAuth, getLeadValueStatsAdmin);
 
-router.post("/leads/:id/products", requireAuth, addLeadProductsAdmin);
+
 
 
 router.post("/leads/:leadId/follow-ups", requireAuth, createFollowUp);

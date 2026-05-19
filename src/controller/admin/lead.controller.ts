@@ -1130,9 +1130,6 @@ export async function updateLeadAdmin(req: Request, res: Response) {
       statusMark.demo = true;
       data.demoDoneAt = new Date();
 
-      // console.log("\n\n\n\n\n\n\n\n existing.productCatalogId->\n", existing.productCatalogId);
-
-
       await prisma.userProductExpertise.upsert({
         where: {
           userId_productCatalogId: {
@@ -1159,9 +1156,6 @@ export async function updateLeadAdmin(req: Request, res: Response) {
           lastLeadAt: new Date(),
         },
       });
-
-      // console.log("\n update->\n", update);
-
     }
     if (data.status === "CONVERTED" &&
       existing.productCatalogId &&
@@ -1189,6 +1183,24 @@ export async function updateLeadAdmin(req: Request, res: Response) {
             increment: 1,
           },
           lastLeadAt: new Date(),
+        },
+      });
+    }
+
+    if (data.status) {
+      await prisma.lead.update({
+        where: {
+          id: existing.id,
+        },
+        data: {
+          isWorking: false,
+        },
+      });
+      await prisma.account.update({
+        where: { id: performerAccountId },
+        data: {
+          isBusy: false,
+          activeLeadId: null,
         },
       });
     }
@@ -1940,6 +1952,7 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
         createdAt: true,
         updatedAt: true,
         closedAt: true,
+        productCatalog: true,
 
         /* -------------------------
            ACTIVE ASSIGNMENTS
@@ -2005,6 +2018,7 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
             customerCompanyName: true,
             products: true,
             customerCategory: true,
+            customerProducts: true,
           },
         },
       },
@@ -2842,63 +2856,6 @@ export async function updateLeadProductAdmin(req: Request, res: Response) {
         },
       });
 
-      // ── Sync customer products JSON ──────────────────────────────
-      // if (lead.customerId && (resolvedProductTitle || cost !== undefined)) {
-      //   const customer = await tx.customer.findUnique({
-      //     where: { id: lead.customerId },
-      //     select: { id: true, products: true },
-      //   });
-
-      //   if (customer) {
-      //     const existingProducts: any = customer.products ?? {
-      //       active: [],
-      //       history: [],
-      //     };
-      //     if (!existingProducts.active) existingProducts.active = [];
-
-      //     // Match by old product title (before update) so we update the right entry
-      //     const oldTitle =
-      //       (existing.product as any)?.title ?? existing.productTitle;
-      //     const oldCost = existing.cost;
-
-      //     const idx = existingProducts.active.findIndex((p: any) => {
-      //       const titleMatch = oldTitle && p.name === oldTitle;
-      //       const costMatch =
-      //         oldCost !== undefined &&
-      //         oldCost !== null &&
-      //         String(p.price) === String(oldCost);
-      //       return titleMatch || costMatch;
-      //     });
-
-      //     if (idx !== -1) {
-      //       // Update matched entry
-      //       if (resolvedProductTitle) {
-      //         existingProducts.active[idx].name = resolvedProductTitle;
-      //       }
-      //       if (cost !== undefined) {
-      //         existingProducts.active[idx].price = cost;
-      //       }
-      //     } else if (resolvedProductTitle || cost !== undefined) {
-      //       // No match found — add a new active entry so customer record stays consistent
-      //       existingProducts.active.push({
-      //         id: resolvedProduct?.id ?? randomUUID(),
-      //         name: resolvedProductTitle ?? "Unknown Product",
-      //         price: cost ?? null,
-      //         addedAt: new Date(),
-      //         status: "ACTIVE",
-      //       });
-      //     }
-
-      //     await tx.customer.update({
-      //       where: { id: customer.id },
-      //       data: {
-      //         products: existingProducts,
-      //         updatedAt: new Date(),
-      //       },
-      //     });
-      //   }
-      // }
-
       // Replace the manual customer sync block with:
       if (cost !== undefined || resolvedProductTitle) {
         await syncProductCostToEntities(tx, {
@@ -3107,15 +3064,6 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
 
     if (source) where.source = source;
 
-    // if (fromDate || toDate) {
-    //   where.createdAt = {};
-    //   if (fromDate) where.createdAt.gte = new Date(fromDate);
-    //   if (toDate) {
-    //     const end = new Date(toDate);
-    //     end.setDate(end.getDate() + 1);
-    //     where.createdAt.lt = end;
-    //   }
-    // }
     if (fromDate || toDate) {
       where.createdAt = {};
       if (fromDate) {
@@ -3217,6 +3165,8 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
 export async function addLeadProductsAdmin(req: Request, res: Response) {
   try {
     const performerAccountId = req.user?.accountId;
+    console.log("\n\n\n\n\n\n\nCHECK->WRONG\n\n\n\n");
+    
     if (!performerAccountId)
       return sendErrorResponse(res, 401, "Invalid session user");
 
