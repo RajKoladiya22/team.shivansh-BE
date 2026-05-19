@@ -241,6 +241,7 @@ export async function listEmployees(req: Request, res: Response) {
           contactEmail: true,
           avatar: true,
           isBusy: true,
+          bio: true,
           isAvailable: true,
           teams: {
             where: { isActive: true },
@@ -286,6 +287,7 @@ export async function listEmployees(req: Request, res: Response) {
           contactEmail: a.contactEmail,
           avatar: a.avatar,
           isBusy: a.isBusy,
+          bio: a.bio,
           isAvailable: a.isAvailable,
           teams: a.teams.map((t) => t.team),
           // Only included when productCatalogId is in the request
