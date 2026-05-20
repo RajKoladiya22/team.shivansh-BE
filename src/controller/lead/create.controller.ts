@@ -37,8 +37,8 @@ export async function createLeadAdmin(req: Request, res: Response) {
     if (!creatorAccountId) return sendErrorResponse(res, 401, "Invalid session user");
 
     const {
-      source,
-      type,
+      source = "MANUAL",
+      type = "LEAD",
       customerName,
       mobileNumber,
       customerCompanyName,
@@ -69,7 +69,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
 
     const normalizedMobile = normalizeMobile(mobileNumber);
     const products = normalizeIncomingProducts(req.body);
-    const { productTitle } = deriveLeadScalars(products, cost);
+    const { productTitle, totalCost } = deriveLeadScalars(products, cost);
 
     if (!forceCreate) {
       const duplicate = await findDuplicateLead({ normalizedMobile, productTitle });
@@ -171,8 +171,8 @@ export async function createMyLead(req: Request, res: Response) {
     if (!creatorAccountId) return sendErrorResponse(res, 401, "Invalid session user");
 
     const {
-      source,
-      type,
+      source = "MANUAL",
+      type = "LEAD",
       customerName,
       mobileNumber,
       customerCompanyName,
@@ -203,7 +203,7 @@ export async function createMyLead(req: Request, res: Response) {
 
     const normalizedMobile = normalizeMobile(mobileNumber);
     const products = normalizeIncomingProducts(req.body);
-    const { productTitle } = deriveLeadScalars(products, cost);
+    const { productTitle, totalCost } = deriveLeadScalars(products, cost);
 
     if (!forceCreate) {
       const duplicate = await findDuplicateLead({ normalizedMobile, productTitle });

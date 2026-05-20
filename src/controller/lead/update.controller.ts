@@ -13,6 +13,9 @@ import {
     upsertCustomerProduct,
     resolveProductCatalogId,
     LeadProductItem,
+    resolvePerformerSnapshot,
+    stopWorkIfActive,
+    updateUserProductExpertise,
 } from "./utils";
 import { randomUUID } from "crypto";
 
@@ -79,7 +82,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         });
         if (!existing) return sendErrorResponse(res, 404, "Lead not found");
         if (!existing.customerId) return sendErrorResponse(res, 404, "Customer not found in Lead");
-
+        const previousStatus = existing.status;
         const statusMark = {
             ...(existing.statusMark as Record<string, boolean> | null),
         };
@@ -217,6 +220,18 @@ export async function updateLeadAdmin(req: Request, res: Response) {
                 },
             });
 
+            if (data.status && existing.productCatalogId) {
+                await updateUserProductExpertise({
+                    prisma: tx as any,
+                    accountId: performerAccountId,
+                    productCatalogId: existing.productCatalogId,
+                    previousStatus,
+                    newStatus: data.status,
+                    leadId: id,
+                });
+            }
+
+
             if (
                 data.status === "CONVERTED" &&
                 convertedProducts.length > 0 &&
@@ -269,7 +284,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
                     ),
                 ];
 
-                console.log("\nproductCatalogIds-->\n", productCatalogIds);
+                // console.log("\nproductCatalogIds-->\n", productCatalogIds);
 
 
                 /* ── Expertise ───────────────────────── */
@@ -892,7 +907,7 @@ export async function syncLeadProductsEverywhere(
     });
     if (!lead) return;
 
-    console.log("\n\n\n\n\n\n\n\n\n\n lead->\n", lead);
+    // console.log("\n\n\n\n\n\n\n\n\n\n lead->\n", lead);
 
     /* ─────────────────────────────────────
        Normalize product array
@@ -1120,7 +1135,7 @@ export async function syncLeadProductsEverywhere(
         //     orderBy: { createdAt: "desc" },
         // });
 
-        console.log("\n\n allCPs->\n", allCPs);
+        // console.log("\n\n allCPs->\n", allCPs);
 
         const active = allCPs
             .filter((p) => p.isActive === true && p.isExpired === false)
@@ -1147,8 +1162,8 @@ export async function syncLeadProductsEverywhere(
                 status: "EXPIRED",
             }));
 
-        console.log("\n\n active->\n", active);
-        console.log("\n\n history->\n", history);
+        // console.log("\n\n active->\n", active);
+        // console.log("\n\n history->\n", history);
 
         await tx.customer.update({
             where: { id: lead.customerId },
@@ -1326,5 +1341,316 @@ export async function updateLeadCustomerAdmin(req: Request, res: Response) {
     } catch (err: any) {
         console.error("Update lead customer error:", err);
         return sendErrorResponse(res, 500, err?.message ?? "Failed to update customer details");
+    }
+}
+
+
+
+
+/**
+ * PATCH user/leads/my/:id/status
+ * Update status/remark as the assignee (account or team member)
+ */
+export async function updateMyLeadStatus(req: Request, res: Response) {
+    try {
+        const { id } = req.params;
+        const { status, remark, cost, customerName, demoScheduledAt, isImportant } =
+            req.body as {
+                status?:
+                | "PENDING"
+                | "IN_PROGRESS"
+                | "CLOSED"
+                | "CONVERTED"
+                | "DEMO_DONE"
+                | "FOLLOW_UPS"
+                | "INTERESTED";
+                remark?: string;
+                cost?: number;
+                customerName?: string;
+                demoScheduledAt?: string;
+                isImportant?: boolean;
+            };
+
+        const accountId = req.user?.accountId;
+        if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
+
+        const TERMINAL_STATUSES = [
+            "CLOSED",
+            "DEMO_DONE",
+            "CONVERTED",
+            "FOLLOW_UPS",
+            "PENDING",
+        ] as const;
+
+        const isTerminalStatus =
+            typeof status !== "undefined" &&
+            TERMINAL_STATUSES.includes(status as (typeof TERMINAL_STATUSES)[number]);
+
+        const lead = await prisma.lead.findFirst({
+            where: {
+                id,
+                OR: [
+                    {
+                        assignments: {
+                            some: {
+                                isActive: true,
+                                OR: [
+                                    { accountId },
+                                    {
+                                        team: {
+                                            members: {
+                                                some: { accountId },
+                                            },
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                    {
+                        leadHelpers: {
+                            some: {
+                                isActive: true,
+                                accountId,
+                            },
+                        },
+                    },
+                ],
+            },
+        });
+
+        if (!lead) return sendErrorResponse(res, 403, "Access denied");
+        const previousStatus = lead.status;
+
+        const performerSnapshot = await resolvePerformerSnapshot(accountId);
+
+        const updated = await prisma.$transaction(async (tx) => {
+            // prepare update payload
+            const data: any = {};
+            if (typeof status !== "undefined") data.status = status;
+            if (typeof remark !== "undefined") data.remark = remark;
+            if (typeof cost !== "undefined") data.cost = cost;
+            if (typeof customerName !== "undefined") data.customerName = customerName;
+            if (data.status === "CLOSED" || data.status === "CONVERTED") {
+                data.closedAt = new Date();
+            }
+            if (typeof isImportant !== "undefined") data.isImportant = isImportant;
+
+            // prepare statusMark safely
+            const statusMark = {
+                ...(lead.statusMark as Record<string, boolean> | null),
+            };
+
+            if (status === "CLOSED") {
+                statusMark.close = true;
+            }
+
+            if (status === "DEMO_DONE") {
+                statusMark.demo = true;
+                data.demoDoneAt = new Date();
+            }
+
+            if (status === "CONVERTED") {
+                statusMark.converted = true;
+                data.closedAt = new Date();
+            }
+
+            // only assign if something changed
+            if (Object.keys(statusMark).length > 0) {
+                data.statusMark = statusMark;
+            }
+
+            if (isTerminalStatus) {
+                await stopWorkIfActive(tx, accountId, id);
+                // close relevant follow-ups based on new status
+                if (status === "DEMO_DONE" || status === "CLOSED" || status === "CONVERTED") {
+                    await closeFollowUpsOnStatusChange(tx, id, status, accountId);
+                    // re-sync lead aggregates after bulk follow-up update
+                    await syncLeadFollowUpAggregates(tx, id);
+                }
+            }
+
+            // ── demo scheduling / rescheduling ───────────────────────────────────
+            if (demoScheduledAt !== undefined) {
+                const newDate = new Date(demoScheduledAt);
+
+                const isNewDate =
+                    !lead.demoScheduledAt ||
+                    lead.demoScheduledAt.getTime() !== newDate.getTime();
+
+                if (isNewDate) {
+                    data.demoScheduledAt = newDate;
+                    data.demoCount = { increment: 1 };
+
+                    // append to demoMeta.history
+                    const existingMeta = lead.demoMeta as any;
+                    const history: any[] = existingMeta?.history ?? [];
+                    data.demoMeta = {
+                        history: [
+                            ...history,
+                            {
+                                type: lead.demoScheduledAt ? "RESCHEDULED" : "SCHEDULED",
+                                at: newDate.toISOString(),
+                                by: accountId,
+                            },
+                        ],
+                    };
+                }
+            }
+
+            // perform update
+            const updatedLead = await tx.lead.update({
+                where: { id },
+                data,
+                include: {
+                    assignments: {
+                        include: {
+                            account: true,
+                            team: true,
+                        },
+                    },
+                },
+            });
+
+            // build snapshots and diffs
+            const fromState = {
+                id: lead.id,
+                status: lead.status,
+                remark: lead.remark ?? null,
+                cost: lead.cost ?? null,
+                customerName: lead.customerName ?? null,
+                isImportant: lead.isImportant,
+            };
+
+            const toState = {
+                id: updatedLead.id,
+                status: updatedLead.status,
+                remark: updatedLead.remark ?? null,
+                cost: updatedLead.cost ?? null,
+                customerName: updatedLead.customerName ?? null,
+                isImportant: updatedLead.isImportant,
+            };
+
+            // Detect what changed
+            const changedFields: Record<string, { from: any; to: any }> = {};
+            if (fromState.status !== toState.status)
+                changedFields.status = { from: fromState.status, to: toState.status };
+            if ((fromState.remark ?? null) !== (toState.remark ?? null))
+                changedFields.remark = { from: fromState.remark, to: toState.remark };
+            if (fromState.isImportant !== toState.isImportant)
+                changedFields.isImportant = { from: fromState.isImportant, to: toState.isImportant };
+            // careful with Decimal types — convert to string/number for comparison
+            const prevCost = fromState.cost == null ? null : Number(fromState.cost);
+            const newCost = toState.cost == null ? null : Number(toState.cost);
+            if (prevCost !== newCost)
+                changedFields.cost = { from: prevCost, to: newCost };
+            if ((fromState.customerName ?? null) !== (toState.customerName ?? null))
+                changedFields.customerName = {
+                    from: fromState.customerName,
+                    to: toState.customerName,
+                };
+
+            // ── Update UserProductExpertise ──────────────────────────────────────
+            // This handles demoCount, leadsConverted, successRate, and CustomerProduct.isPurchase
+            if (status) {
+                await updateUserProductExpertise({
+                    prisma: tx as any,
+                    accountId: accountId,
+                    productCatalogId: lead.productCatalogId,
+                    previousStatus,
+                    newStatus: status,
+                    leadId: lead.id,
+                });
+            }
+
+            // ── Activity logs ────────────────────────────────────────────────────
+            // 1) STATUS_CHANGED (if status changed)
+            if (changedFields.status) {
+                await tx.leadActivityLog.create({
+                    data: {
+                        leadId: id,
+                        action: "STATUS_CHANGED",
+                        performedBy: accountId,
+                        meta: {
+                            fromState: lead,
+                            toState: updatedLead,
+                        },
+                    },
+                });
+            }
+
+            // 2) UPDATED (if non-status fields changed: cost, customerName, remark)
+            const nonStatusKeys = ["cost", "customerName", "remark"];
+            const hasNonStatusChange = nonStatusKeys.some((k) =>
+                Object.prototype.hasOwnProperty.call(changedFields, k),
+            );
+            if (hasNonStatusChange) {
+                const changes: Record<string, any> = {};
+                for (const k of nonStatusKeys) {
+                    if (changedFields[k]) changes[k] = changedFields[k];
+                }
+
+                await tx.leadActivityLog.create({
+                    data: {
+                        leadId: id,
+                        action: "UPDATED",
+                        performedBy: accountId,
+                        meta: {
+                            fromState: lead,
+                            toState: updatedLead,
+                        },
+                    },
+                });
+            }
+
+            // 3) CLOSED (if lead became CLOSED)
+            const becameClosed =
+                changedFields.status && changedFields.status.to === "CLOSED";
+
+            if (becameClosed) {
+                await tx.leadActivityLog.create({
+                    data: {
+                        leadId: id,
+                        action: "CLOSED",
+                        performedBy: accountId,
+                        meta: {
+                            closedBy: performerSnapshot,
+                            closedAt: new Date().toISOString(),
+                        },
+                    },
+                });
+            }
+
+            return updatedLead;
+        });
+
+        try {
+            const io = getIo();
+
+            const patchPayload = {
+                id,
+                patch: {
+                    status: updated.status,
+                    demoDoneAt: updated.demoDoneAt,
+                    updatedAt: updated.updatedAt,
+                    isImportant: updated.isImportant,
+                    remark: updated.remark,
+                    cost: updated.cost,
+                    customerName: updated.customerName,
+                    productTitle: updated.productTitle,
+                    product: updated.product,
+                },
+            };
+
+            io.to(`leads:user:${accountId}`).emit("lead:patch", patchPayload);
+            io.to("leads:admin").emit("lead:patch", patchPayload);
+        } catch {
+            console.warn("Socket emit skipped");
+        }
+
+        return sendSuccessResponse(res, 200, "Lead updated", updated);
+    } catch (err: any) {
+        console.error("Update lead status error:", err);
+        return sendErrorResponse(res, 500, err?.message ?? "Failed to update lead");
     }
 }

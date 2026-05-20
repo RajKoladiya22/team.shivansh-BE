@@ -2749,7 +2749,7 @@ model UserProductExpertise {
   leadsConverted    Int   @default(0) // Number of leads this user converted for this product
   leadsCount        Int   @default(0)
   demoCount         Int   @default(0) // How many times demoed
-  successRate       Float @default(0) // % of leads that converted (leadsConverted / leads assigned)
+  successRate       Float @default(0) // % fromm leadsCount to leadsConverted
 
   // ─────────────────────────────────
   // Learning Progress

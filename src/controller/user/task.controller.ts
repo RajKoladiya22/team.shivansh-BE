@@ -198,6 +198,7 @@ const TASK_LIST_SELECT = {
   sortOrder: true,
   createdAt: true,
   updatedAt: true,
+  loggedMinutes: true,
 
   project: { select: { id: true, name: true, status: true } },
   step: { select: { id: true, name: true, order: true, color: true } },
@@ -240,7 +241,7 @@ const TASK_DETAIL_SELECT = {
   ...TASK_LIST_SELECT,
 
   estimatedMinutes: true,
-  loggedMinutes: true,
+  // loggedMinutes: true,
   isRecurring: true,
   recurrenceType: true,
 
@@ -1233,6 +1234,9 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
       where.isSelfTask = false;
     }
 
+    if (req.query.isLearning === "true") where.isLearning = true;
+    if (req.query.isLearning === "false") where.isLearning = false;
+
     if (status) {
       where.status = {
         in: status
@@ -1939,6 +1943,8 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
         `status must be one of: ${Object.values(TaskStatus).join(", ")}`,
       );
 
+
+
     // Users cannot self-cancel
     if (status === TaskStatus.CANCELLED)
       return sendErrorResponse(res, 403, "Only admins can cancel tasks");
@@ -1949,7 +1955,14 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
 
     const task = await prisma.task.findUnique({
       where: { id, deletedAt: null },
-      select: { id: true, status: true, projectId: true, startedAt: true },
+      select: {
+        id: true,
+        status: true,
+        projectId: true,
+        startedAt: true,
+        completedAt: true,
+        loggedMinutes: true,
+      },
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
 
@@ -1973,10 +1986,74 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
       timestamps.completedAt = null;
     }
 
+    // Timestamp logic
+    const now = new Date();
+
+
+
+    // const timestamps: Record<string, Date | null> = {};
+    const taskUpdateData: Record<string, any> = {
+      status,
+    };
+
+    // PENDING → IN_PROGRESS
+    if (
+      status === TaskStatus.IN_PROGRESS &&
+      !task.startedAt
+    ) {
+      timestamps.startedAt = now;
+      taskUpdateData.startedAt = now;
+    }
+
+    // COMPLETED
+    if (status === TaskStatus.COMPLETED) {
+      timestamps.completedAt = now;
+      taskUpdateData.completedAt = now;
+
+      // Safety fallback
+      if (!task.startedAt) {
+        timestamps.startedAt = now;
+        taskUpdateData.startedAt = now;
+      }
+
+      // Auto calculate loggedMinutes
+      const startedAt =
+        task.startedAt ??
+        timestamps.startedAt ??
+        now;
+
+      const autoCalculatedMinutes = Math.max(
+        1,
+        Math.ceil(
+          (now.getTime() -
+            new Date(startedAt).getTime()) /
+          (1000 * 60)
+        )
+      );
+
+      const finalLoggedMinutes = Math.max(
+        task.loggedMinutes ?? 0,
+        autoCalculatedMinutes
+      );
+
+      taskUpdateData.loggedMinutes =
+        finalLoggedMinutes;
+    }
+
+    // Reopen completed task
+    if (
+      status === TaskStatus.IN_PROGRESS &&
+      fromStatus === TaskStatus.COMPLETED
+    ) {
+      timestamps.completedAt = null;
+      taskUpdateData.completedAt = null;
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.task.update({
         where: { id },
-        data: { status, ...timestamps },
+        // data: { status, ...timestamps },
+        data: taskUpdateData,
         select: TASK_LIST_SELECT,
       });
 
@@ -1999,7 +2076,13 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
           projectId: task.projectId,
           taskId: id,
           fromState: { status: fromStatus },
-          toState: { status, ...timestamps },
+          // toState: { status, ...timestamps },
+          toState: {
+            status,
+            startedAt: taskUpdateData.startedAt ?? null,
+            completedAt: taskUpdateData.completedAt ?? null,
+            loggedMinutes: taskUpdateData.loggedMinutes ?? task.loggedMinutes ?? 0,
+          },
           meta: {
             note: note ?? null,
             changedBy: accountId,
@@ -2016,6 +2099,7 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
       status: updated.status,
       completedAt: updated.completedAt,
       updatedAt: updated.updatedAt,
+      loggedMinutes: updated.loggedMinutes,
       changedBy: accountId,
       note: note ?? null,
     });
@@ -2030,6 +2114,7 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
       id: updated.id,
       status: updated.status,
       completedAt: updated.completedAt,
+      loggedMinutes: updated.loggedMinutes,
       updatedAt: updated.updatedAt,
     });
   } catch (err: any) {
@@ -2089,23 +2174,37 @@ export async function completeTaskUser(req: Request, res: Response) {
       return sendErrorResponse(res, 409, "Cancelled tasks cannot be completed");
 
     const pendingChecklistCount = task.checklist.length;
-    const completedAt = new Date();
-    let durationMinutes: number | undefined = undefined;
 
-    if (task.startedAt) {
-      durationMinutes = getDurationMinutes(task.startedAt, completedAt);
-    }
+    const completedAt = new Date();
+
+    const startedAt =
+      task.startedAt ?? completedAt;
+
+    // Auto calculate duration
+    const autoCalculatedMinutes = Math.max(
+      1,
+      getDurationMinutes(startedAt, completedAt)
+    );
+
+    // Preserve higher existing time
+    const existingLoggedMinutes =
+      (task as any).loggedMinutes ?? 0;
+
+    const finalLoggedMinutes = Math.max(
+      existingLoggedMinutes,
+      autoCalculatedMinutes
+    );
 
     const updateData: any = {
       status: TaskStatus.COMPLETED,
       completedAt,
-    };
 
-    if (typeof durationMinutes === "number" && durationMinutes > 0) {
-      updateData.loggedMinutes = {
-        increment: durationMinutes,
-      };
-    }
+      // Safety fallback
+      startedAt,
+
+      // Final calculated value
+      loggedMinutes: finalLoggedMinutes,
+    };
 
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.task.update({
@@ -2151,7 +2250,7 @@ export async function completeTaskUser(req: Request, res: Response) {
       updatedAt: updated.updatedAt,
       completedBy: accountId,
       note: note ?? null,
-      durationMinutes,
+      durationMinutes: finalLoggedMinutes,
     });
     await triggerTaskNotification({
       taskId: id,
@@ -2568,26 +2667,156 @@ export async function updateChecklistItemUser(req: Request, res: Response) {
       });
 
       // Auto-complete task if all checklist items are now completed
+      // if (status === "COMPLETED") {
+      //   const pendingCount = await tx.checklistItem.count({
+      //     where: { taskId, status: "PENDING", id: { not: itemId } },
+      //   });
+
+      //   if (pendingCount === 0) {
+      //     const task = await tx.task.findUnique({
+      //       where: { id: taskId },
+      //       select: { status: true },
+      //     });
+
+      //     if (task && task.status !== TaskStatus.COMPLETED && task.status !== TaskStatus.CANCELLED) {
+      //       await tx.task.update({
+      //         where: { id: taskId },
+      //         data: { status: TaskStatus.COMPLETED, completedAt: new Date() },
+      //       });
+
+      //       await tx.taskAssignment.updateMany({
+      //         where: { taskId, accountId },
+      //         data: { status: TaskStatus.COMPLETED, updatedAt: new Date() },
+      //       });
+
+      //       await tx.activityLog.create({
+      //         data: {
+      //           entityType: "TASK",
+      //           entityId: taskId,
+      //           action: "COMPLETED",
+      //           performedBy: accountId,
+      //           taskId,
+      //           meta: { type: "auto_completed_via_checklist" },
+      //         },
+      //       });
+      //     }
+      //   }
+      // }
+
       if (status === "COMPLETED") {
+        const now = new Date();
+        const task = await tx.task.findUnique({
+          where: { id: taskId },
+          select: {
+            status: true,
+            startedAt: true,
+            loggedMinutes: true,
+          },
+        });
+
+        // Mark task started on first completed checklist item
+        if (
+          task &&
+          !task.startedAt &&
+          task.status !== TaskStatus.COMPLETED &&
+          task.status !== TaskStatus.CANCELLED
+        ) {
+          await tx.task.update({
+            where: { id: taskId },
+            data: {
+              startedAt: now,
+
+              // Auto move task to IN_PROGRESS
+              ...(task.status === TaskStatus.PENDING
+                ? {
+                  status: TaskStatus.IN_PROGRESS,
+                }
+                : {}),
+            },
+          });
+
+          // Update assignment statuses
+          await tx.taskAssignment.updateMany({
+            where: {
+              taskId,
+              accountId,
+              status: TaskStatus.PENDING,
+            },
+            data: {
+              status: TaskStatus.IN_PROGRESS,
+              updatedAt: now,
+            },
+          });
+
+          await tx.activityLog.create({
+            data: {
+              entityType: "TASK",
+              entityId: taskId,
+              action: "UPDATED",
+              performedBy: accountId,
+              taskId,
+              meta: {
+                type: "task_started_via_checklist",
+                checklistItemId: itemId,
+              },
+            },
+          });
+        }
+
+        // Auto-complete task if all checklist items are now completed
         const pendingCount = await tx.checklistItem.count({
-          where: { taskId, status: "PENDING", id: { not: itemId } },
+          where: {
+            taskId,
+            status: "PENDING",
+            id: { not: itemId },
+          },
         });
 
         if (pendingCount === 0) {
-          const task = await tx.task.findUnique({
+          const latestTask = await tx.task.findUnique({
             where: { id: taskId },
-            select: { status: true },
+            select: {
+              status: true,
+              startedAt: true,
+              loggedMinutes: true,
+            },
           });
 
-          if (task && task.status !== TaskStatus.COMPLETED && task.status !== TaskStatus.CANCELLED) {
+          if (
+            latestTask &&
+            latestTask.status !== TaskStatus.COMPLETED &&
+            latestTask.status !== TaskStatus.CANCELLED
+          ) {
+            const startedAt = latestTask.startedAt ?? now;
+
+            // Calculate duration in minutes
+            const calculatedMinutes = Math.max(
+              latestTask.loggedMinutes ?? 0,
+              Math.ceil(
+                (now.getTime() - new Date(startedAt).getTime()) /
+                (1000 * 60)
+              )
+            );
             await tx.task.update({
               where: { id: taskId },
-              data: { status: TaskStatus.COMPLETED, completedAt: new Date() },
+              data: {
+                status: TaskStatus.COMPLETED,
+                completedAt: now,
+
+                // Safety fallback
+                startedAt,
+
+                // Auto calculated work duration
+                loggedMinutes: calculatedMinutes,
+              },
             });
 
             await tx.taskAssignment.updateMany({
               where: { taskId, accountId },
-              data: { status: TaskStatus.COMPLETED, updatedAt: new Date() },
+              data: {
+                status: TaskStatus.COMPLETED,
+                updatedAt: now,
+              },
             });
 
             await tx.activityLog.create({
@@ -2597,12 +2826,16 @@ export async function updateChecklistItemUser(req: Request, res: Response) {
                 action: "COMPLETED",
                 performedBy: accountId,
                 taskId,
-                meta: { type: "auto_completed_via_checklist" },
+                meta: {
+                  type: "auto_completed_via_checklist",
+                },
               },
             });
           }
         }
       }
+
+
       return item;
     });
 

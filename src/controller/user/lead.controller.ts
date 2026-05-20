@@ -574,27 +574,6 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
 
     // console.log("\n\n\nisTerminalStatus\n", isTerminalStatus);
 
-    // verify access: ensure the lead is currently assigned to this user (directly or via team)
-    // const lead = await prisma.lead.findFirst({
-    //   where: {
-    //     id,
-    //     assignments: {
-    //       some: {
-    //         isActive: true,
-    //         OR: [
-    //           { accountId: accountId },
-    //           {
-    //             team: {
-    //               members: {
-    //                 some: { accountId: accountId },
-    //               },
-    //             },
-    //           },
-    //         ],
-    //       },
-    //     },
-    //   },
-    // });
     const lead = await prisma.lead.findFirst({
       where: {
         id,
@@ -740,12 +719,6 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
         isImportant: updatedLead.isImportant,
       };
 
-      // console.log("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n lead-->\n", lead);
-      // console.log("\n updatedLead-->\n", updatedLead);
-      // console.log("\n fromState-->\n", fromState);
-      // console.log("\n toState-->\n", toState);
-      // console.log("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
-
       // Detect what changed
       const changedFields: Record<string, { from: any; to: any }> = {};
       if (fromState.status !== toState.status)
@@ -824,6 +797,8 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
           },
         });
       }
+
+      
 
       return updatedLead;
     });

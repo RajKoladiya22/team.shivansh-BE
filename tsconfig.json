@@ -7,13 +7,16 @@
     "experimentalDecorators": true,
     "allowSyntheticDefaultImports": true,
     "target": "ES2019",
-    "lib": ["ES2019", "DOM"],
+    "lib": [
+      "ES2019",
+      "DOM"
+    ],
     "esModuleInterop": true,
     "moduleResolution": "node16",
-    "ignoreDeprecations": "5.0",
+    "ignoreDeprecations": "6.0",
     "sourceMap": true,
     "outDir": "./dist",
-    "baseUrl": ".",
+    "baseUrl": "./",
     "incremental": true,
     "skipLibCheck": true,
     "strictNullChecks": true,
@@ -23,15 +26,35 @@
     "noFallthroughCasesInSwitch": false,
     "allowJs": true,
     "strict": true,
-    "types": ["node", "multer"], 
+    "types": [
+      "node",
+      "multer"
+    ],
     "paths": {
-      "@root/*": ["./"],
-      "@config/*": ["src/config/*"],
-      "@core/*": ["src/core/*"],
-      "@domains/*": ["src/domains/*"],
-      "@routes/*": ["src/routes/*"],
-    }
+      "@root/*": [
+        "./*"
+      ],
+      "@config/*": [
+        "./src/config/*"
+      ],
+      "@core/*": [
+        "./src/core/*"
+      ],
+      "@controller/*": [
+        "./src/controller/*"
+      ],
+      "@routes/*": [
+        "./src/routes/*"
+      ],
+    },
   },
-  "include": ["src/**/*.ts", "src/types/**/*.d.ts", "prisma.config.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*.ts",
+    "src/types/**/*.d.ts",
+    "prisma.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }

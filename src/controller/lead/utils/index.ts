@@ -1,6 +1,8 @@
 
 import { randomUUID } from "crypto";
 import { prisma } from "../../../config/database.config";
+import { Lead_Status, PrismaClient } from "@prisma/client";
+import { getIo } from "../../../core/utils/socket";
 
 
 export interface LeadProductItem {
@@ -1294,3 +1296,190 @@ export function normalizeIncomingProducts(
     return null;
 }
 
+
+type UpdateUserProductExpertiseArgs = {
+    prisma: PrismaClient | Omit<PrismaClient, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">;
+    accountId: string;
+    productCatalogId?: string | null;
+    previousStatus?: Lead_Status | null;
+    newStatus: Lead_Status;
+    leadId?: string | null;
+};
+
+export async function updateUserProductExpertise({
+    prisma,
+    accountId,
+    productCatalogId,
+    previousStatus,
+    newStatus,
+    leadId,
+}: UpdateUserProductExpertiseArgs) {
+    if (!productCatalogId || !accountId) return;
+
+    // avoid unnecessary updates
+    if (previousStatus === newStatus) return;
+
+    const now = new Date();
+
+    // ── status transition flags ───────────────────────────────────────────────
+    const enteredDemo = previousStatus !== "DEMO_DONE" && newStatus === "DEMO_DONE";
+    const leftDemo = previousStatus === "DEMO_DONE" && newStatus !== "DEMO_DONE";
+    const enteredConverted = previousStatus !== "CONVERTED" && newStatus === "CONVERTED";
+    const leftConverted = previousStatus === "CONVERTED" && newStatus !== "CONVERTED";
+
+    // ── upsert expertise row ──────────────────────────────────────────────────
+    const expertise = await prisma.userProductExpertise.upsert({
+        where: {
+            userId_productCatalogId: {
+                userId: accountId,
+                productCatalogId,
+            },
+        },
+
+        create: {
+            userId: accountId,
+            productCatalogId,
+            leadsCount: 1,
+            demoCount: enteredDemo ? 1 : 0,
+            leadsConverted: enteredConverted ? 1 : 0,
+            completedProjects: enteredConverted ? 1 : 0,
+            lastDemoAt: enteredDemo ? now : null,
+            lastLeadAt: now,
+            successRate: enteredConverted ? 100 : 0,
+        },
+
+        update: {
+            // increment leadsCount only on the lead's first status transition
+            ...(previousStatus == null ? { leadsCount: { increment: 1 } } : {}),
+
+            // demo
+            ...(enteredDemo ? { demoCount: { increment: 1 }, lastDemoAt: now } : {}),
+            ...(leftDemo ? { demoCount: { decrement: 1 } } : {}),
+
+            // converted
+            ...(enteredConverted
+                ? { leadsConverted: { increment: 1 }, completedProjects: { increment: 1 } }
+                : {}),
+            ...(leftConverted
+                ? { leadsConverted: { decrement: 1 }, completedProjects: { decrement: 1 } }
+                : {}),
+
+            lastLeadAt: now,
+        },
+
+        select: {
+            id: true,
+            leadsCount: true,
+            leadsConverted: true,
+        },
+    });
+
+    // ── recalculate successRate ───────────────────────────────────────────────
+    const successRate =
+        expertise.leadsCount > 0
+            ? Number(((expertise.leadsConverted / expertise.leadsCount) * 100).toFixed(2))
+            : 0;
+
+    await prisma.userProductExpertise.update({
+        where: { id: expertise.id },
+        data: { successRate },
+    });
+
+    // ── CustomerProduct: mark purchase on CONVERTED, revert on un-convert ────
+    if (!leadId) return;
+
+    if (enteredConverted) {
+        await prisma.customerProduct.updateMany({
+            where: { leadId },
+            data: {
+                isPurchase: true,
+                purchasedAt: now,
+                isActive: true,
+                isExpired: false,
+            },
+        });
+    }
+
+    if (leftConverted) {
+        await prisma.customerProduct.updateMany({
+            where: { leadId },
+            data: {
+                isPurchase: false,
+            },
+        });
+    }
+}
+
+
+export async function stopWorkIfActive(tx: any, accountId: string, leadId: string) {
+    const account = await tx.account.findUnique({
+        where: { id: accountId },
+        select: { activeLeadId: true },
+    });
+
+    // Only stop if user is working on THIS lead
+    if (account?.activeLeadId !== leadId) return;
+
+    const lastStart = await tx.leadActivityLog.findFirst({
+        where: {
+            leadId,
+            performedBy: accountId,
+            action: "WORK_STARTED",
+        },
+        orderBy: { createdAt: "desc" },
+    });
+
+    if (!lastStart) return;
+
+    const now = new Date();
+    const startedAtIso =
+        (lastStart.meta as any)?.startedAt ?? lastStart.createdAt.toISOString();
+
+    const durationSeconds = Math.max(
+        0,
+        Math.floor((now.getTime() - new Date(startedAtIso).getTime()) / 1000),
+    );
+
+    // WORK_ENDED log
+    await tx.leadActivityLog.create({
+        data: {
+            leadId,
+            action: "WORK_ENDED",
+            performedBy: accountId,
+            meta: {
+                startedAt: startedAtIso,
+                endedAt: now.toISOString(),
+                durationSeconds,
+                reason: "LEAD_STATUS_TERMINAL",
+            },
+        },
+    });
+
+    // increment lead work time
+    await tx.lead.update({
+        where: { id: leadId },
+        data: {
+            totalWorkSeconds: { increment: durationSeconds },
+            isWorking: false,
+        },
+    });
+
+    // clear busy state.   const Acc =
+    await tx.account.update({
+        where: { id: accountId },
+        data: {
+            isBusy: false,
+            activeLeadId: null,
+        },
+    });
+
+    // console.log("\n\n\n\n\n\nAcc\n", Acc, "\n\n\n\n\n\n\n");
+
+    const io = getIo();
+    io.emit("busy:changed", {
+        accountId,
+        leadId: leadId,
+        isBusy: false,
+        source: "WORK_ENDED",
+    });
+}

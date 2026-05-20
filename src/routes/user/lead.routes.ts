@@ -3,9 +3,10 @@ import { Router } from "express";
 import { requireAuth } from "../../core/middleware/auth";
 
 import {
+  // createMyLead,
+  // updateMyLeadStatus,
   listMyLeads,
   getMyLeadById,
-  updateMyLeadStatus,
   getMyLeadActivity,
   getMyLeadStatusStats,
   removeLeadHelper,
@@ -13,7 +14,6 @@ import {
   startLeadWork,
   stopLeadWork,
   getMyActiveWork,
-  createMyLead,
   getLeadValueStatsUser,
   createFollowUp,
   updateFollowUp,
@@ -21,6 +21,8 @@ import {
   listFollowUps,
   deleteFollowUp,
 } from "../../controller/user/lead.controller";
+import { createMyLead } from "../../controller/lead/create.controller";
+import { updateMyLeadStatus } from "../../controller/lead/update.controller";
 
 const router = Router();
 
