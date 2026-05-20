@@ -975,7 +975,7 @@ export async function listTasksAdmin(req: Request, res: Response) {
     } = req.query as Record<string, string>;
 
     const pageNumber = Math.max(Number(page), 1);
-    const pageSize = Math.min(Number(limit), 100);
+    const pageSize = Math.min(Number(limit), 150);
     const skip = (pageNumber - 1) * pageSize;
 
     const where: any = { deletedAt: null };
