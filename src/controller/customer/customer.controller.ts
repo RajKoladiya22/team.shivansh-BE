@@ -324,7 +324,7 @@ export async function getCustomerDetails(req: Request, res: Response) {
             lastName: true,
           },
         },
-        customerProducts : true
+        customerProducts: true
       },
     });
 
@@ -415,6 +415,32 @@ export async function createCustomer(req: Request, res: Response) {
   }
 }
 
+// export async function updateCustomer(req: Request, res: Response) {
+//   try {
+//     if (!req.user?.id) return sendErrorResponse(res, 401, "Unauthorized");
+
+//     const { id } = req.params;
+
+//     const existing = await prisma.customer.findUnique({ where: { id } });
+//     if (!existing) return sendErrorResponse(res, 404, "Customer not found");
+
+//     const updated = await prisma.customer.update({
+//       where: { id },
+//       data: {
+//         ...req.body,
+//         normalizedMobile: req.body.mobile || req.body.normalizedMobile,
+//         joiningDate: req.body.joiningDate
+//           ? new Date(req.body.joiningDate)
+//           : undefined,
+//       },
+//     });
+
+//     return sendSuccessResponse(res, 200, "Customer updated", updated);
+//   } catch (err: any) {
+//     return sendErrorResponse(res, 500, err.message);
+//   }
+// }
+
 export async function updateCustomer(req: Request, res: Response) {
   try {
     if (!req.user?.id) return sendErrorResponse(res, 401, "Unauthorized");
@@ -424,15 +450,44 @@ export async function updateCustomer(req: Request, res: Response) {
     const existing = await prisma.customer.findUnique({ where: { id } });
     if (!existing) return sendErrorResponse(res, 404, "Customer not found");
 
-    const updated = await prisma.customer.update({
-      where: { id },
-      data: {
-        ...req.body,
-        normalizedMobile: req.body.mobile || req.body.normalizedMobile,
-        joiningDate: req.body.joiningDate
-          ? new Date(req.body.joiningDate)
-          : undefined,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      // Update customer
+      const customer = await tx.customer.update({
+        where: { id },
+        data: {
+          ...req.body,
+          normalizedMobile: req.body.mobile || req.body.normalizedMobile,
+          joiningDate: req.body.joiningDate
+            ? new Date(req.body.joiningDate)
+            : undefined,
+        },
+      });
+
+      // ── Sync changes to related leads ───────────────────────────────────
+      // Only update lead fields if they were actually changed in the request
+      const leadUpdateData: any = {};
+
+      if (req.body.name !== undefined) {
+        leadUpdateData.customerName = req.body.name;
+      }
+
+      if (req.body.mobile !== undefined || req.body.normalizedMobile !== undefined) {
+        leadUpdateData.mobileNumber = req.body.mobile || req.body.normalizedMobile;
+      }
+
+      if (req.body.customerCompanyName !== undefined) {
+        leadUpdateData.customerCompanyName = req.body.customerCompanyName;
+      }
+
+      // Only run the update if there are fields to sync
+      if (Object.keys(leadUpdateData).length > 0) {
+        await tx.lead.updateMany({
+          where: { customerId: id },
+          data: leadUpdateData,
+        });
+      }
+
+      return customer;
     });
 
     return sendSuccessResponse(res, 200, "Customer updated", updated);
