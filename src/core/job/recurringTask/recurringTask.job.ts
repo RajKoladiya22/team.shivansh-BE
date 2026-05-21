@@ -298,6 +298,7 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
       dueDate: true,
       recurrenceType: true,
       recurrenceRule: true,
+      isLearning: true,
 
       assignments: {
         select: { type: true, accountId: true, teamId: true, note: true },
@@ -453,6 +454,8 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
             estimatedMinutes: task.estimatedMinutes,
             isSelfTask: task.isSelfTask,
             createdBy: task.createdBy,
+
+            isLearning: task.isLearning === true,
 
             // Recurrence linkage
             recurrenceParentId: task.id,
