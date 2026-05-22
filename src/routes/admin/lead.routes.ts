@@ -30,12 +30,12 @@ import {
   sendLeadReminder,
 } from "../../controller/admin/lead.controller";
 import { createLeadAdmin, addLeadState } from "../../controller/lead/create.controller";
-import { updateLeadAdmin, updateLeadProductAdmin, addLeadProductsAdmin, updateLeadCustomerAdmin } from "../../controller/lead/update.controller";
+import { updateLeadAdmin, updateLeadProductAdmin, addLeadProductsAdmin, updateLeadCustomerAdmin, updateLeadState } from "../../controller/lead/update.controller";
 import { listLeadsAdmin, getLeadCountByStatusAdmin, getLeadValueStatsAdmin, getLeadActivityTimelineAdmin } from "../../controller/lead/list.controller";
 import { getLeadByIdAdmin } from "../../controller/lead/details.controller";
 import { assignLeadAdmin } from "../../controller/lead/reassign.controller";
 import { closeLeadAdmin } from "../../controller/lead/close.controller";
-import { deleteLeadPermanentAdmin } from "../../controller/lead/delete.controller";
+import { deleteLeadPermanentAdmin, deleteLeadState } from "../../controller/lead/delete.controller";
 
 const router = Router();
 
@@ -43,7 +43,9 @@ const router = Router();
 
 router.patch("/leads/:id/product", requireAuth, updateLeadProductAdmin);
 router.post("/leads/:id/products", requireAuth, addLeadProductsAdmin);
-router.post("/leads/:id/states", requireAuth, addLeadState);
+router.post("/leads/:id/states", requireAuth, addLeadState); 
+router.patch("/leads/:id/states/:stateId", requireAuth, updateLeadState); 
+router.delete("/leads/:id/states/:stateId", requireAuth, deleteLeadState);
 
 router
   .route("/leads")

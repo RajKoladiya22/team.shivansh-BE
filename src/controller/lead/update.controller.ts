@@ -1345,6 +1345,120 @@ export async function updateLeadCustomerAdmin(req: Request, res: Response) {
 }
 
 
+export async function updateLeadState(req: Request, res: Response) {
+    try {
+        const performerAccountId = req.user?.accountId;
+        if (!performerAccountId)
+            return sendErrorResponse(res, 401, "Invalid session user");
+
+        const { id, stateId } = req.params;
+        const { text } = req.body as { text?: string };
+
+        if (!text?.trim())
+            return sendErrorResponse(res, 400, "text is required");
+
+        const lead = await prisma.lead.findUnique({
+            where: { id },
+            select: {
+                id: true,
+                states: true,
+            },
+        });
+
+        if (!lead) {
+            return sendErrorResponse(res, 404, "Lead not found");
+        }
+
+        const states = Array.isArray(lead.states)
+            ? (lead.states as any[])
+            : [];
+
+        const stateIndex = states.findIndex((item) => item?.id === stateId);
+
+        if (stateIndex === -1) {
+            return sendErrorResponse(res, 404, "State not found");
+        }
+
+        const oldEntry = states[stateIndex];
+        const updatedEntry: any = {
+            ...oldEntry,
+            text: text.trim(),
+            edited: true,
+            updatedAt: new Date().toISOString(),
+        };
+
+        const updatedStates = [...states];
+        updatedStates[stateIndex] = updatedEntry;
+
+        const updated = await prisma.lead.update({
+            where: { id },
+            data: {
+                states: updatedStates,
+            },
+            select: {
+                id: true,
+                states: true,
+                updatedAt: true,
+            },
+        });
+
+        /* ── Activity log ── */
+        try {
+            await prisma.leadActivityLog.create({
+                data: {
+                    leadId: id,
+                    action: "UPDATED",
+                    performedBy: performerAccountId,
+                    meta: {
+                        type: "STATE_UPDATED",
+                        stateId,
+                        from: oldEntry.text,
+                        to: updatedEntry.text,
+                    },
+                },
+            });
+        } catch (logErr) {
+            console.warn("Activity log creation failed:", logErr);
+        }
+
+        /* ── Socket patch ── */
+        try {
+            const io = getIo();
+            const patchPayload = {
+                id,
+                patch: {
+                    stateAdded: updatedEntry,
+                    updatedAt: updated.updatedAt,
+                    states: updatedStates, // ← Include full array for socket sync
+                },
+            };
+            io.to("leads:admin").emit("lead:patch", patchPayload);
+            io.to(`leads:user:${performerAccountId}`).emit("lead:patch", patchPayload);
+        } catch (socketErr) {
+            console.warn("Socket emit failed:", socketErr);
+        }
+
+        return sendSuccessResponse(res, 200, "State updated", {
+            state: updatedEntry,
+            states: updatedStates, // ← Return full array
+        });
+    } catch (err: any) {
+        console.error("updateLeadState error:", err);
+        return sendErrorResponse(
+            res,
+            500,
+            err?.message ?? "Failed to update state",
+        );
+    }
+}
+
+
+
+
+
+
+
+
 
 
 /**

@@ -192,3 +192,104 @@ export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
         return sendErrorResponse(res, 500, err?.message ?? "Failed to permanently delete lead");
     }
 }
+
+
+/**
+ * DELETE /admin/leads/:id/states/:stateId
+ * Deletes a state entry
+ */
+export async function deleteLeadState(req: Request, res: Response) {
+    try {
+        const performerAccountId = req.user?.accountId;
+
+        if (!performerAccountId) {
+            return sendErrorResponse(res, 401, "Invalid session user");
+        }
+
+        const { id, stateId } = req.params;
+
+        const lead = await prisma.lead.findUnique({
+            where: { id },
+            select: {
+                id: true,
+                states: true,
+            },
+        });
+
+        if (!lead) {
+            return sendErrorResponse(res, 404, "Lead not found");
+        }
+
+        const states = Array.isArray(lead.states)
+            ? (lead.states as any[])
+            : [];
+
+        const stateToDelete = states.find((item) => item?.id === stateId);
+
+        if (!stateToDelete) {
+            return sendErrorResponse(res, 404, "State not found");
+        }
+
+        const filteredStates = states.filter((item) => item?.id !== stateId);
+
+        const updatedLead = await prisma.lead.update({
+            where: { id },
+            data: {
+                states: filteredStates, // ← Empty array if this was the last one
+            },
+            select: {
+                id: true,
+                states: true,
+                updatedAt: true,
+            },
+        });
+
+        /* ── Activity log ── */
+        try {
+            await prisma.leadActivityLog.create({
+                data: {
+                    leadId: id,
+                    action: "UPDATED",
+                    performedBy: performerAccountId,
+                    meta: {
+                        type: "STATE_DELETED",
+                        stateId,
+                        text: stateToDelete.text,
+                    },
+                },
+            });
+        } catch (logErr) {
+            console.warn("Activity log creation failed:", logErr);
+        }
+
+        /* ── Socket patch ── */
+        try {
+            const io = getIo();
+            const patchPayload = {
+                id,
+                patch: {
+                    stateAdded: [],
+                    updatedAt: updatedLead.updatedAt,
+                    states: filteredStates, // ← Include full array for socket sync
+                },
+            };
+            io.to("leads:admin").emit("lead:patch", patchPayload);
+            io.to(`leads:user:${performerAccountId}`).emit("lead:patch", patchPayload);
+        } catch (socketErr) {
+            console.warn("Socket emit failed:", socketErr);
+        }
+
+        return sendSuccessResponse(res, 200, "State deleted", {
+            deletedStateId: stateId,
+            states: filteredStates, // ← Return filtered array
+        });
+    } catch (err: any) {
+        console.error("deleteLeadState error:", err);
+        return sendErrorResponse(
+            res,
+            500,
+            err?.message ?? "Failed to delete state",
+        );
+    }
+}
+

@@ -307,13 +307,13 @@ export async function addLeadState(req: Request, res: Response) {
         const performerAccountId = req.user?.accountId;
         if (!performerAccountId)
             return sendErrorResponse(res, 401, "Invalid session user");
-
+ 
         const { id } = req.params;
         const { text } = req.body as { text?: string };
-
+ 
         if (!text?.trim())
             return sendErrorResponse(res, 400, "text is required");
-
+ 
         /* ── Fetch lead + performer info in parallel ── */
         const [lead, performer] = await Promise.all([
             prisma.lead.findUnique({
@@ -330,48 +330,63 @@ export async function addLeadState(req: Request, res: Response) {
                 },
             }),
         ]);
-
+ 
         if (!lead)      return sendErrorResponse(res, 404, "Lead not found");
         if (!performer) return sendErrorResponse(res, 404, "Performer not found");
-
+ 
         /* ── Build new entry ── */
         const newEntry = {
-            id:   randomUUID(),
-            text: text.trim(),
+            id:     randomUUID(),
+            text:   text.trim(),
             by: {
                 accountId: performer.id,
                 firstName: performer.firstName,
                 lastName:  performer.lastName,
                 avatar:    performer.avatar ?? null,
             },
-            at: new Date().toISOString(),
+            at:     new Date().toISOString(),
+            edited: false,
         };
-
+ 
         /* ── Append — never replace ── */
-        const existing: any[] = Array.isArray(lead.states)
-            ? (lead.states as any[])
+        const existingStates = Array.isArray(lead.states)
+            ? (lead.states)
             : [];
-
+ 
+        const allStates = [...existingStates, newEntry];
+ 
         const updated = await prisma.lead.update({
             where: { id },
-            data:  { states: [...existing, newEntry] },
-            select: { id: true, states: true, updatedAt: true },
-        });
-
-        /* ── Activity log ── */
-        await prisma.leadActivityLog.create({
-            data: {
-                leadId:      id,
-                action:      "UPDATED",
-                performedBy: performerAccountId,
-                meta: {
-                    type:    "STATE_ADDED",
-                    entryId: newEntry.id,
-                    text:    newEntry.text,
-                },
+            data:  { states: allStates },
+            select: { 
+                id: true, 
+                states: true, 
+                updatedAt: true,
+                status: true,
+                customerName: true,
+                mobileNumber: true,
             },
         });
-
+ 
+        /* ── Activity log ── */
+        try {
+            await prisma.leadActivityLog.create({
+                data: {
+                    leadId:      id,
+                    action:      "UPDATED",
+                    performedBy: performerAccountId,
+                    meta: {
+                        type:    "STATE_ADDED",
+                        entryId: newEntry.id,
+                        text:    newEntry.text,
+                    },
+                },
+            });
+        } catch (logErr) {
+            console.warn("Activity log creation failed:", logErr);
+            // Don't fail the request if logging fails
+        }
+ 
         /* ── Socket patch ── */
         try {
             const io = getIo();
@@ -380,23 +395,25 @@ export async function addLeadState(req: Request, res: Response) {
                 patch: {
                     stateAdded: newEntry,
                     updatedAt: updated.updatedAt,
+                    states: allStates, // ← Include full array for socket sync
                 },
             };
             io.to("leads:admin").emit("lead:patch", patchPayload);
             io.to(`leads:user:${performerAccountId}`).emit("lead:patch", patchPayload);
-        } catch {
-            console.warn("Socket emit skipped");
+        } catch (socketErr) {
+            console.warn("Socket emit failed:", socketErr);
         }
-
+ 
         return sendSuccessResponse(res, 201, "State added", {
             entry:  newEntry,
-            states: updated.states,
+            states: allStates, // ← Return full states array
         });
     } catch (err: any) {
         console.error("addLeadState error:", err);
         return sendErrorResponse(res, 500, err?.message ?? "Failed to add state");
     }
 }
+
 
 
 
