@@ -415,32 +415,6 @@ export async function createCustomer(req: Request, res: Response) {
   }
 }
 
-// export async function updateCustomer(req: Request, res: Response) {
-//   try {
-//     if (!req.user?.id) return sendErrorResponse(res, 401, "Unauthorized");
-
-//     const { id } = req.params;
-
-//     const existing = await prisma.customer.findUnique({ where: { id } });
-//     if (!existing) return sendErrorResponse(res, 404, "Customer not found");
-
-//     const updated = await prisma.customer.update({
-//       where: { id },
-//       data: {
-//         ...req.body,
-//         normalizedMobile: req.body.mobile || req.body.normalizedMobile,
-//         joiningDate: req.body.joiningDate
-//           ? new Date(req.body.joiningDate)
-//           : undefined,
-//       },
-//     });
-
-//     return sendSuccessResponse(res, 200, "Customer updated", updated);
-//   } catch (err: any) {
-//     return sendErrorResponse(res, 500, err.message);
-//   }
-// }
-
 export async function updateCustomer(req: Request, res: Response) {
   try {
     if (!req.user?.id) return sendErrorResponse(res, 401, "Unauthorized");

@@ -531,6 +531,82 @@ export async function closeFollowUpsOnStatusChange(
     }
 }
 
+export async function stopOnWorking(
+    tx: any,
+    leadId: string,
+    accountId: string,
+): Promise<number> {
+    const now = new Date();
+
+    // Find active assignment/work session
+    const activeAssignment = await tx.leadAssignment.findFirst({
+        where: {
+            leadId,
+            accountId,
+            isActive: true,
+        },
+        orderBy: {
+            assignedAt: "desc",
+        },
+        select: {
+            id: true,
+            WorkSeconds: true,
+            assignedAt: true,
+        },
+    });
+
+    let sessionSeconds = 0;
+
+    if (activeAssignment?.assignedAt) {
+        sessionSeconds = Math.max(
+            0,
+            Math.floor(
+                (now.getTime() - activeAssignment.assignedAt.getTime()) / 1000,
+            ),
+        );
+    }
+
+    // Update lead total work seconds
+    await tx.lead.update({
+        where: {
+            id: leadId,
+        },
+        data: {
+            isWorking: false,
+            totalWorkSeconds: {
+                increment: sessionSeconds,
+            },
+        },
+    });
+
+    // Update assignment work seconds
+    if (activeAssignment) {
+        await tx.leadAssignment.update({
+            where: {
+                id: activeAssignment.id,
+            },
+            data: {
+                WorkSeconds: {
+                    increment: sessionSeconds,
+                },
+            },
+        });
+    }
+
+    // Release employee
+    await tx.account.update({
+        where: {
+            id: accountId,
+        },
+        data: {
+            isBusy: false,
+            activeLeadId: null,
+        },
+    });
+
+    return sessionSeconds;
+}
+
 /**
  * Syncs product changes from a Lead update into CustomerProduct rows.
  * Called inside a transaction when lead.product or lead.productTitle changes.

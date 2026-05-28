@@ -117,7 +117,9 @@ model Account {
   followUpsCreated LeadFollowUp[] @relation("FollowUpCreatedBy")
   followUpsDone    LeadFollowUp[] @relation("FollowUpDoneBy")
 
-  productExpertise UserProductExpertise[]
+  productExpertise         UserProductExpertise[]
+  cloudServices            CloudService[]
+  cloudServiceActivityLogs CloudServiceActivityLog[]
 
   @@index([isActive])
   @@index([jobType])
@@ -1284,6 +1286,7 @@ model Lead {
   accounts         Account[]
   quotations       Quotation[]
   customerProducts CustomerProduct[]
+  cloudServices    CloudService[]
 
   @@index([isWorking])
   @@index([createdAt, status])
@@ -1471,8 +1474,9 @@ model Customer {
   tncAcceptedAt DateTime?
   tncToken      String?   @unique
 
-  leads      Lead[]
-  quotations Quotation[]
+  leads         Lead[]
+  quotations    Quotation[]
+  cloudServices CloudService[]
 
   @@index([normalizedMobile])
   @@index([customerCompanyName])
@@ -2772,4 +2776,173 @@ model UserProductExpertise {
   @@index([expertiseLevel])
   @@index([successRate])
   @@index([leadsConverted])
+}
+
+// ------------------------------------------------------------------
+// Cloud 
+// ------------------------------------------------------------------
+
+enum CloudServiceType {
+  MIRACLE
+  COMHARD
+}
+
+enum CloudRenewalType {
+  QUARTERLY
+  SIX_MONTHS
+  YEARLY
+}
+
+model CloudService {
+  id String @id @default(uuid())
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  type CloudServiceType
+
+  // Shared fields
+  cost          Decimal?         @db.Decimal(12, 2)
+  renewalType   CloudRenewalType
+  purchaseDate  DateTime?
+  expiryDate    DateTime?
+  isDriveSetup  Boolean          @default(false)
+  isActive      Boolean          @default(true)
+  adminPassword String? // consider encryption
+
+  // Miracle-specific
+  ipAddress String?
+  userCount Int? // CloudServiceUser count for Miracle, since they don't have separate users in their system
+
+  // Comhard-specific
+  adminId        String? // for Comhard, this is the userEmail of the admin
+  comhardSubId   String?   @unique
+  isOnTrial      Boolean   @default(false)
+  trialStartDate DateTime?
+  trialEndDate   DateTime?
+  trialDoneAt    DateTime?
+  numberOfTally  Int? // CloudServiceUser count for Comhard, since they have separate users in their system and we can track this accurately
+
+  // Relations
+  users CloudServiceUser[]
+
+  createdBy                String?
+  createdByAcc             Account?                  @relation(fields: [createdBy], references: [id])
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  cloudServiceActivityLogs CloudServiceActivityLog[]
+
+  @@index([customerId])
+  @@index([type])
+  @@index([isActive])
+  @@index([renewalType, purchaseDate]) // for renewal reminders
+}
+
+model CloudServiceUser {
+  id String @id @default(uuid())
+
+  cloudServiceId String
+  cloudService   CloudService @relation(fields: [cloudServiceId], references: [id], onDelete: Cascade)
+
+  // Works for both Miracle & Comhard
+  username   String?
+  password   String? // consider encryption
+  userCost   Decimal?  @db.Decimal(12, 2)
+  note       String?
+  isAdmin    Boolean? // Comhard only
+  purchaseAt DateTime?
+
+  // For Comhard multi-tally, we can associate users with a specific tally serial number
+  tallyNumber String? // tally serial number and null for Miracle
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([cloudServiceId])
+  @@index([cloudServiceId, tallyNumber])
+}
+
+enum CloudServiceActivityAction {
+  // Lifecycle
+  CREATED // service first created
+  UPDATED // general field update (non-specific)
+  DEACTIVATED // isActive flipped to false
+  REACTIVATED // isActive flipped back to true
+
+  // Renewal
+  RENEWED // renewalType / purchaseDate / cost updated for renewal
+  RENEWAL_TYPE_CHANGED // renewalType changed (e.g. QUARTERLY → YEARLY)
+
+  // Trial (Comhard only)
+  TRIAL_STARTED // isOnTrial set to true, trial dates calculated
+  TRIAL_EXTENDED // trialEndDate pushed forward
+  TRIAL_CONVERTED // trial → paid (isOnTrial false, comhardSubId set)
+  TRIAL_ENDED // trialDoneAt set / trial manually closed
+
+  // Users
+  USER_ADDED // one or more CloudServiceUsers added
+  USER_REMOVED // a CloudServiceUser deactivated/deleted
+  USER_UPDATED // username / password / role changed on a user
+
+  // Drive & setup
+  DRIVE_SETUP_ENABLED // isDriveSetup flipped to true
+  DRIVE_SETUP_DISABLED // isDriveSetup flipped to false
+
+  // Admin
+  NOTE_ADDED // standalone remark/note added without other changes
+}
+
+// ── Model ─────────────────────────────────────────────────────────────────────
+
+model CloudServiceActivityLog {
+  id String @id @default(uuid())
+
+  cloudServiceId String
+  cloudService   CloudService @relation(fields: [cloudServiceId], references: [id], onDelete: Cascade)
+
+  action CloudServiceActivityAction
+
+  // Structured diff — what changed (optional; omit for CREATED / NOTE_ADDED)
+  meta Json?
+  // Shape examples:
+  //
+  // UPDATED / RENEWED / RENEWAL_TYPE_CHANGED:
+  // { changes: { renewalType: { from: "QUARTERLY", to: "YEARLY" }, cost: { from: 3000, to: 4000 } } }
+  //
+  // TRIAL_STARTED:
+  // { trialStartDate: "2026-05-27", trialEndDate: "2026-06-03" }
+  //
+  // TRIAL_EXTENDED:
+  // { previousEndDate: "2026-06-03", newEndDate: "2026-06-10" }
+  //
+  // TRIAL_CONVERTED:
+  // { comhardSubId: "SUB-123", convertedAt: "2026-06-03" }
+  //
+  // USER_ADDED:
+  // { users: [{ username: "ravi", isAdmin: true, tallyNumber: 1 }] }
+  //
+  // USER_REMOVED:
+  // { userId: "abc123", username: "ravi" }
+  //
+  // USER_UPDATED:
+  // { userId: "abc123", changes: { username: { from: "old", to: "new" } } }
+
+  // Free-text note (optional — always present for NOTE_ADDED, optional for others)
+  remark String?
+
+  performedBy    String? // accountId; null = system/cron
+  performedByAcc Account? @relation(fields: [performedBy], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([cloudServiceId])
+  @@index([action])
+  @@index([performedBy])
+  @@index([createdAt])
+  @@index([cloudServiceId, createdAt]) // fetch full log for one service, ordered
+  @@index([cloudServiceId, action]) // filter by action type per service
 }

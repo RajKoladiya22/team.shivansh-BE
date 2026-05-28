@@ -16,6 +16,7 @@ import {
     resolvePerformerSnapshot,
     stopWorkIfActive,
     updateUserProductExpertise,
+    stopOnWorking,
 } from "./utils";
 import { randomUUID } from "crypto";
 
@@ -1494,6 +1495,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
             "CONVERTED",
             "FOLLOW_UPS",
             "PENDING",
+            "INTERESTED",
         ] as const;
 
         const isTerminalStatus =
@@ -1579,9 +1581,11 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
                 // close relevant follow-ups based on new status
                 if (status === "DEMO_DONE" || status === "CLOSED" || status === "CONVERTED") {
                     await closeFollowUpsOnStatusChange(tx, id, status, accountId);
+                    // await stopOnWorking(tx, id, accountId);
                     // re-sync lead aggregates after bulk follow-up update
                     await syncLeadFollowUpAggregates(tx, id);
                 }
+                // if (status === "FOLLOW_UPS" || status === "INTERESTED") await stopOnWorking(tx, id, accountId);
             }
 
             // ── demo scheduling / rescheduling ───────────────────────────────────

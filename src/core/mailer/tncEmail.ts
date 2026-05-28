@@ -779,7 +779,7 @@ export function tncEmailHtml(data: TncEmailData): string {
       <a href="${directAcceptUrl}" class="cta-btn"
          style="display:inline-block;background:linear-gradient(135deg,#dc2626 0%,#b91c1c 100%);color:#ffffff!important;text-decoration:none;padding:15px 36px;border-radius:10px;font-weight:700;font-size:15px;letter-spacing:0.2px;box-shadow:0 4px 18px rgba(220,38,38,0.4);margin-bottom:12px;">
         <!--[if mso]><i style="letter-spacing:36px;mso-font-width:-100%;mso-text-raise:28pt;">&nbsp;</i><![endif]-->
-        ✅ &nbsp;Accept T&amp;C &amp; 
+        ✅ &nbsp;Accept T&amp;C 
         <!--[if mso]><i style="letter-spacing:36px;mso-font-width:-100%;">&nbsp;</i><![endif]-->
       </a>
 

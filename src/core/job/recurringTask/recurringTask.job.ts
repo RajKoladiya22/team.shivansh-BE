@@ -662,3 +662,667 @@ export function registerRecurringTaskJob(): void {
 
   logger.info(`[RecurringTask] Scheduler registered (cron: "${schedule}")`);
 }
+
+
+
+
+
+
+
+
+
+
+
+
+/**
+ * CLOUD SERVICE API - COMPLETE INTEGRATION GUIDE
+ *
+ * This document provides all the information needed to integrate the CloudService
+ * CRUD endpoints into your Shivansh Infosys CRM system.
+ */
+
+// ============================================================================
+// 1. REGISTRATION & SETUP
+// ============================================================================
+
+/**
+ * In your main app.ts / server.ts file:
+ *
+ * import cloudServiceRoutes from './routes/cloud-service.routes';
+ *
+ * // Mount routes
+ * app.use('/api/v1/cloud-services', cloudServiceRoutes);
+ *
+ * The controller requires:
+ *   - Express Request/Response
+ *   - Prisma client configured
+ *   - Error/success response utilities (sendErrorResponse, sendSuccessResponse)
+ *   - Authentication middleware (req.user.id, req.user.accountId)
+ */
+
+// ============================================================================
+// 2. API ENDPOINTS REFERENCE
+// ============================================================================
+
+/**
+ * GET /api/v1/cloud-services
+ * List all cloud services with filters and pagination
+ *
+ * Query Parameters:
+ *   page:             number (default: 1)
+ *   limit:            number (default: 20, max: 100)
+ *   customerId:       string (filter by customer)
+ *   type:             'MIRACLE' | 'COMHARD'
+ *   renewalType:      'QUARTERLY' | 'SIX_MONTHS' | 'YEARLY'
+ *   isActive:         'true' | 'false'
+ *   isOnTrial:        'true' | 'false'
+ *   isDriveSetup:     'true' | 'false'
+ *   status:           'ACTIVE' | 'EXPIRING_SOON' | 'EXPIRED' (renewal status)
+ *   search:           string (customer name or mobile)
+ *
+ * Example Requests:
+ *   GET /api/v1/cloud-services?page=1&limit=20
+ *   GET /api/v1/cloud-services?type=MIRACLE&status=EXPIRING_SOON
+ *   GET /api/v1/cloud-services?customerId=abc123&isActive=true
+ *   GET /api/v1/cloud-services?search=Amit Kumar
+ *   GET /api/v1/cloud-services?renewalType=YEARLY&isOnTrial=false
+ *
+ * Response (200 OK):
+ * {
+ *   success: true,
+ *   message: "Cloud services fetched",
+ *   data: {
+ *     page: 1,
+ *     limit: 20,
+ *     total: 45,
+ *     pages: 3,
+ *     items: [
+ *       {
+ *         id: "uuid",
+ *         customerId: "uuid",
+ *         type: "MIRACLE",
+ *         cost: 15000,
+ *         renewalType: "YEARLY",
+ *         purchaseDate: "2025-05-19T10:00:00Z",
+ *         isDriveSetup: true,
+ *         isActive: true,
+ *         customer: {
+ *           id: "uuid",
+ *           name: "Amit Kumar",
+ *           mobile: "+91-9876543210",
+ *           customerCompanyName: "ABC Pvt Ltd"
+ *         },
+ *         lead: {
+ *           id: "uuid",
+ *           status: "CONVERTED"
+ *         },
+ *         _count: {
+ *           users: 5
+ *         },
+ *         createdAt: "2025-05-19T10:00:00Z",
+ *         updatedAt: "2025-05-19T10:00:00Z"
+ *       }
+ *     ]
+ *   }
+ * }
+ */
+
+/**
+ * GET /api/v1/cloud-services/:id
+ * Get single cloud service with all users
+ *
+ * URL Parameters:
+ *   id: string (cloud service ID)
+ *
+ * Example Request:
+ *   GET /api/v1/cloud-services/abc123
+ *
+ * Response (200 OK):
+ * {
+ *   success: true,
+ *   message: "Cloud service details fetched",
+ *   data: {
+ *     id: "uuid",
+ *     customerId: "uuid",
+ *     leadId: "uuid" | null,
+ *     type: "MIRACLE",
+ *     cost: 15000,
+ *     renewalType: "YEARLY",
+ *     purchaseDate: "2025-05-19T10:00:00Z",
+ *     isDriveSetup: true,
+ *     isActive: true,
+ *     ipAddress: "192.168.1.100",
+ *     adminPassword: "encrypted...",
+ *     userCount: 5,
+ *     comhardSubId: null,
+ *     numberOfTally: null,
+ *     isOnTrial: false,
+ *     trialStartDate: null,
+ *     trialEndDate: null,
+ *     trialDoneAt: null,
+ *     customer: { ... },
+ *     lead: { ... },
+ *     users: [
+ *       {
+ *         id: "uuid",
+ *         username: "amit",
+ *         password: "encrypted...",
+ *         note: "Admin user",
+ *         isAdmin: true,
+ *         tallyNumber: null,
+ *         isActive: true,
+ *         createdAt: "2025-05-19T10:00:00Z"
+ *       }
+ *     ],
+ *     renewalInfo: {
+ *       renewalDate: "2026-05-19T10:00:00Z",
+ *       daysRemaining: 365,
+ *       status: "ACTIVE",
+ *       formattedDate: "19 May 2026"
+ *     }
+ *   }
+ * }
+ */
+
+/**
+ * POST /api/v1/cloud-services
+ * Create new cloud service
+ *
+ * Body:
+ * {
+ *   customerId:      string (required)
+ *   leadId:          string (optional)
+ *   type:            'MIRACLE' | 'COMHARD' (required)
+ *   cost:            number (optional)
+ *   renewalType:     'QUARTERLY' | 'SIX_MONTHS' | 'YEARLY' (required)
+ *   purchaseDate:    ISO string (optional, defaults to null)
+ *   isDriveSetup:    boolean (optional, defaults to false)
+ *
+ *   // MIRACLE-specific fields:
+ *   ipAddress:       string (optional)
+ *   adminPassword:   string (required for MIRACLE)
+ *   userCount:       number (optional)
+ *
+ *   // COMHARD-specific fields:
+ *   comhardSubId:    string (required for COMHARD)
+ *   numberOfTally:   1 | 2 (optional, defaults to 1)
+ *   isOnTrial:       boolean (optional)
+ *   trialStartDate:  ISO string (if isOnTrial=true)
+ *   trialEndDate:    ISO string (if isOnTrial=true)
+ *
+ *   // Users array (optional):
+ *   users: [
+ *     {
+ *       username:      string (required for MIRACLE, optional for COMHARD)
+ *       password:      string (required)
+ *       note:          string (optional)
+ *       isAdmin:       boolean (optional, defaults to false)
+ *       tallyNumber:   1 | 2 (optional, for COMHARD only)
+ *     }
+ *   ]
+ * }
+ *
+ * Example Request (MIRACLE):
+ * POST /api/v1/cloud-services
+ * {
+ *   customerId: "cust-123",
+ *   type: "MIRACLE",
+ *   cost: 15000,
+ *   renewalType: "YEARLY",
+ *   purchaseDate: "2025-05-19T10:00:00Z",
+ *   isDriveSetup: true,
+ *   ipAddress: "192.168.1.100",
+ *   adminPassword: "mySecurePassword123",
+ *   userCount: 3,
+ *   users: [
+ *     {
+ *       username: "amit",
+ *       password: "user123",
+ *       note: "Admin user",
+ *       isAdmin: true
+ *     },
+ *     {
+ *       username: "priya",
+ *       password: "user456",
+ *       note: "Accountant",
+ *       isAdmin: false
+ *     }
+ *   ]
+ * }
+ *
+ * Example Request (COMHARD with Trial):
+ * POST /api/v1/cloud-services
+ * {
+ *   customerId: "cust-456",
+ *   type: "COMHARD",
+ *   cost: 0,
+ *   renewalType: "QUARTERLY",
+ *   isDriveSetup: false,
+ *   comhardSubId: "COM-123-XYZ",
+ *   numberOfTally: 1,
+ *   isOnTrial: true,
+ *   trialStartDate: "2026-05-23T00:00:00Z",
+ *   trialEndDate: "2026-05-30T00:00:00Z",
+ *   users: [
+ *     {
+ *       username: "trial-admin",
+ *       password: "trialPass123",
+ *       isAdmin: true,
+ *       tallyNumber: 1
+ *     }
+ *   ]
+ * }
+ *
+ * Response (201 Created):
+ * {
+ *   success: true,
+ *   message: "Cloud service created",
+ *   data: { ...service object }
+ * }
+ */
+
+/**
+ * PATCH /api/v1/cloud-services/:id
+ * Update cloud service
+ *
+ * URL Parameters:
+ *   id: string (cloud service ID)
+ *
+ * Body: Any of the fields from POST request (except customerId and type)
+ *
+ * Example Request:
+ * PATCH /api/v1/cloud-services/abc123
+ * {
+ *   cost: 18000,
+ *   renewalType: "SIX_MONTHS",
+ *   ipAddress: "192.168.1.101"
+ * }
+ *
+ * Response (200 OK):
+ * {
+ *   success: true,
+ *   message: "Cloud service updated",
+ *   data: { ...updated service object }
+ * }
+ */
+
+/**
+ * DELETE /api/v1/cloud-services/:id
+ * Soft delete cloud service (sets isActive: false)
+ *
+ * URL Parameters:
+ *   id: string (cloud service ID)
+ *
+ * Example Request:
+ * DELETE /api/v1/cloud-services/abc123
+ *
+ * Response (200 OK):
+ * {
+ *   success: true,
+ *   message: "Cloud service deleted"
+ * }
+ */
+
+// ============================================================================
+// 3. CLOUD SERVICE USER MANAGEMENT ENDPOINTS
+// ============================================================================
+
+/**
+ * GET /api/v1/cloud-services/:id/users
+ * Get all users for a cloud service
+ *
+ * URL Parameters:
+ *   id: string (cloud service ID)
+ *
+ * Query Parameters:
+ *   tallyNumber: 1 | 2 (optional, filter by tally for Comhard)
+ *
+ * Example Requests:
+ *   GET /api/v1/cloud-services/abc123/users
+ *   GET /api/v1/cloud-services/abc123/users?tallyNumber=1
+ *
+ * Response (200 OK):
+ * {
+ *   success: true,
+ *   message: "Users fetched",
+ *   data: [
+ *     {
+ *       id: "uuid",
+ *       cloudServiceId: "uuid",
+ *       username: "amit",
+ *       password: "encrypted...",
+ *       note: "Admin",
+ *       isAdmin: true,
+ *       tallyNumber: null,
+ *       isActive: true,
+ *       createdAt: "2025-05-19T10:00:00Z",
+ *       updatedAt: "2025-05-19T10:00:00Z"
+ *     }
+ *   ]
+ * }
+ */
+
+/**
+ * POST /api/v1/cloud-services/:id/users
+ * Add new user to cloud service
+ *
+ * URL Parameters:
+ *   id: string (cloud service ID)
+ *
+ * Body:
+ * {
+ *   username:      string (required for MIRACLE, optional for COMHARD)
+ *   password:      string (required)
+ *   note:          string (optional)
+ *   isAdmin:       boolean (optional, defaults to false)
+ *   tallyNumber:   1 | 2 (optional, for COMHARD multi-tally)
+ * }
+ *
+ * Example Request (MIRACLE):
+ * POST /api/v1/cloud-services/abc123/users
+ * {
+ *   username: "rajesh",
+ *   password: "securePass456",
+ *   note: "New accountant",
+ *   isAdmin: false
+ * }
+ *
+ * Example Request (COMHARD - Tally 2):
+ * POST /api/v1/cloud-services/abc123/users
+ * {
+ *   username: "branch-admin",
+ *   password: "branchPass789",
+ *   isAdmin: true,
+ *   tallyNumber: 2
+ * }
+ *
+ * Response (201 Created):
+ * {
+ *   success: true,
+ *   message: "User added to cloud service",
+ *   data: { ...user object }
+ * }
+ */
+
+/**
+ * PATCH /api/v1/cloud-services/:serviceId/users/:userId
+ * Update cloud service user
+ *
+ * URL Parameters:
+ *   serviceId: string (cloud service ID)
+ *   userId:    string (user ID)
+ *
+ * Body: Any of the fields from POST request
+ *
+ * Example Request (Change password):
+ * PATCH /api/v1/cloud-services/abc123/users/user-456
+ * {
+ *   password: "newPassword999"
+ * }
+ *
+ * Example Request (Promote to admin):
+ * PATCH /api/v1/cloud-services/abc123/users/user-456
+ * {
+ *   isAdmin: true
+ * }
+ *
+ * Response (200 OK):
+ * {
+ *   success: true,
+ *   message: "User updated",
+ *   data: { ...updated user object }
+ * }
+ */
+
+/**
+ * DELETE /api/v1/cloud-services/:serviceId/users/:userId
+ * Delete user from cloud service (soft delete)
+ *
+ * URL Parameters:
+ *   serviceId: string (cloud service ID)
+ *   userId:    string (user ID)
+ *
+ * Example Request:
+ * DELETE /api/v1/cloud-services/abc123/users/user-456
+ *
+ * Response (200 OK):
+ * {
+ *   success: true,
+ *   message: "User deleted"
+ * }
+ */
+
+// ============================================================================
+// 4. USAGE EXAMPLES
+// ============================================================================
+
+/**
+ * Example 1: Create a new Miracle Cloud service
+ */
+const createMiracleExample = {
+  request: {
+    method: "POST",
+    url: "http://localhost:3000/api/v1/cloud-services",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      customerId: "cust-abc-123",
+      type: "MIRACLE",
+      cost: 15000,
+      renewalType: "YEARLY",
+      purchaseDate: "2025-05-19T10:00:00Z",
+      isDriveSetup: true,
+      ipAddress: "192.168.1.100",
+      adminPassword: "Admin@123456",
+      userCount: 3,
+      users: [
+        {
+          username: "owner",
+          password: "Owner@123",
+          note: "Owner/Admin",
+          isAdmin: true,
+        },
+        {
+          username: "accountant",
+          password: "Acc@123",
+          note: "Accountant",
+          isAdmin: false,
+        },
+        {
+          username: "manager",
+          password: "Mgr@123",
+          note: "Finance Manager",
+          isAdmin: false,
+        },
+      ],
+    },
+  },
+  response: 201,
+};
+
+/**
+ * Example 2: List all Miracle services expiring in next 30 days
+ */
+const listExpiringExample = {
+  request: {
+    method: "GET",
+    url: 'http://localhost:3000/api/v1/cloud-services?type=MIRACLE&status=EXPIRING_SOON&page=1&limit=50',
+    headers: { "Content-Type": "application/json" },
+  },
+  response: 200,
+};
+
+/**
+ * Example 3: Update Comhard trial to paid
+ */
+const convertTrialToPaidExample = {
+  request: {
+    method: "PATCH",
+    url: "http://localhost:3000/api/v1/cloud-services/service-uuid",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      isOnTrial: false,
+      trialDoneAt: "2026-05-30T00:00:00Z",
+      cost: 10000,
+      renewalType: "YEARLY",
+      purchaseDate: "2026-05-23T00:00:00Z",
+    },
+  },
+  response: 200,
+};
+
+/**
+ * Example 4: Change user password
+ */
+const changePasswordExample = {
+  request: {
+    method: "PATCH",
+    url: "http://localhost:3000/api/v1/cloud-services/service-uuid/users/user-uuid",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      password: "NewSecurePassword@789",
+    },
+  },
+  response: 200,
+};
+
+// ============================================================================
+// 5. ERROR RESPONSES
+// ============================================================================
+
+/**
+ * Common Error Responses:
+ *
+ * 400 Bad Request:
+ * {
+ *   success: false,
+ *   message: "customerId is required"
+ * }
+ *
+ * 401 Unauthorized:
+ * {
+ *   success: false,
+ *   message: "Unauthorized"
+ * }
+ *
+ * 404 Not Found:
+ * {
+ *   success: false,
+ *   message: "Cloud service not found"
+ * }
+ *
+ * 500 Internal Server Error:
+ * {
+ *   success: false,
+ *   message: "Failed to create cloud service"
+ * }
+ */
+
+// ============================================================================
+// 6. CRON JOBS & AUTOMATION
+// ============================================================================
+
+/**
+ * Set up automatic renewal reminders (see cloud-service.cron.ts):
+ *
+ * Cron Job 1: Daily renewal reminder check at 9 AM
+ * - Finds services expiring within next 30 days
+ * - Finds services already expired
+ * - Creates SUPPORT type Leads for each
+ *
+ * Cron Job 2: Daily trial expiration check at 10 AM
+ * - Finds trials ending in 1-3 days
+ * - Creates SUPPORT type Leads for follow-up
+ *
+ * Install node-cron:
+ * npm install node-cron
+ *
+ * In your main app file:
+ * import cron from 'node-cron';
+ * import {
+ *   generateCloudServiceRenewalReminders,
+ *   generateTrialExpirationReminders
+ * } from './cron/cloud-service.cron';
+ *
+ * // Run at 9 AM daily
+ * cron.schedule('0 9 * * *', generateCloudServiceRenewalReminders);
+ *
+ * // Run at 10 AM daily
+ * cron.schedule('0 10 * * *', generateTrialExpirationReminders);
+ */
+
+// ============================================================================
+// 7. FRONTEND INTEGRATION EXAMPLES
+// ============================================================================
+
+/**
+ * React Hook for fetching cloud services:
+ *
+ * const useCloudServices = (filters = {}) => {
+ *   const [services, setServices] = useState([]);
+ *   const [loading, setLoading] = useState(false);
+ *   const [error, setError] = useState(null);
+ *
+ *   useEffect(() => {
+ *     const fetchServices = async () => {
+ *       try {
+ *         setLoading(true);
+ *         const params = new URLSearchParams(filters);
+ *         const res = await fetch(`/api/v1/cloud-services?${params}`);
+ *         const data = await res.json();
+ *         setServices(data.data.items);
+ *       } catch (err) {
+ *         setError(err.message);
+ *       } finally {
+ *         setLoading(false);
+ *       }
+ *     };
+ *     fetchServices();
+ *   }, [filters]);
+ *
+ *   return { services, loading, error };
+ * };
+ *
+ * // Usage:
+ * const { services } = useCloudServices({ type: 'MIRACLE', isActive: 'true' });
+ */
+
+/**
+ * Redux action example:
+ *
+ * export const fetchCloudServices = (filters) => async (dispatch) => {
+ *   dispatch({ type: 'CLOUD_SERVICES_LOADING' });
+ *   try {
+ *     const res = await fetch(`/api/v1/cloud-services?${new URLSearchParams(filters)}`);
+ *     const data = await res.json();
+ *     dispatch({
+ *       type: 'CLOUD_SERVICES_LOADED',
+ *       payload: data.data
+ *     });
+ *   } catch (error) {
+ *     dispatch({
+ *       type: 'CLOUD_SERVICES_ERROR',
+ *       payload: error.message
+ *     });
+ *   }
+ * };
+ */
+
+// ============================================================================
+// 8. NEXT STEPS
+// ============================================================================
+
+/**
+ * 1. Copy cloud-service.controller.ts to your controllers folder
+ * 2. Copy cloud-service.routes.ts to your routes folder
+ * 3. Copy cloud-service.utils.ts to your utilities folder
+ * 4. Copy cloud-service.cron.ts to your cron jobs folder
+ * 5. Update Prisma schema with CloudService and CloudServiceUser models
+ * 6. Run: npx prisma migrate dev
+ * 7. Mount routes in your main app file
+ * 8. Set up cron jobs
+ * 9. Add authentication middleware
+ * 10. Test all endpoints with Postman or your REST client
+ * 11. Build React components for UI
+ * 12. Create tables/lists for viewing services and users
+ * 13. Add forms for creating/editing services and users
+ */

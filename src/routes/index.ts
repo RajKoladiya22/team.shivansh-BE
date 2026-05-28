@@ -16,6 +16,7 @@ import tasksRouter from "./task"
 import analyticsRouter from "./analytics";
 import productsRouter from "./product";
 import expertiseRouter from "./expertise";
+import cloudServicesRouter from "./cloud";
 // import projectsRouter from "./project"
 
 
@@ -38,6 +39,7 @@ router.use("/tasks", tasksRouter);
 router.use("/analytics", analyticsRouter);
 router.use("/products", productsRouter);
 router.use("/expertise", expertiseRouter);
+router.use("/cloud-services", cloudServicesRouter);
 
 
 // export main
