@@ -16,7 +16,7 @@ function getDayName(date: Date) {
 }
 
 function deriveStatus(totalMinutes: number): AttendanceStatus {
-  if (totalMinutes >= 420) return AttendanceStatus.PRESENT;
+  if (totalMinutes >= 300) return AttendanceStatus.PRESENT;
   if (totalMinutes >= 240) return AttendanceStatus.HALF_DAY;
   return AttendanceStatus.ABSENT;
 }
@@ -27,8 +27,8 @@ export async function autoFinalizeAttendance() {
     today.getFullYear(),
     today.getMonth(),
     today.getDate(),
-    17,
-    30,
+    18,
+    0,
     0
   );
 
