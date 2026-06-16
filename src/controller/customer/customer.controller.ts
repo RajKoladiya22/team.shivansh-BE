@@ -324,7 +324,29 @@ export async function getCustomerDetails(req: Request, res: Response) {
             lastName: true,
           },
         },
-        customerProducts: true
+        customerProducts: true,
+        cloudServices: {
+          include: {
+            cloudServiceActivityLogs: {
+              where: {
+                action: "RENEWED",
+              },
+              orderBy: {
+                createdAt: "desc",
+              },
+              include: {
+                performedByAcc: {
+                  select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    avatar: true,
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
 

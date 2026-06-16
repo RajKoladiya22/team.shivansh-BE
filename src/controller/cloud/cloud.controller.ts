@@ -1555,10 +1555,6 @@ export async function renewCloudService(req: Request, res: Response) {
         const body = req.body as RenewCloudServiceBody;
         const actor = req.user.accountId as string;
 
-        if (Object.keys(body).length === 0) {
-            return sendErrorResponse(res, 400, "No fields provided for renewal");
-        }
-
         const current = await prisma.cloudService.findUnique({
             where: { id },
             select: {
@@ -1574,58 +1570,73 @@ export async function renewCloudService(req: Request, res: Response) {
         const changes: Record<string, { from: unknown; to: unknown }> = {};
         const updateData: Prisma.CloudServiceUpdateInput = {};
 
-        if (body.renewalType !== undefined && body.renewalType !== current.renewalType) {
-            diff(changes, "renewalType", current.renewalType, body.renewalType);
-            updateData.renewalType = body.renewalType as CloudRenewalType;
-        }
-        if (body.purchaseDate !== undefined) {
-            const newDate = body.purchaseDate ? new Date(body.purchaseDate) : null;
-            diff(changes, "purchaseDate",
-                current.purchaseDate?.toISOString() ?? null,
-                newDate?.toISOString() ?? null,
-            );
-            updateData.purchaseDate = newDate;
-        }
+        // 1. Resolve Renewal Type
+        const newRenewalType = (body.renewalType || current.renewalType) as CloudRenewalType;
+        updateData.renewalType = newRenewalType;
 
-        if (body.cost !== undefined) {
-            const newCost = body.cost !== null ? new Prisma.Decimal(body.cost) : null;
-            diff(changes, "cost", current.cost ? Number(current.cost) : null, body.cost);
-            updateData.cost = newCost;
+        // 2. Resolve Purchase Date
+        let newPurchaseDate: Date;
+        if (body.purchaseDate) {
+            newPurchaseDate = new Date(body.purchaseDate);
+            newPurchaseDate.setHours(0, 0, 0, 0);
+        } else {
+            // Auto-calculate base date for renewal
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            if (current.expiryDate && new Date(current.expiryDate) >= now) {
+                // If not expired, start from current expiryDate
+                newPurchaseDate = new Date(current.expiryDate);
+                newPurchaseDate.setHours(0, 0, 0, 0);
+            } else {
+                // If expired or null, start from today
+                newPurchaseDate = now;
+            }
         }
+        updateData.purchaseDate = newPurchaseDate;
+
+        // 3. Resolve Expiry Date
+        let newExpiryDate: Date | null;
+        if (body.expiryDate) {
+            newExpiryDate = new Date(body.expiryDate);
+            newExpiryDate.setHours(0, 0, 0, 0);
+        } else {
+            newExpiryDate = calcExpiryDate(newPurchaseDate, newRenewalType);
+            if (newExpiryDate) {
+                newExpiryDate.setHours(0, 0, 0, 0);
+            }
+        }
+        updateData.expiryDate = newExpiryDate;
+
+        // 4. Resolve Cost
+        const newCost = body.cost !== undefined
+            ? (body.cost !== null ? new Prisma.Decimal(body.cost) : null)
+            : current.cost;
+        updateData.cost = newCost;
+
+        // 5. Track diff
+        diff(changes, "renewalType", current.renewalType, newRenewalType);
+        diff(changes, "purchaseDate",
+            current.purchaseDate?.toISOString() ?? null,
+            newPurchaseDate.toISOString(),
+        );
+        diff(changes, "expiryDate",
+            current.expiryDate?.toISOString() ?? null,
+            newExpiryDate?.toISOString() ?? null,
+        );
+        diff(changes, "cost",
+            current.cost ? Number(current.cost) : null,
+            newCost ? Number(newCost) : null,
+        );
 
         if (Object.keys(changes).length === 0) {
             return sendErrorResponse(res, 400, "No changes detected — all provided values match current state");
-        }
-
-        // ── expiryDate: explicit override OR auto-recalculate from new purchase/renewal ──
-        if (body.expiryDate !== undefined) {
-            const newDate = body.expiryDate ? new Date(body.expiryDate) : null;
-            diff(changes, "expiryDate",
-                current.expiryDate?.toISOString() ?? null,
-                newDate?.toISOString() ?? null,
-            );
-            updateData.expiryDate = newDate;
-        } else {
-            // Always recalculate on renewal — purchaseDate or renewalType likely changed
-            const resolvedPurchaseDate =
-                body.purchaseDate
-                    ? new Date(body.purchaseDate)
-                    : (current.purchaseDate ?? null);
-            const resolvedRenewalType = (body.renewalType ?? current.renewalType) as CloudRenewalType;
-            const autoExpiry = calcExpiryDate(resolvedPurchaseDate, resolvedRenewalType);
-            const prevExpiry = current.expiryDate?.toISOString() ?? null;
-            const nextExpiry = autoExpiry?.toISOString() ?? null;
-            if (prevExpiry !== nextExpiry) {
-                diff(changes, "expiryDate", prevExpiry, nextExpiry);
-                updateData.expiryDate = autoExpiry;
-            }
         }
 
         await prisma.$transaction(async (tx) => {
             await tx.cloudService.update({ where: { id }, data: updateData });
             await logActivity(tx, id, "RENEWED", actor, {
                 meta: { changes },
-                remark: body.remark,
+                remark: body.remark || "Renewed service",
             });
         });
 
@@ -1636,6 +1647,82 @@ export async function renewCloudService(req: Request, res: Response) {
     } catch (err: any) {
         console.error("renewCloudService error:", err);
         return sendErrorResponse(res, 500, err?.message ?? "Failed to renew cloud service");
+    }
+}
+
+// =============================================================================
+// POST /cloud-services/:id/cancel-renewal
+// =============================================================================
+
+export async function cancelLatestRenewal(req: Request, res: Response) {
+    try {
+        if (!req.user?.id) return sendErrorResponse(res, 401, "Unauthorized");
+
+        const { id } = req.params;
+        if (!id) return sendErrorResponse(res, 400, "Cloud service id is required");
+
+        const actor = req.user.accountId as string;
+
+        // 1. Get the latest RENEWED activity log
+        const latestRenewal = await prisma.cloudServiceActivityLog.findFirst({
+            where: {
+                cloudServiceId: id,
+                action: "RENEWED",
+            },
+            orderBy: { createdAt: "desc" },
+        });
+
+        if (!latestRenewal) {
+            return sendErrorResponse(res, 400, "No renewal history found for this service");
+        }
+
+        // 2. Parse the changes from meta
+        const meta = latestRenewal.meta as any;
+        const changes = meta?.changes;
+
+        if (!changes) {
+            return sendErrorResponse(res, 400, "Invalid renewal metadata; cannot cancel");
+        }
+
+        // 3. Prepare the reverted values
+        const updateData: Prisma.CloudServiceUpdateInput = {};
+
+        if (changes.renewalType) {
+            updateData.renewalType = changes.renewalType.from as CloudRenewalType;
+        }
+        if (changes.purchaseDate) {
+            updateData.purchaseDate = changes.purchaseDate.from ? new Date(changes.purchaseDate.from) : null;
+        }
+        if (changes.expiryDate) {
+            updateData.expiryDate = changes.expiryDate.from ? new Date(changes.expiryDate.from) : null;
+        }
+        if (changes.cost) {
+            updateData.cost = changes.cost.from !== null ? new Prisma.Decimal(changes.cost.from) : null;
+        }
+
+        // 4. Update the service and delete the log in a transaction
+        await prisma.$transaction(async (tx) => {
+            await tx.cloudService.update({
+                where: { id },
+                data: updateData,
+            });
+            // Delete the renewal activity log
+            await tx.cloudServiceActivityLog.delete({
+                where: { id: latestRenewal.id },
+            });
+            // Log a RENEWAL_CANCELLED activity log
+            await logActivity(tx, id, "RENEWAL_CANCELLED", actor, {
+                remark: "Cancelled latest renewal and reverted service dates/cost",
+            });
+        });
+
+        const updated = await fetchFullService(id);
+        if (!updated) return sendErrorResponse(res, 500, "Failed to reload service");
+
+        return sendSuccessResponse(res, 200, "Latest renewal cancelled successfully", updated);
+    } catch (err: any) {
+        console.error("cancelLatestRenewal error:", err);
+        return sendErrorResponse(res, 500, err?.message ?? "Failed to cancel renewal");
     }
 }
 

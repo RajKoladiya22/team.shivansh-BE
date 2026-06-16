@@ -2380,6 +2380,8 @@ model AnalyticsSession {
   eventCount    Int     @default(0)
   bounced       Boolean @default(false) // only one page viewed, < 30s
 
+  lastActiveAt DateTime @default(now()) // for session timeout logic
+
   pageViews AnalyticsPageView[]
   events    AnalyticsEvent[]
 
@@ -2445,6 +2447,8 @@ model AnalyticsPageView {
   cls  Float? // Cumulative Layout Shift (score)
   fcp  Float? // First Contentful Paint
   ttfb Float? // Time to First Byte
+  engagementTimeSec Int @default(0) // Total time with non-idle activity (for "engaged sessions" metric)
+  idempotencyKey String? @unique // for deduplication of retry page views from client
 
   events AnalyticsEvent[]
 
@@ -2479,6 +2483,7 @@ model AnalyticsEvent {
   pageView   AnalyticsPageView? @relation(fields: [pageViewId], references: [id], onDelete: SetNull)
 
   visitorId String // denormalised
+  idempotencyKey String? @unique // for deduplication of retry events from client
 
   // ── Event taxonomy ────────────────────────────────────────
   category EventCategory @default(CUSTOM)
@@ -2875,6 +2880,7 @@ enum CloudServiceActivityAction {
 
   // Renewal
   RENEWED // renewalType / purchaseDate / cost updated for renewal
+  RENEWAL_CANCELLED // latest renewal cancelled/reverted
   RENEWAL_TYPE_CHANGED // renewalType changed (e.g. QUARTERLY → YEARLY)
 
   // Trial (Comhard only)

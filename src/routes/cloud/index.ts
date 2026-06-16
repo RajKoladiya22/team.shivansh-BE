@@ -8,6 +8,7 @@ import {
     updateCloudService,
     deleteCloudService,
     renewCloudService,
+    cancelLatestRenewal,
     toggleCloudServiceStatus,
     addCloudServiceUser,
     updateCloudServiceUser,
@@ -29,6 +30,7 @@ router.delete("/:id", requireAuth, deleteCloudService);
 
 // ── Service-level actions ─────────────────────────────────────────────────────
 router.patch("/:id/renew", requireAuth, renewCloudService);
+router.post("/:id/cancel-renewal", requireAuth, cancelLatestRenewal);
 router.patch("/:id/toggle", requireAuth, toggleCloudServiceStatus);
 
 // ── Users ─────────────────────────────────────────────────────────────────────
