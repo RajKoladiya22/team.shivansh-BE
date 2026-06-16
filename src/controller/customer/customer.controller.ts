@@ -490,52 +490,172 @@ export async function deleteCustomer(req: Request, res: Response) {
   }
 }
 
+// export async function addCustomerProduct(req: Request, res: Response) {
+//   try {
+//     const { id } = req.params;
+//     const { name, price, purchaseAt } = req.body;
+
+//     if (!name || !price)
+//       return sendErrorResponse(res, 400, "Product name & price required");
+
+//     let normalizedPurchaseAt: string | null = null;
+//     if (purchaseAt) {
+//       const d = new Date(purchaseAt);
+//       if (isNaN(d.getTime()))
+//         return sendErrorResponse(res, 400, "Invalid purchaseAt date");
+//       if (d > new Date())
+//         return sendErrorResponse(
+//           res,
+//           400,
+//           "purchaseAt cannot be a future date",
+//         );
+//       normalizedPurchaseAt = d.toISOString();
+//     }
+
+//     const customer = await prisma.customer.findUnique({ where: { id } });
+//     if (!customer) return sendErrorResponse(res, 404, "Customer not found");
+
+//     let existingProducts: any = customer.products;
+//     if (typeof existingProducts !== "object" || existingProducts === null) {
+//       existingProducts = { active: [], history: [] };
+//     }
+
+//     const newProduct = {
+//       id: randomUUID(),
+//       name,
+//       price,
+//       status: "ACTIVE",
+//       addedAt: new Date().toISOString(),
+//       purchaseAt: normalizedPurchaseAt,
+//     };
+
+//     if (!Array.isArray(existingProducts.active)) existingProducts.active = [];
+
+//     existingProducts.active.push(newProduct);
+
+//     await prisma.customer.update({
+//       where: { id },
+//       data: { products: existingProducts },
+//     });
+
+//     return sendSuccessResponse(res, 200, "Product added", newProduct);
+//   } catch (err: any) {
+//     return sendErrorResponse(res, 500, err.message);
+//   }
+// }
+
 export async function addCustomerProduct(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { name, price, purchaseAt } = req.body;
+    const { name, price, purchaseAt, productCatalogId, productSlug } = req.body;
 
     if (!name || !price)
       return sendErrorResponse(res, 400, "Product name & price required");
 
-    let normalizedPurchaseAt: string | null = null;
+    let normalizedPurchaseAt: Date | null = null;
     if (purchaseAt) {
       const d = new Date(purchaseAt);
       if (isNaN(d.getTime()))
         return sendErrorResponse(res, 400, "Invalid purchaseAt date");
       if (d > new Date())
-        return sendErrorResponse(
-          res,
-          400,
-          "purchaseAt cannot be a future date",
-        );
-      normalizedPurchaseAt = d.toISOString();
+        return sendErrorResponse(res, 400, "purchaseAt cannot be a future date");
+      normalizedPurchaseAt = d;
     }
 
     const customer = await prisma.customer.findUnique({ where: { id } });
     if (!customer) return sendErrorResponse(res, 404, "Customer not found");
 
-    let existingProducts: any = customer.products;
-    if (typeof existingProducts !== "object" || existingProducts === null) {
-      existingProducts = { active: [], history: [] };
+    // ── Resolve ProductCatalog ──────────────────────────────────────────────
+    let resolvedCatalogId: string | null = null;
+
+    if (productCatalogId) {
+      const catalog = await prisma.productCatalog.findFirst({
+        where: {
+          OR: [
+            { id: productCatalogId },
+            { adminProductId: productCatalogId },
+          ],
+        },
+        select: { id: true },
+      });
+      resolvedCatalogId = catalog?.id ?? null;
     }
 
-    const newProduct = {
-      id: randomUUID(),
-      name,
-      price,
-      status: "ACTIVE",
-      addedAt: new Date().toISOString(),
-      purchaseAt: normalizedPurchaseAt,
-    };
+    if (!resolvedCatalogId && productSlug) {
+      const catalog = await prisma.productCatalog.findFirst({
+        where: { slug: productSlug },
+        select: { id: true },
+      });
+      resolvedCatalogId = catalog?.id ?? null;
+    }
 
-    if (!Array.isArray(existingProducts.active)) existingProducts.active = [];
+    if (!resolvedCatalogId) {
+      const catalog = await prisma.productCatalog.findFirst({
+        where: { title: { equals: name, mode: "insensitive" } },
+        select: { id: true, slug: true },
+      });
+      resolvedCatalogId = catalog?.id ?? null;
+    }
 
-    existingProducts.active.push(newProduct);
+    // ── Transaction: CustomerProduct row + JSON blob ────────────────────────
+    const newProduct = await prisma.$transaction(async (tx) => {
+      // 1. Create normalized CustomerProduct row
+      const cp = await tx.customerProduct.create({
+        data: {
+          customerId: id,
+          productCatalogId: resolvedCatalogId,
+          productTitle: name,
+          isActive: true,
+          isPurchase: true,
+          purchasedAt: normalizedPurchaseAt,
+          meta: {
+            price: Number(price),
+            slug: productSlug ?? null,
+          },
+        },
+        select: {
+          id: true,
+          productCatalogId: true,
+          productTitle: true,
+          purchasedAt: true,
+          createdAt: true,
+          meta: true,
+        },
+      });
 
-    await prisma.customer.update({
-      where: { id },
-      data: { products: existingProducts },
+      // 2. Update legacy customer.products JSON blob
+      const existingProducts: any =
+        typeof customer.products === "object" && customer.products !== null
+          ? customer.products
+          : { active: [], history: [] };
+
+      if (!Array.isArray(existingProducts.active)) existingProducts.active = [];
+
+      const jsonEntry = {
+        id: cp.productCatalogId ?? cp.id,
+        name,
+        price: Number(price),
+        status: "ACTIVE",
+        addedAt: cp.createdAt.toISOString(),
+        purchaseAt: normalizedPurchaseAt?.toISOString() ?? null,
+      };
+
+      existingProducts.active.push(jsonEntry);
+
+      await tx.customer.update({
+        where: { id },
+        data: { products: existingProducts, updatedAt: new Date() },
+      });
+
+      return {
+        customerProductId: cp.id,
+        productCatalogId: cp.productCatalogId,
+        name,
+        price: Number(price),
+        purchaseAt: normalizedPurchaseAt?.toISOString() ?? null,
+        status: "ACTIVE",
+        addedAt: cp.createdAt.toISOString(),
+      };
     });
 
     return sendSuccessResponse(res, 200, "Product added", newProduct);
@@ -544,37 +664,180 @@ export async function addCustomerProduct(req: Request, res: Response) {
   }
 }
 
+// export async function expireCustomerProduct(req: Request, res: Response) {
+//   try {
+//     const { id, productId } = req.params;
+
+//     const customer = await prisma.customer.findUnique({ where: { id } });
+//     if (!customer) return sendErrorResponse(res, 404, "Customer not found");
+
+//     // Prisma returns JSON as JsonValue (string | number | boolean | JsonObject | JsonArray)
+//     // so ensure we treat it as an object with active/history arrays before accessing .active
+//     const productsRaw = customer.products;
+//     const products =
+//       typeof productsRaw === "object" && productsRaw !== null
+//         ? (productsRaw as any)
+//         : { active: [], history: [] };
+
+//     if (!Array.isArray(products.active)) products.active = [];
+
+//     const index = products.active.findIndex((p: any) => p.id === productId);
+//     if (index === -1) return sendErrorResponse(res, 404, "Product not found");
+
+//     const [product] = products.active.splice(index, 1);
+
+//     product.status = "EXPIRED";
+//     product.expiredAt = new Date();
+
+//     if (!Array.isArray(products.history)) products.history = [];
+//     products.history.push(product);
+
+//     await prisma.customer.update({
+//       where: { id },
+//       data: { products },
+//     });
+
+//     return sendSuccessResponse(res, 200, "Product expired");
+//   } catch (err: any) {
+//     return sendErrorResponse(res, 500, err.message);
+//   }
+// }
+
+
+
+// export async function expireCustomerProduct(req: Request, res: Response) {
+//   try {
+//     const { id, productId } = req.params;
+
+//     const customer = await prisma.customer.findUnique({ where: { id } });
+//     if (!customer) return sendErrorResponse(res, 404, "Customer not found");
+
+//     const productsRaw = customer.products;
+//     const products =
+//       typeof productsRaw === "object" && productsRaw !== null
+//         ? (productsRaw as any)
+//         : { active: [], history: [] };
+
+//     if (!Array.isArray(products.active)) products.active = [];
+
+//     // productId may be a ProductCatalog.id (stored as entry.id in the JSON blob)
+//     // or a CustomerProduct.id — match against both
+//     const index = products.active.findIndex(
+//       (p: any) => p.id === productId || p.customerProductId === productId,
+//     );
+//     if (index === -1) return sendErrorResponse(res, 404, "Product not found in active list");
+
+//     const [entry] = products.active.splice(index, 1);
+//     entry.status = "EXPIRED";
+//     entry.expiredAt = new Date().toISOString();
+
+//     if (!Array.isArray(products.history)) products.history = [];
+//     products.history.push(entry);
+
+//     const catalogIdFromEntry: string | null =
+//       entry.id !== productId ? entry.id : null;
+
+//     await prisma.$transaction(async (tx) => {
+//       // 1. Update JSON blob
+//       await tx.customer.update({
+//         where: { id },
+//         data: { products, updatedAt: new Date() },
+//       });
+
+//       // 2. Sync CustomerProduct row(s)
+//       //    Match by productCatalogId (entry.id when from catalog) OR by CustomerProduct.id
+//       await tx.customerProduct.updateMany({
+//         where: {
+//           customerId: id,
+//           OR: [
+//             { productCatalogId: productId },
+//             { id: productId },
+//             ...(catalogIdFromEntry ? [{ productCatalogId: catalogIdFromEntry }] : []),
+//           ],
+//         },
+//         data: {
+//           isExpired: true,
+//           isActive: false,
+//           expiresAt: new Date(),
+//         },
+//       });
+//     });
+
+//     return sendSuccessResponse(res, 200, "Product expired");
+//   } catch (err: any) {
+//     return sendErrorResponse(res, 500, err.message);
+//   }
+// }
+
 export async function expireCustomerProduct(req: Request, res: Response) {
   try {
     const { id, productId } = req.params;
 
-    const customer = await prisma.customer.findUnique({ where: { id } });
-    if (!customer) return sendErrorResponse(res, 404, "Customer not found");
+    // productId is now always a CustomerProduct.id
+    const cp = await prisma.customerProduct.findFirst({
+      where: { id: productId, customerId: id },
+      select: { id: true, productCatalogId: true },
+    });
 
-    // Prisma returns JSON as JsonValue (string | number | boolean | JsonObject | JsonArray)
-    // so ensure we treat it as an object with active/history arrays before accessing .active
-    const productsRaw = customer.products;
-    const products =
-      typeof productsRaw === "object" && productsRaw !== null
-        ? (productsRaw as any)
-        : { active: [], history: [] };
+    if (!cp) return sendErrorResponse(res, 404, "Product not found");
 
-    if (!Array.isArray(products.active)) products.active = [];
+    await prisma.$transaction(async (tx) => {
+      // 1. Update normalized row
+      await tx.customerProduct.update({
+        where: { id: cp.id },
+        data: {
+          isExpired: true,
+          isActive: false,
+          expiresAt: new Date(),
+        },
+      });
 
-    const index = products.active.findIndex((p: any) => p.id === productId);
-    if (index === -1) return sendErrorResponse(res, 404, "Product not found");
+      // 2. Rebuild JSON blob from all CustomerProduct rows for this customer
+      const allCPs = await tx.customerProduct.findMany({
+        where: { customerId: id },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          productCatalogId: true,
+          productTitle: true,
+          purchasedAt: true,
+          expiresAt: true,
+          isActive: true,
+          isExpired: true,
+          createdAt: true,
+          meta: true,
+        },
+      });
 
-    const [product] = products.active.splice(index, 1);
+      const active = allCPs
+        .filter((p) => p.isActive && !p.isExpired)
+        .map((p) => ({
+          id: p.productCatalogId ?? p.id,
+          name: p.productTitle,
+          price: (p.meta as any)?.price ?? null,
+          slug: (p.meta as any)?.slug ?? null,
+          purchaseAt: p.purchasedAt?.toISOString() ?? null,
+          addedAt: p.createdAt.toISOString(),
+          status: "ACTIVE",
+        }));
 
-    product.status = "EXPIRED";
-    product.expiredAt = new Date();
+      const history = allCPs
+        .filter((p) => p.isExpired || !p.isActive)
+        .map((p) => ({
+          id: p.productCatalogId ?? p.id,
+          name: p.productTitle,
+          price: (p.meta as any)?.price ?? null,
+          slug: (p.meta as any)?.slug ?? null,
+          purchaseAt: p.purchasedAt?.toISOString() ?? null,
+          expiredAt: p.expiresAt?.toISOString() ?? null,
+          addedAt: p.createdAt.toISOString(),
+          status: "EXPIRED",
+        }));
 
-    if (!Array.isArray(products.history)) products.history = [];
-    products.history.push(product);
-
-    await prisma.customer.update({
-      where: { id },
-      data: { products },
+      await tx.customer.update({
+        where: { id },
+        data: { products: { active, history }, updatedAt: new Date() },
+      });
     });
 
     return sendSuccessResponse(res, 200, "Product expired");
@@ -610,6 +873,15 @@ export async function deleteCustomerPermanentAdmin(
       const leadIds = existing.leads.map((l) => l.id);
 
       if (leadIds.length > 0) {
+        await Promise.all(
+          leadIds.map((leadId) =>
+            tx.lead.update({
+              where: { id: leadId },
+              data: { accounts: { set: [] } },
+            }),
+          ),
+        );
+
         await tx.leadActivityLog.deleteMany({
           where: { leadId: { in: leadIds } },
         });
@@ -622,10 +894,16 @@ export async function deleteCustomerPermanentAdmin(
           where: { leadId: { in: leadIds } },
         });
 
+        await tx.leadFollowUp.deleteMany({ where: { leadId: { in: leadIds } } });
+
         await tx.lead.deleteMany({
           where: { id: { in: leadIds } },
         });
+
       }
+      await tx.customerProduct.deleteMany({
+        where: { customerId: id },
+      });
 
       await tx.customer.delete({
         where: { id },
@@ -647,10 +925,69 @@ export async function deleteCustomerPermanentAdmin(
   }
 }
 
-/**
- * DELETE /admin/customers/:customerId/products/:productId
- * Permanently remove a single product from the customer's active products JSON
- */
+// /**
+//  * DELETE /admin/customers/:customerId/products/:productId
+//  * Permanently remove a single product from the customer's active products JSON
+//  */
+// export async function removeCustomerProductAdmin(req: Request, res: Response) {
+//   try {
+//     const performerAccountId = req.user?.accountId;
+//     if (!performerAccountId)
+//       return sendErrorResponse(res, 401, "Invalid session user");
+
+//     const { customerId, productId } = req.params;
+
+//     const customer = await prisma.customer.findUnique({
+//       where: { id: customerId },
+//       select: { id: true, products: true },
+//     });
+//     if (!customer) return sendErrorResponse(res, 404, "Customer not found");
+
+//     const products = (customer.products ?? { active: [], history: [] }) as {
+//       active: any[];
+//       history: any[];
+//     };
+
+//     if (!Array.isArray(products.active))
+//       return sendErrorResponse(res, 400, "Invalid products structure");
+
+//     const targetIndex = products.active.findIndex((p) => p.id === productId);
+//     if (targetIndex === -1) {
+//       const h_targetIndex = products.history.findIndex(
+//         (p) => p.id === productId,
+//       );
+//       products.history.splice(h_targetIndex, 1);
+//       // return sendErrorResponse(res, 404, "Product not found in active list");
+//     }
+
+//     products.active.splice(targetIndex, 1);
+
+//     await prisma.customer.update({
+//       where: { id: customerId },
+//       data: {
+//         products,
+//         updatedAt: new Date(),
+//       },
+//     });
+
+//     return sendSuccessResponse(res, 200, "Product removed successfully", {
+//       customerId,
+//       productId,
+//     });
+//   } catch (err: any) {
+//     console.error("Remove customer product error:", err);
+//     return sendErrorResponse(
+//       res,
+//       500,
+//       err?.message ?? "Failed to remove product",
+//     );
+//   }
+// }
+
+// /**
+//  * DELETE /admin/customers/:customerId/products/:productId
+//  * Permanently remove a single product from the customer's active products JSON
+//  */
 export async function removeCustomerProductAdmin(req: Request, res: Response) {
   try {
     const performerAccountId = req.user?.accountId;
@@ -659,37 +996,66 @@ export async function removeCustomerProductAdmin(req: Request, res: Response) {
 
     const { customerId, productId } = req.params;
 
-    const customer = await prisma.customer.findUnique({
-      where: { id: customerId },
-      select: { id: true, products: true },
+    // productId is always a CustomerProduct.id from the normalized UI
+    const cp = await prisma.customerProduct.findFirst({
+      where: { id: productId, customerId },
+      select: { id: true },
     });
-    if (!customer) return sendErrorResponse(res, 404, "Customer not found");
 
-    const products = (customer.products ?? { active: [], history: [] }) as {
-      active: any[];
-      history: any[];
-    };
+    if (!cp) return sendErrorResponse(res, 404, "Product not found");
 
-    if (!Array.isArray(products.active))
-      return sendErrorResponse(res, 400, "Invalid products structure");
+    await prisma.$transaction(async (tx) => {
+      // 1. Hard-delete the normalized row
+      await tx.customerProduct.delete({
+        where: { id: cp.id },
+      });
 
-    const targetIndex = products.active.findIndex((p) => p.id === productId);
-    if (targetIndex === -1) {
-      const h_targetIndex = products.history.findIndex(
-        (p) => p.id === productId,
-      );
-      products.history.splice(h_targetIndex, 1);
-      // return sendErrorResponse(res, 404, "Product not found in active list");
-    }
+      // 2. Rebuild JSON blob from remaining CustomerProduct rows
+      const remaining = await tx.customerProduct.findMany({
+        where: { customerId },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          productCatalogId: true,
+          productTitle: true,
+          purchasedAt: true,
+          expiresAt: true,
+          isActive: true,
+          isExpired: true,
+          createdAt: true,
+          meta: true,
+        },
+      });
 
-    products.active.splice(targetIndex, 1);
+      const active = remaining
+        .filter((p) => p.isActive && !p.isExpired)
+        .map((p) => ({
+          id: p.productCatalogId ?? p.id,
+          name: p.productTitle,
+          price: (p.meta as any)?.price ?? null,
+          slug: (p.meta as any)?.slug ?? null,
+          purchaseAt: p.purchasedAt?.toISOString() ?? null,
+          addedAt: p.createdAt.toISOString(),
+          status: "ACTIVE",
+        }));
 
-    await prisma.customer.update({
-      where: { id: customerId },
-      data: {
-        products,
-        updatedAt: new Date(),
-      },
+      const history = remaining
+        .filter((p) => p.isExpired || !p.isActive)
+        .map((p) => ({
+          id: p.productCatalogId ?? p.id,
+          name: p.productTitle,
+          price: (p.meta as any)?.price ?? null,
+          slug: (p.meta as any)?.slug ?? null,
+          purchaseAt: p.purchasedAt?.toISOString() ?? null,
+          expiredAt: p.expiresAt?.toISOString() ?? null,
+          addedAt: p.createdAt.toISOString(),
+          status: "EXPIRED",
+        }));
+
+      await tx.customer.update({
+        where: { id: customerId },
+        data: { products: { active, history }, updatedAt: new Date() },
+      });
     });
 
     return sendSuccessResponse(res, 200, "Product removed successfully", {
@@ -698,11 +1064,7 @@ export async function removeCustomerProductAdmin(req: Request, res: Response) {
     });
   } catch (err: any) {
     console.error("Remove customer product error:", err);
-    return sendErrorResponse(
-      res,
-      500,
-      err?.message ?? "Failed to remove product",
-    );
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to remove product");
   }
 }
 
@@ -1032,11 +1394,32 @@ export async function bulkImportCustomers(req: Request, res: Response) {
 
     await prisma.customer.createMany({ data: finalData, skipDuplicates: true });
 
+        const importedMobiles = finalData.map((r) => r.normalizedMobile);
+    const preview = await prisma.customer.findMany({
+      where: { normalizedMobile: { in: importedMobiles } },
+      select: {
+        id: true,
+        name: true,
+        customerCompanyName: true,
+        mobile: true,
+        city: true,
+        state: true,
+        customerCategory: true,
+        tallySerial: true,
+        tallyVersion: true,
+        products: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    });
+
     return sendSuccessResponse(res, 201, "Import complete", {
       submitted: rows.length,
       imported: finalData.length,
       skippedDuplicates: existingSet.size,
       skippedInvalid: rows.length - validRows.length,
+      preview,
     });
   } catch (err: any) {
     console.error("bulkImportCustomers error:", err);
@@ -1472,3 +1855,4 @@ export async function getCustomerAnalytics(req: Request, res: Response) {
     );
   }
 }
+
