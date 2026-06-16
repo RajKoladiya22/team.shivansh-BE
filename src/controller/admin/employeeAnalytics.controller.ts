@@ -11,10 +11,14 @@ import {
    HELPERS
 ═══════════════════════════════════════════════════════════════ */
 
-function parseDateParam(raw: string | undefined): Date | undefined {
+function parseDateParam(raw: string | undefined, endOfDay = false): Date | undefined {
     if (!raw) return undefined;
     const d = new Date(raw);
-    return isNaN(d.getTime()) ? undefined : d;
+    if (isNaN(d.getTime())) return undefined;
+    if (endOfDay) {
+        d.setUTCHours(23, 59, 59, 999);
+    }
+    return d;
 }
 
 /** First day of the month N months ago from today */
@@ -69,7 +73,7 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
         const statusFilter = req.query.status as string | undefined;
 
         const fromDate = parseDateParam(rawFrom);
-        const toDate = parseDateParam(rawTo);
+        const toDate = parseDateParam(rawTo, true);
 
         if (rawFrom && !fromDate)
             return sendErrorResponse(res, 400, "Invalid 'fromDate'");
@@ -610,7 +614,7 @@ LIMIT 50
                             : parseFloat(((completed / total) * 100).toFixed(1)),
                     avgCompletionHours: row.avg_completion_hours
                         ? Number(row.avg_completion_hours)
-                        : null,
+                        : 0,
                     totalLoggedMinutes: Number(row.total_logged_minutes),
                     totalLoggedHours: parseFloat(
                         (Number(row.total_logged_minutes) / 60).toFixed(2),
@@ -622,10 +626,10 @@ LIMIT 50
                         onTimeRate,                          // % of completed tasks done on/before due date
                         avgDaysEarly: row.avg_days_early     // avg days early (when early)
                             ? Number(row.avg_days_early)
-                            : null,
+                            : 0,
                         avgDaysLate: row.avg_days_late       // avg days late (when late)
                             ? Number(row.avg_days_late)
-                            : null,
+                            : 0,
                     },
                 },
             };
@@ -1129,7 +1133,7 @@ LIMIT 50
                         ),
                 avgCompletionHours: r.avg_completion_hours
                     ? Number(r.avg_completion_hours)
-                    : null,
+                    : 0,
             })),
 
             // Only present when a specific employee is requested
