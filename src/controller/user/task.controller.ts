@@ -116,20 +116,41 @@ function emitTaskCreated(recipients: string[], task: Record<string, unknown>) {
   }
 }
 
-function emitTaskPatch(
+async function emitTaskPatch(
   taskId: string,
   recipients: string[],
   patch: Record<string, unknown>,
 ) {
   try {
     const io = getIo();
-    const payload = { id: taskId, patch };
-    recipients.forEach((accountId) => {
-      io.to(`tasks:user:${accountId}`).emit("task:patch", payload);
-    });
-    io.to("tasks:admin").emit("task:patch", payload);
-  } catch {
-    console.warn("[task.controller] Socket emit skipped — io not ready");
+    if (patch && "status" in patch) {
+      const assignments = await prisma.taskAssignment.findMany({
+        where: { taskId, type: AssignmentType.ACCOUNT },
+        select: { accountId: true, status: true, updatedAt: true },
+      });
+
+      recipients.forEach((accountId) => {
+        const userAssign = assignments.find((a) => a.accountId === accountId);
+        const userStatus = userAssign ? userAssign.status : (patch.status as TaskStatus);
+        const userPayload = {
+          id: taskId,
+          patch: {
+            ...patch,
+            status: userStatus,
+            completedAt: userStatus === TaskStatus.COMPLETED ? (userAssign?.updatedAt ?? new Date()) : null,
+          },
+        };
+        io.to(`tasks:user:${accountId}`).emit("task:patch", userPayload);
+      });
+    } else {
+      const payload = { id: taskId, patch };
+      recipients.forEach((accountId) => {
+        io.to(`tasks:user:${accountId}`).emit("task:patch", payload);
+      });
+    }
+    io.to("tasks:admin").emit("task:patch", { id: taskId, patch });
+  } catch (err) {
+    console.warn("[task.controller] Socket emit skipped/failed", err);
   }
 }
 
@@ -456,6 +477,7 @@ const TASK_LIST_SELECT = {
       status: true,
       note: true,
       assignedAt: true,
+      updatedAt: true,
       teamId: true,
       account: {
         select: {
@@ -1278,16 +1300,16 @@ export async function listTasksAdmin(req: Request, res: Response) {
     }
 
     // Dynamic sort — whitelist prevents injection
-    const SORTABLE_FIELDS: Record<string, string> = {
-      priority: "priority",
-      createdAt: "createdAt",
-      dueDate: "dueDate",
-      updatedAt: "updatedAt",
-      title: "title",
-      status: "status",
-    };
-    const sortField = SORTABLE_FIELDS[sortBy] ?? "priority";
-    const sortDir = sortOrder === "asc" ? "asc" : "desc";
+    // const SORTABLE_FIELDS: Record<string, string> = {
+    //   priority: "priority",
+    //   createdAt: "createdAt",
+    //   dueDate: "dueDate",
+    //   updatedAt: "updatedAt",
+    //   title: "title",
+    //   status: "status",
+    // };
+    // const sortField = SORTABLE_FIELDS[sortBy] ?? "priority";
+    // const sortDir = sortOrder === "asc" ? "asc" : "desc";
 
     // const orderBy = [
     //   { [sortField]: sortDir as const },
@@ -1298,8 +1320,8 @@ export async function listTasksAdmin(req: Request, res: Response) {
     //   ...(sortField !== "createdAt" ? [{ createdAt: "desc" as const }] : []),
     // ];
     const orderBy = [
+      { status: "asc" as const }, 
       { createdAt: "desc" as const },
-      { status: "asc" as const },
       { priority: "desc" as const },
       { dueDate: "asc" as const },
     ];
@@ -2041,18 +2063,26 @@ export async function getMyTasksUser(req: Request, res: Response) {
 
     const where: any = {
       deletedAt: null,
-      assignments: {
+      AND: [],
+    };
+
+    if (status) {
+      where.assignments = {
+        some: {
+          accountId,
+          status: status as TaskStatus,
+        },
+      };
+    } else {
+      where.assignments = {
         some: {
           OR: [
             { accountId },
             ...(teamIds.length > 0 ? [{ teamId: { in: teamIds } }] : []),
           ],
         },
-      },
-      AND: [],
-    };
-
-    if (status) where.status = status as TaskStatus;
+      };
+    }
     if (priority) where.priority = priority as TaskPriority;
     if (projectId) where.projectId = projectId;
 
@@ -2131,8 +2161,8 @@ export async function getMyTasksUser(req: Request, res: Response) {
     //   ...(sortField !== "updatedAt" ? [{ updatedAt: "desc" as const }] : []),
     // ];
     const orderBy = [
+      { status: "asc" as const }, 
       { createdAt: "desc" as const },
-      { status: "asc" as const },
       { priority: "desc" as const },
       { dueDate: "asc" as const },
     ];
@@ -2160,8 +2190,22 @@ export async function getMyTasksUser(req: Request, res: Response) {
       }),
     ]);
 
+    const formattedTasks = tasks.map((t: any) => {
+      const userAssignment = t.assignments?.find(
+        (a: any) => a.accountId === accountId && a.type === "ACCOUNT"
+      );
+      if (userAssignment) {
+        return {
+          ...t,
+          status: userAssignment.status,
+          completedAt: userAssignment.status === "COMPLETED" ? userAssignment.updatedAt : t.completedAt,
+        };
+      }
+      return t;
+    });
+
     return sendSuccessResponse(res, 200, "My tasks fetched", {
-      data: tasks,
+      data: formattedTasks,
       meta: {
         page: pageNumber,
         limit: pageSize,
@@ -2206,11 +2250,16 @@ export async function getTaskByIdUser(req: Request, res: Response) {
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
 
-    const hasAccess = await isAssignedToTask(id, accountId);
-    if (!hasAccess)
-      return sendErrorResponse(res, 403, "You are not assigned to this task");
+    const userAssignment = task.assignments?.find(
+      (a: any) => a.accountId === accountId && a.type === "ACCOUNT"
+    );
+    const formattedTask = userAssignment ? {
+      ...task,
+      status: userAssignment.status,
+      completedAt: userAssignment.status === "COMPLETED" ? userAssignment.updatedAt : task.completedAt,
+    } : task;
 
-    return sendSuccessResponse(res, 200, "Task fetched", task);
+    return sendSuccessResponse(res, 200, "Task fetched", formattedTask);
   } catch (err: any) {
     console.error("[getTaskByIdUser]", err);
     return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch task");
@@ -2343,10 +2392,15 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
       recipientAccountIds: recipients,
     });
 
+    const userAssignment = updated.assignments?.find(
+      (a: any) => a.accountId === accountId && a.type === "ACCOUNT"
+    );
+    const displayStatus = userAssignment ? userAssignment.status : updated.status;
+
     return sendSuccessResponse(res, 200, "Task status updated", {
       id: updated.id,
-      status: updated.status,
-      completedAt: updated.completedAt,
+      status: displayStatus,
+      completedAt: displayStatus === "COMPLETED" ? (updated.completedAt ?? new Date()) : null,
       loggedMinutes: updated.loggedMinutes,
       updatedAt: updated.updatedAt,
     });
@@ -2502,10 +2556,15 @@ export async function completeTaskUser(req: Request, res: Response) {
       recipientAccountIds: recipients,
     });
 
+    const userAssignment = updated.assignments?.find(
+      (a: any) => a.accountId === accountId && a.type === "ACCOUNT"
+    );
+    const displayStatus = userAssignment ? userAssignment.status : TaskStatus.COMPLETED;
+
     return sendSuccessResponse(res, 200, "Task completed", {
       id: updated.id,
-      status: updated.status,
-      completedAt,
+      status: displayStatus,
+      completedAt: displayStatus === "COMPLETED" ? completedAt : null,
       pendingChecklistCount, // client: "3 checklist items still open" if > 0
     });
   } catch (err: any) {
@@ -4052,18 +4111,32 @@ export async function getMyTaskStatsUser(req: Request, res: Response) {
 
     const [grouped, overdueCount, activeTimer] =
       await Promise.all([
-        prisma.task.groupBy({
+        prisma.taskAssignment.groupBy({
           by: ["status"],
-
-          where: baseWhere,
-
+          where: {
+            accountId,
+            task: {
+              deletedAt: null,
+            },
+          },
           _count: {
             _all: true,
           },
         }),
 
-        prisma.task.count({
-          where: overdueWhere,
+        prisma.taskAssignment.count({
+          where: {
+            accountId,
+            status: {
+              notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED],
+            },
+            task: {
+              deletedAt: null,
+              dueDate: {
+                lt: today,
+              },
+            },
+          },
         }),
 
         prisma.taskTimeEntry.findFirst({
