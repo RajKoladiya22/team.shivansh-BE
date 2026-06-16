@@ -1,3 +1,4 @@
+// src/controller/cloud/cloud.controller.ts
 import { Request, Response } from "express";
 import { CloudRenewalType, CloudServiceActivityAction, CloudServiceType, Prisma } from "@prisma/client";
 import { prisma } from "../../config/database.config";
@@ -207,7 +208,12 @@ async function recalculateCloudServiceCost(
         },
     });
 
-    const total = users.reduce((sum, user) => {
+    const usersWithCost = users.filter((u) => u.userCost !== null);
+    if (usersWithCost.length === 0) {
+        return null; // cost is manually managed — do not touch it
+    }
+
+    const total = usersWithCost.reduce((sum, user) => {
         return sum + Number(user.userCost ?? 0);
     }, 0);
 
@@ -1274,9 +1280,17 @@ export async function getCloudServiceList(req: Request, res: Response) {
                 skip,
                 take: limit,
 
-                orderBy: {
-                    createdAt: "desc",
-                },
+                orderBy: [
+                    {
+                        expiryDate: {
+                            sort: "asc",
+                            nulls: "last",
+                        },
+                    },
+                    {
+                        createdAt: "desc",
+                    },
+                ],
 
                 include: {
                     customer: {
@@ -1721,6 +1735,7 @@ export async function addCloudServiceUser(req: Request, res: Response) {
                         tallyNumber: user.tallyNumber ?? null,
                         purchaseAt: user.purchaseAt ? new Date(user.purchaseAt) : null,
                     }],
+                    ...(totalCost !== null && { newTotalCost: totalCost }),
                 },
             });
         });
@@ -1841,7 +1856,7 @@ export async function updateCloudServiceUser(req: Request, res: Response) {
             });
             const totalCost = await recalculateCloudServiceCost(tx, id);
             await logActivity(tx, id, "USER_UPDATED", actor, {
-                meta: { userId, changes, totalCost },
+                meta: { userId, changes, totalCost, ...(totalCost !== null && { newTotalCost: totalCost }), },
             });
         });
 
