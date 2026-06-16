@@ -238,14 +238,18 @@ export async function getProjectById(req: Request, res: Response) {
               select: {
                 id: true,
                 type: true,
+                status: true,
+                teamId: true,
                 account: {
                   select: {
                     id: true,
                     firstName: true,
                     lastName: true,
                     avatar: true,
+                    designation: true,
                   },
                 },
+                team: { select: { id: true, name: true } },
               },
             },
           },

@@ -134,6 +134,252 @@ function emitTaskPatch(
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   TEAM TASK ASSIGNMENT, COMPLETION & CHECKLIST HELPERS
+═══════════════════════════════════════════════════════════════ */
+
+async function createFanOutAssignments(
+  tx: any,
+  taskId: string,
+  accountId: string | null,
+  teamId: string | null,
+  assignedBy: string | null,
+  note?: string | null
+) {
+  if (teamId) {
+    // 1. Create team assignment
+    await tx.taskAssignment.create({
+      data: {
+        taskId,
+        type: AssignmentType.TEAM,
+        teamId,
+        accountId: null,
+        assignedBy,
+        note: note ?? null,
+        status: TaskStatus.PENDING,
+      },
+    });
+
+    // 2. Fetch active members
+    const members = await tx.teamMember.findMany({
+      where: { teamId, isActive: true },
+      select: { accountId: true },
+    });
+
+    // 3. Create assignments for each active member
+    for (const member of members) {
+      await tx.taskAssignment.create({
+        data: {
+          taskId,
+          type: AssignmentType.ACCOUNT,
+          teamId,
+          accountId: member.accountId,
+          assignedBy,
+          note: note ?? null,
+          status: TaskStatus.PENDING,
+        },
+      });
+    }
+  } else if (accountId) {
+    await tx.taskAssignment.create({
+      data: {
+        taskId,
+        type: AssignmentType.ACCOUNT,
+        teamId: null,
+        accountId,
+        assignedBy,
+        note: note ?? null,
+        status: TaskStatus.PENDING,
+      },
+    });
+  }
+}
+
+async function createFannedOutChecklistItems(
+  tx: any,
+  taskId: string,
+  checklist: Array<{ title: string; assignedTo?: string | null; dueDate?: string | null }>,
+  assigneeAccountId: string | null,
+  assigneeTeamId: string | null,
+  creatorAccountId: string
+) {
+  const validItems = checklist.filter((item) => item?.title?.trim());
+  if (validItems.length === 0) return;
+
+  const dataToInsert: any[] = [];
+
+  if (assigneeTeamId) {
+    const members = await tx.teamMember.findMany({
+      where: { teamId: assigneeTeamId, isActive: true },
+      select: { accountId: true },
+    });
+
+    for (const member of members) {
+      validItems.forEach((item, idx) => {
+        dataToInsert.push({
+          taskId,
+          title: item.title.trim(),
+          order: idx,
+          status: "PENDING" as const,
+          assignedTo: member.accountId,
+          dueDate: item.dueDate ? new Date(item.dueDate) : null,
+          createdBy: creatorAccountId,
+        });
+      });
+    }
+  } else {
+    validItems.forEach((item, idx) => {
+      dataToInsert.push({
+        taskId,
+        title: item.title.trim(),
+        order: idx,
+        status: "PENDING" as const,
+        assignedTo: item.assignedTo || assigneeAccountId || null,
+        dueDate: item.dueDate ? new Date(item.dueDate) : null,
+        createdBy: creatorAccountId,
+      });
+    });
+  }
+
+  if (dataToInsert.length > 0) {
+    await tx.checklistItem.createMany({
+      data: dataToInsert,
+      skipDuplicates: true,
+    });
+  }
+}
+
+async function updateTaskAndAssignmentStatus(
+  tx: any,
+  taskId: string,
+  accountId: string,
+  status: TaskStatus,
+  note: string | null,
+  performerName: string
+) {
+  const now = new Date();
+
+  // 1. Update the user's assignment status
+  await tx.taskAssignment.updateMany({
+    where: { taskId, accountId },
+    data: {
+      status,
+      note: note ?? undefined,
+      updatedAt: now,
+    },
+  });
+
+  // 2. Check if this is a team task by querying the team assignment
+  const teamAssignment = await tx.taskAssignment.findFirst({
+    where: { taskId, type: AssignmentType.TEAM },
+    select: { teamId: true },
+  });
+
+  if (teamAssignment && teamAssignment.teamId) {
+    const teamId = teamAssignment.teamId;
+
+    // Fetch all fanned-out individual assignments for this task under this team
+    const allAssignments = await tx.taskAssignment.findMany({
+      where: { taskId, teamId, type: AssignmentType.ACCOUNT },
+      select: { status: true },
+    });
+
+    const totalCount = allAssignments.length;
+    const completedCount = allAssignments.filter((a: any) => a.status === TaskStatus.COMPLETED).length;
+    const inProgressCount = allAssignments.filter((a: any) => a.status === TaskStatus.IN_PROGRESS).length;
+
+    const completedPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+    const inProgressPct = totalCount > 0 ? Math.round((inProgressCount / totalCount) * 100) : 0;
+
+    // Update task status according to team progress:
+    // - Only mark completed when ALL active members have completed their individual task.
+    // - Mark in progress if at least one member starts or completes their assignment, but not all are completed.
+    // - Keep as pending if no one has started or completed.
+    let targetTaskStatus: TaskStatus = TaskStatus.PENDING;
+    if (totalCount > 0) {
+      if (completedCount === totalCount) {
+        targetTaskStatus = TaskStatus.COMPLETED;
+      } else if (completedCount > 0 || inProgressCount > 0) {
+        targetTaskStatus = TaskStatus.IN_PROGRESS;
+      }
+    }
+
+    const task = await tx.task.findUnique({
+      where: { id: taskId },
+      select: { status: true, startedAt: true, loggedMinutes: true },
+    });
+
+    const taskUpdateData: Record<string, any> = {
+      status: targetTaskStatus,
+    };
+
+    if (targetTaskStatus === TaskStatus.IN_PROGRESS && !task.startedAt) {
+      taskUpdateData.startedAt = now;
+    }
+    if (targetTaskStatus === TaskStatus.COMPLETED) {
+      taskUpdateData.completedAt = now;
+      if (!task.startedAt) {
+        taskUpdateData.startedAt = now;
+      }
+      const startedAt = task.startedAt ?? now;
+      const autoCalculatedMinutes = Math.max(
+        1,
+        Math.ceil((now.getTime() - new Date(startedAt).getTime()) / (1000 * 60))
+      );
+      taskUpdateData.loggedMinutes = Math.max(task.loggedMinutes ?? 0, autoCalculatedMinutes);
+    } else if (targetTaskStatus === TaskStatus.IN_PROGRESS && task.status === TaskStatus.COMPLETED) {
+      taskUpdateData.completedAt = null;
+    }
+
+    await tx.task.update({
+      where: { id: taskId },
+      data: taskUpdateData,
+    });
+
+    // Create the auto-comment showing percentages
+    await tx.taskComment.create({
+      data: {
+        taskId,
+        content: `[STATUS] **${performerName}** updated their status to **${status}**.\n\n**Team Progress:**\n- Completed: **${completedPct}%** (${completedCount}/${totalCount})\n- In Progress: **${inProgressPct}%** (${inProgressCount}/${totalCount})`,
+        authorId: accountId,
+      },
+    });
+  } else {
+    // Non-team task: normal behavior
+    const task = await tx.task.findUnique({
+      where: { id: taskId },
+      select: { status: true, startedAt: true, loggedMinutes: true },
+    });
+
+    const taskUpdateData: Record<string, any> = {
+      status,
+    };
+
+    if (status === TaskStatus.IN_PROGRESS && !task.startedAt) {
+      taskUpdateData.startedAt = now;
+    }
+    if (status === TaskStatus.COMPLETED) {
+      taskUpdateData.completedAt = now;
+      if (!task.startedAt) {
+        taskUpdateData.startedAt = now;
+      }
+      const startedAt = task.startedAt ?? now;
+      const autoCalculatedMinutes = Math.max(
+        1,
+        Math.ceil((now.getTime() - new Date(startedAt).getTime()) / (1000 * 60))
+      );
+      taskUpdateData.loggedMinutes = Math.max(task.loggedMinutes ?? 0, autoCalculatedMinutes);
+    } else if (status === TaskStatus.IN_PROGRESS && task.status === TaskStatus.COMPLETED) {
+      taskUpdateData.completedAt = null;
+    }
+
+    await tx.task.update({
+      where: { id: taskId },
+      data: taskUpdateData,
+    });
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
    GUARDS
 ═══════════════════════════════════════════════════════════════ */
 
@@ -210,6 +456,7 @@ const TASK_LIST_SELECT = {
       status: true,
       note: true,
       assignedAt: true,
+      teamId: true,
       account: {
         select: {
           id: true,
@@ -428,19 +675,14 @@ export async function createTaskAdmin(req: Request, res: Response) {
 
       // ── Assignment ──────────────────────────────────────────
       if (assigneeAccountId || assigneeTeamId) {
-        await tx.taskAssignment.create({
-          data: {
-            taskId: created.id,
-            type: assigneeAccountId
-              ? AssignmentType.ACCOUNT
-              : AssignmentType.TEAM,
-            accountId: assigneeAccountId ?? null,
-            teamId: assigneeTeamId ?? null,
-            assignedBy: creatorAccountId,
-            note: note ?? null,
-            status: TaskStatus.PENDING,
-          },
-        });
+        await createFanOutAssignments(
+          tx,
+          created.id,
+          assigneeAccountId ?? null,
+          assigneeTeamId ?? null,
+          creatorAccountId,
+          note
+        );
       }
 
       // ── Labels ─────────────────────────────────────────────
@@ -457,29 +699,14 @@ export async function createTaskAdmin(req: Request, res: Response) {
 
       // ── Checklist items ────────────────────────────────────
       if (Array.isArray(checklist) && checklist.length > 0) {
-        const validItems = checklist.filter(
-          (item: any) => item?.title?.trim()
+        await createFannedOutChecklistItems(
+          tx,
+          created.id,
+          checklist,
+          assigneeAccountId ?? null,
+          assigneeTeamId ?? null,
+          creatorAccountId
         );
-
-        if (validItems.length > 0) {
-          await tx.checklistItem.createMany({
-            data: validItems.map(
-              (
-                item: { title: string; assignedTo?: string; dueDate?: string },
-                idx: number
-              ) => ({
-                taskId: created.id,
-                title: item.title.trim(),
-                order: idx,
-                status: "PENDING" as const,
-                assignedTo: item.assignedTo ?? null,
-                dueDate: item.dueDate ? new Date(item.dueDate) : null,
-                createdBy: creatorAccountId,
-              })
-            ),
-            skipDuplicates: true,
-          });
-        }
       }
 
       // ── Activity Log ────────────────────────────────────────
@@ -633,17 +860,14 @@ export async function assignTaskAdmin(req: Request, res: Response) {
         await tx.taskAssignment.deleteMany({ where: { taskId, accountId } });
       }
 
-      await tx.taskAssignment.create({
-        data: {
-          taskId,
-          type: accountId ? AssignmentType.ACCOUNT : AssignmentType.TEAM,
-          accountId: accountId ?? null,
-          teamId: teamId ?? null,
-          assignedBy: performerAccountId,
-          note: note ?? null,
-          status: TaskStatus.PENDING,
-        },
-      });
+      await createFanOutAssignments(
+        tx,
+        taskId,
+        accountId ?? null,
+        teamId ?? null,
+        performerAccountId,
+        note
+      );
 
       await tx.activityLog.create({
         data: {
@@ -1065,13 +1289,19 @@ export async function listTasksAdmin(req: Request, res: Response) {
     const sortField = SORTABLE_FIELDS[sortBy] ?? "priority";
     const sortDir = sortOrder === "asc" ? "asc" : "desc";
 
+    // const orderBy = [
+    //   { [sortField]: sortDir as const },
+    //   // Stable secondary sorts so pagination doesn't shuffle between pages
+    //   ...(sortField !== "status"    ? [{ status:    "asc"  as const }] : []),
+    //   ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
+    //   ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
+    //   ...(sortField !== "createdAt" ? [{ createdAt: "desc" as const }] : []),
+    // ];
     const orderBy = [
-      { [sortField]: sortDir  },
-      // Stable secondary sorts so pagination doesn't shuffle between pages
-      ...(sortField !== "status"    ? [{ status:    "asc"  as const }] : []),
-      ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
-      ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
-      ...(sortField !== "createdAt" ? [{ createdAt: "desc" as const }] : []),
+      { createdAt: "desc" as const },
+      { status: "asc" as const },
+      { priority: "desc" as const },
+      { dueDate: "asc" as const },
     ];
 
     const [total, tasks] = await Promise.all([
@@ -1659,7 +1889,19 @@ export async function createSelfTaskUser(req: Request, res: Response) {
           recurrenceRule: isRecurring && recurrenceRule ? recurrenceRule : null,
           isLearning: Boolean(isLearning),
         },
-        select: TASK_LIST_SELECT,
+        select: {
+          ...TASK_LIST_SELECT,
+          checklist: {
+            where: {
+              OR: [
+                { assignedTo: accountId },
+                { assignedTo: null },
+              ],
+            },
+            select: { id: true, title: true, status: true, order: true },
+            orderBy: { order: "asc" as const },
+          },
+        },
       });
 
       // ── Auto-assign to the creating user so it appears in their task list ─
@@ -1807,6 +2049,7 @@ export async function getMyTasksUser(req: Request, res: Response) {
           ],
         },
       },
+      AND: [],
     };
 
     if (status) where.status = status as TaskStatus;
@@ -1818,15 +2061,35 @@ export async function getMyTasksUser(req: Request, res: Response) {
     if (req.query.isLearning === "true") where.isLearning = true;
     if (req.query.isLearning === "false") where.isLearning = false;
 
-    if (search?.trim()) {
-      where.AND = [
-        {
-          OR: [
-            { title: { contains: search.trim(), mode: "insensitive" } },
-            { description: { contains: search.trim(), mode: "insensitive" } },
-          ],
+    if (req.query.isTeamTask === "true") {
+      where.AND.push({
+        assignments: {
+          some: {
+            type: "TEAM",
+          },
         },
-      ];
+      });
+    } else if (req.query.isTeamTask === "false") {
+      where.AND.push({
+        assignments: {
+          none: {
+            type: "TEAM",
+          },
+        },
+      });
+    }
+
+    if (search?.trim()) {
+      where.AND.push({
+        OR: [
+          { title: { contains: search.trim(), mode: "insensitive" } },
+          { description: { contains: search.trim(), mode: "insensitive" } },
+        ],
+      });
+    }
+
+    if (where.AND.length === 0) {
+      delete where.AND;
     }
 
     if (dueBefore || dueAfter) {
@@ -1860,12 +2123,18 @@ export async function getMyTasksUser(req: Request, res: Response) {
     const sortField = SORTABLE_FIELDS[sortBy] ?? "dueDate";
     const sortOrder = sortDir === "desc" ? "desc" : "asc";
 
+    // const orderBy = [
+    //   { [sortField]: sortOrder },
+    //   // stable secondary sorts so pagination is consistent
+    //   ...(sortField !== "priority" ? [{ priority: "desc" as const }] : []),
+    //   ...(sortField !== "dueDate" ? [{ dueDate: "asc" as const }] : []),
+    //   ...(sortField !== "updatedAt" ? [{ updatedAt: "desc" as const }] : []),
+    // ];
     const orderBy = [
-      { [sortField]: sortOrder  },
-      // stable secondary sorts so pagination is consistent
-      ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
-      ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
-      ...(sortField !== "updatedAt" ? [{ updatedAt: "desc" as const }] : []),
+      { createdAt: "desc" as const },
+      { status: "asc" as const },
+      { priority: "desc" as const },
+      { dueDate: "asc" as const },
     ];
 
     const [total, tasks] = await Promise.all([
@@ -1875,7 +2144,19 @@ export async function getMyTasksUser(req: Request, res: Response) {
         orderBy,
         skip,
         take: pageSize,
-        select: TASK_LIST_SELECT,
+        select: {
+          ...TASK_LIST_SELECT,
+          checklist: {
+            where: {
+              OR: [
+                { assignedTo: accountId },
+                { assignedTo: null },
+              ],
+            },
+            select: { id: true, title: true, status: true, order: true },
+            orderBy: { order: "asc" as const },
+          },
+        },
       }),
     ]);
 
@@ -1909,7 +2190,19 @@ export async function getTaskByIdUser(req: Request, res: Response) {
 
     const task = await prisma.task.findUnique({
       where: { id, deletedAt: null },
-      select: TASK_DETAIL_SELECT,
+      select: {
+        ...TASK_DETAIL_SELECT,
+        checklist: {
+          where: {
+            OR: [
+              { assignedTo: accountId },
+              { assignedTo: null },
+            ],
+          },
+          select: { id: true, title: true, status: true, order: true },
+          orderBy: { order: "asc" as const },
+        },
+      },
     });
     if (!task) return sendErrorResponse(res, 404, "Task not found");
 
@@ -1951,8 +2244,6 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
         `status must be one of: ${Object.values(TaskStatus).join(", ")}`,
       );
 
-
-
     // Users cannot self-cancel
     if (status === TaskStatus.CANCELLED)
       return sendErrorResponse(res, 403, "Only admins can cancel tasks");
@@ -1979,101 +2270,36 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
 
     const fromStatus = task.status;
 
-    // Timestamp logic
-    const timestamps: Record<string, Date | null> = {};
-    if (status === TaskStatus.IN_PROGRESS && !task.startedAt) {
-      timestamps.startedAt = new Date();
-    }
-    if (status === TaskStatus.COMPLETED) {
-      timestamps.completedAt = new Date();
-    }
-    if (
-      status === TaskStatus.IN_PROGRESS &&
-      fromStatus === TaskStatus.COMPLETED
-    ) {
-      timestamps.completedAt = null;
-    }
-
-    // Timestamp logic
-    const now = new Date();
-
-
-
-    // const timestamps: Record<string, Date | null> = {};
-    const taskUpdateData: Record<string, any> = {
-      status,
-    };
-
-    // PENDING → IN_PROGRESS
-    if (
-      status === TaskStatus.IN_PROGRESS &&
-      !task.startedAt
-    ) {
-      timestamps.startedAt = now;
-      taskUpdateData.startedAt = now;
-    }
-
-    // COMPLETED
-    if (status === TaskStatus.COMPLETED) {
-      timestamps.completedAt = now;
-      taskUpdateData.completedAt = now;
-
-      // Safety fallback
-      if (!task.startedAt) {
-        timestamps.startedAt = now;
-        taskUpdateData.startedAt = now;
-      }
-
-      // Auto calculate loggedMinutes
-      const startedAt =
-        task.startedAt ??
-        timestamps.startedAt ??
-        now;
-
-      const autoCalculatedMinutes = Math.max(
-        1,
-        Math.ceil(
-          (now.getTime() -
-            new Date(startedAt).getTime()) /
-          (1000 * 60)
-        )
-      );
-
-      const finalLoggedMinutes = Math.max(
-        task.loggedMinutes ?? 0,
-        autoCalculatedMinutes
-      );
-
-      taskUpdateData.loggedMinutes =
-        finalLoggedMinutes;
-    }
-
-    // Reopen completed task
-    if (
-      status === TaskStatus.IN_PROGRESS &&
-      fromStatus === TaskStatus.COMPLETED
-    ) {
-      timestamps.completedAt = null;
-      taskUpdateData.completedAt = null;
-    }
+    const performer = await resolvePerformerSnapshot(accountId);
+    const performerName = performer ? performer.name : "Unknown User";
 
     const updated = await prisma.$transaction(async (tx) => {
-      const result = await tx.task.update({
-        where: { id },
-        // data: { status, ...timestamps },
-        data: taskUpdateData,
-        select: TASK_LIST_SELECT,
-      });
+      await updateTaskAndAssignmentStatus(
+        tx,
+        id,
+        accountId,
+        status,
+        note ?? null,
+        performerName
+      );
 
-      // Keep per-assignee status row in sync
-      await tx.taskAssignment.updateMany({
-        where: { taskId: id, accountId },
-        data: {
-          status,
-          note: note ?? undefined,
-          updatedAt: new Date(),
+      const result = await tx.task.findUnique({
+        where: { id },
+        select: {
+          ...TASK_LIST_SELECT,
+          checklist: {
+            where: {
+              OR: [
+                { assignedTo: accountId },
+                { assignedTo: null },
+              ],
+            },
+            select: { id: true, title: true, status: true, order: true },
+            orderBy: { order: "asc" as const },
+          },
         },
       });
+      if (!result) throw new Error("Task not found");
 
       await tx.activityLog.create({
         data: {
@@ -2084,12 +2310,11 @@ export async function updateTaskStatusUser(req: Request, res: Response) {
           projectId: task.projectId,
           taskId: id,
           fromState: { status: fromStatus },
-          // toState: { status, ...timestamps },
           toState: {
-            status,
-            startedAt: taskUpdateData.startedAt ?? null,
-            completedAt: taskUpdateData.completedAt ?? null,
-            loggedMinutes: taskUpdateData.loggedMinutes ?? task.loggedMinutes ?? 0,
+            status: result.status,
+            startedAt: result.startedAt ?? null,
+            completedAt: result.completedAt ?? null,
+            loggedMinutes: result.loggedMinutes ?? 0,
           },
           meta: {
             note: note ?? null,
@@ -2169,7 +2394,13 @@ export async function completeTaskUser(req: Request, res: Response) {
         projectId: true,
         startedAt: true,
         checklist: {
-          where: { status: "PENDING" },
+          where: {
+            status: "PENDING",
+            OR: [
+              { assignedTo: accountId },
+              { assignedTo: null },
+            ],
+          },
           select: { id: true },
         },
       },
@@ -2203,32 +2434,36 @@ export async function completeTaskUser(req: Request, res: Response) {
       autoCalculatedMinutes
     );
 
-    const updateData: any = {
-      status: TaskStatus.COMPLETED,
-      completedAt,
-
-      // Safety fallback
-      startedAt,
-
-      // Final calculated value
-      loggedMinutes: finalLoggedMinutes,
-    };
+    const performer = await resolvePerformerSnapshot(accountId);
+    const performerName = performer ? performer.name : "Unknown User";
 
     const updated = await prisma.$transaction(async (tx) => {
-      const result = await tx.task.update({
-        where: { id },
-        data: updateData,
-        select: TASK_LIST_SELECT,
-      });
+      await updateTaskAndAssignmentStatus(
+        tx,
+        id,
+        accountId,
+        TaskStatus.COMPLETED,
+        note ?? null,
+        performerName
+      );
 
-      await tx.taskAssignment.updateMany({
-        where: { taskId: id, accountId },
-        data: {
-          status: TaskStatus.COMPLETED,
-          note: note ?? undefined,
-          updatedAt: new Date(),
+      const result = await tx.task.findUnique({
+        where: { id },
+        select: {
+          ...TASK_LIST_SELECT,
+          checklist: {
+            where: {
+              OR: [
+                { assignedTo: accountId },
+                { assignedTo: null },
+              ],
+            },
+            select: { id: true, title: true, status: true, order: true },
+            orderBy: { order: "asc" as const },
+          },
         },
       });
+      if (!result) throw new Error("Task not found");
 
       await tx.activityLog.create({
         data: {
@@ -2582,29 +2817,81 @@ export async function addChecklistItemUser(req: Request, res: Response) {
     const nextOrder = (_max.order ?? -1) + 1;
 
     const item = await prisma.$transaction(async (tx) => {
-      const created = await tx.checklistItem.create({
-        data: {
-          taskId,
-          title: title.trim(),
-          order: nextOrder,
-          assignedTo: assignedTo ?? null,
-          dueDate: dueDate ? new Date(dueDate) : null,
-          createdBy: accountId,
-          status: "PENDING",
-        },
+      const teamAssignment = await tx.taskAssignment.findFirst({
+        where: { taskId, type: AssignmentType.TEAM },
+        select: { teamId: true },
       });
-      await tx.activityLog.create({
-        data: {
-          entityType: "TASK",
-          entityId: taskId,
-          action: "UPDATED",
-          performedBy: accountId,
-          projectId: task.projectId,
-          taskId,
-          meta: { type: "checklist_added", itemId: created.id, title },
-        },
-      });
-      return created;
+
+      if (teamAssignment && teamAssignment.teamId) {
+        const members = await tx.teamMember.findMany({
+          where: { teamId: teamAssignment.teamId, isActive: true },
+          select: { accountId: true },
+        });
+
+        let mainCreated: any = null;
+        for (const member of members) {
+          const created = await tx.checklistItem.create({
+            data: {
+              taskId,
+              title: title.trim(),
+              order: nextOrder,
+              assignedTo: member.accountId,
+              dueDate: dueDate ? new Date(dueDate) : null,
+              createdBy: accountId,
+              status: "PENDING",
+            },
+          });
+          if (member.accountId === accountId) {
+            mainCreated = created;
+          }
+        }
+
+        if (!mainCreated) {
+          mainCreated = await tx.checklistItem.findFirst({
+            where: { taskId, title: title.trim(), order: nextOrder },
+          });
+        }
+
+        await tx.activityLog.create({
+          data: {
+            entityType: "TASK",
+            entityId: taskId,
+            action: "UPDATED",
+            performedBy: accountId,
+            projectId: task.projectId,
+            taskId,
+            meta: { type: "checklist_added_team", title },
+          },
+        });
+
+        return mainCreated;
+      } else {
+        const created = await tx.checklistItem.create({
+          data: {
+            taskId,
+            title: title.trim(),
+            order: nextOrder,
+            assignedTo: assignedTo ?? null,
+            dueDate: dueDate ? new Date(dueDate) : null,
+            createdBy: accountId,
+            status: "PENDING",
+          },
+        });
+
+        await tx.activityLog.create({
+          data: {
+            entityType: "TASK",
+            entityId: taskId,
+            action: "UPDATED",
+            performedBy: accountId,
+            projectId: task.projectId,
+            taskId,
+            meta: { type: "checklist_added", itemId: created.id, title },
+          },
+        });
+
+        return created;
+      }
     });
 
     const recipients = await resolveTaskRecipients(taskId);
@@ -2722,6 +3009,9 @@ export async function updateChecklistItemUser(req: Request, res: Response) {
           },
         });
 
+        const performer = await resolvePerformerSnapshot(accountId);
+        const performerName = performer ? performer.name : "Unknown User";
+
         // Mark task started on first completed checklist item
         if (
           task &&
@@ -2729,32 +3019,14 @@ export async function updateChecklistItemUser(req: Request, res: Response) {
           task.status !== TaskStatus.COMPLETED &&
           task.status !== TaskStatus.CANCELLED
         ) {
-          await tx.task.update({
-            where: { id: taskId },
-            data: {
-              startedAt: now,
-
-              // Auto move task to IN_PROGRESS
-              ...(task.status === TaskStatus.PENDING
-                ? {
-                  status: TaskStatus.IN_PROGRESS,
-                }
-                : {}),
-            },
-          });
-
-          // Update assignment statuses
-          await tx.taskAssignment.updateMany({
-            where: {
-              taskId,
-              accountId,
-              status: TaskStatus.PENDING,
-            },
-            data: {
-              status: TaskStatus.IN_PROGRESS,
-              updatedAt: now,
-            },
-          });
+          await updateTaskAndAssignmentStatus(
+            tx,
+            taskId,
+            accountId,
+            TaskStatus.IN_PROGRESS,
+            "Started task via checklist",
+            performerName
+          );
 
           await tx.activityLog.create({
             data: {
@@ -2771,11 +3043,15 @@ export async function updateChecklistItemUser(req: Request, res: Response) {
           });
         }
 
-        // Auto-complete task if all checklist items are now completed
+        // Auto-complete task if all checklist items of this user are now completed
         const pendingCount = await tx.checklistItem.count({
           where: {
             taskId,
             status: "PENDING",
+            OR: [
+              { assignedTo: accountId },
+              { assignedTo: null },
+            ],
             id: { not: itemId },
           },
         });
@@ -2795,37 +3071,14 @@ export async function updateChecklistItemUser(req: Request, res: Response) {
             latestTask.status !== TaskStatus.COMPLETED &&
             latestTask.status !== TaskStatus.CANCELLED
           ) {
-            const startedAt = latestTask.startedAt ?? now;
-
-            // Calculate duration in minutes
-            const calculatedMinutes = Math.max(
-              latestTask.loggedMinutes ?? 0,
-              Math.ceil(
-                (now.getTime() - new Date(startedAt).getTime()) /
-                (1000 * 60)
-              )
+            await updateTaskAndAssignmentStatus(
+              tx,
+              taskId,
+              accountId,
+              TaskStatus.COMPLETED,
+              "Auto-completed via checklist",
+              performerName
             );
-            await tx.task.update({
-              where: { id: taskId },
-              data: {
-                status: TaskStatus.COMPLETED,
-                completedAt: now,
-
-                // Safety fallback
-                startedAt,
-
-                // Auto calculated work duration
-                loggedMinutes: calculatedMinutes,
-              },
-            });
-
-            await tx.taskAssignment.updateMany({
-              where: { taskId, accountId },
-              data: {
-                status: TaskStatus.COMPLETED,
-                updatedAt: now,
-              },
-            });
 
             await tx.activityLog.create({
               data: {
@@ -3661,7 +3914,19 @@ export async function createSubtaskUser(req: Request, res: Response) {
           createdBy: accountId,
           status: TaskStatus.PENDING,
         },
-        select: TASK_LIST_SELECT,
+        select: {
+          ...TASK_LIST_SELECT,
+          checklist: {
+            where: {
+              OR: [
+                { assignedTo: accountId },
+                { assignedTo: null },
+              ],
+            },
+            select: { id: true, title: true, status: true, order: true },
+            orderBy: { order: "asc" as const },
+          },
+        },
       });
 
       if (assigneeAccountId) {

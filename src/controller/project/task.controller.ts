@@ -4,6 +4,7 @@ import {
   sendErrorResponse,
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
+import { AssignmentType, TaskStatus } from "@prisma/client";
 
 async function verifyWipLimit(stepId: string | null, projectId: string | null, excludeTaskId?: string): Promise<string | null> {
   if (!stepId) return null;
@@ -25,6 +26,60 @@ async function verifyWipLimit(stepId: string | null, projectId: string | null, e
     return `WIP limit of ${step.wipLimit} reached for step "${step.name}".`;
   }
   return null;
+}
+
+async function createFanOutAssignments(
+  tx: any,
+  taskId: string,
+  assignments: Array<{ type: string; accountId?: string | null; teamId?: string | null }>,
+  assignedBy?: string | null
+) {
+  for (const a of assignments) {
+    if (a.type === "TEAM" && a.teamId) {
+      // 1. Create team assignment
+      await tx.taskAssignment.create({
+        data: {
+          taskId,
+          type: AssignmentType.TEAM,
+          teamId: a.teamId,
+          accountId: null,
+          assignedBy: assignedBy ?? null,
+          status: TaskStatus.PENDING,
+        },
+      });
+
+      // 2. Fetch active members
+      const members = await tx.teamMember.findMany({
+        where: { teamId: a.teamId, isActive: true },
+        select: { accountId: true },
+      });
+
+      // 3. Create assignments for each active member
+      for (const member of members) {
+        await tx.taskAssignment.create({
+          data: {
+            taskId,
+            type: AssignmentType.ACCOUNT,
+            teamId: a.teamId,
+            accountId: member.accountId,
+            assignedBy: assignedBy ?? null,
+            status: TaskStatus.PENDING,
+          },
+        });
+      }
+    } else if (a.type === "ACCOUNT" && a.accountId) {
+      await tx.taskAssignment.create({
+        data: {
+          taskId,
+          type: AssignmentType.ACCOUNT,
+          teamId: null,
+          accountId: a.accountId,
+          assignedBy: assignedBy ?? null,
+          status: TaskStatus.PENDING,
+        },
+      });
+    }
+  }
 }
 
 /* =========================================================
@@ -69,14 +124,12 @@ export async function createProjectTask(req: Request, res: Response) {
       });
 
       if (Array.isArray(assignments) && assignments.length > 0) {
-        await tx.taskAssignment.createMany({
-          data: assignments.map((a: any) => ({
-            taskId: created.id,
-            type: a.type,
-            accountId: a.type === "ACCOUNT" ? a.accountId : null,
-            teamId: a.type === "TEAM" ? a.teamId : null,
-          })),
-        });
+        await createFanOutAssignments(
+          tx,
+          created.id,
+          assignments,
+          accountId
+        );
       }
 
       await tx.activityLog.create({
@@ -120,14 +173,12 @@ export async function assignTask(req: Request, res: Response) {
 
       await tx.taskAssignment.deleteMany({ where: { taskId } });
 
-      await tx.taskAssignment.createMany({
-        data: assignments.map((a: any) => ({
-          taskId,
-          type: a.type,
-          accountId: a.type === "ACCOUNT" ? a.accountId : null,
-          teamId: a.type === "TEAM" ? a.teamId : null,
-        })),
-      });
+      await createFanOutAssignments(
+        tx,
+        taskId,
+        assignments,
+        accountId
+      );
 
       await tx.activityLog.create({
         data: {
