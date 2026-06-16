@@ -17,7 +17,8 @@ import analyticsRouter from "./analytics";
 import productsRouter from "./product";
 import expertiseRouter from "./expertise";
 import cloudServicesRouter from "./cloud";
-// import projectsRouter from "./project"
+import projectsRouter from "./project"
+import labelsRouter from "./label/label.routes"
 
 
 const router = Router();
@@ -40,6 +41,8 @@ router.use("/analytics", analyticsRouter);
 router.use("/products", productsRouter);
 router.use("/expertise", expertiseRouter);
 router.use("/cloud-services", cloudServicesRouter);
+router.use("/projects", projectsRouter);
+router.use("/labels", labelsRouter);
 
 
 // export main

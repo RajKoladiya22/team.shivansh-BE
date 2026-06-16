@@ -295,6 +295,28 @@ const TASK_DETAIL_SELECT = {
   },
 } as const;
 
+async function verifyWipLimit(stepId: string | null, projectId: string | null, excludeTaskId?: string): Promise<string | null> {
+  if (!stepId) return null;
+  const step = await prisma.pipelineStep.findUnique({
+    where: { id: stepId },
+    select: { id: true, wipLimit: true, name: true },
+  });
+  if (!step || step.wipLimit <= 0) return null;
+
+  const count = await prisma.task.count({
+    where: {
+      stepId: step.id,
+      deletedAt: null,
+      NOT: excludeTaskId ? { id: excludeTaskId } : undefined,
+    },
+  });
+
+  if (count >= step.wipLimit) {
+    return `WIP limit of ${step.wipLimit} reached for step "${step.name}".`;
+  }
+  return null;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    ░░░░░░░░░░░░░░░░  ADMIN CONTROLLERS  ░░░░░░░░░░░░░░░░░░░░░░░
 ═══════════════════════════════════════════════════════════════ */
@@ -370,6 +392,9 @@ export async function createTaskAdmin(req: Request, res: Response) {
           400,
           "Step does not belong to the specified project",
         );
+
+      const wipError = await verifyWipLimit(stepId, projectId);
+      if (wipError) return sendErrorResponse(res, 400, wipError);
     }
 
     const initialAssignee = await resolveAssigneeSnapshot({
@@ -730,6 +755,11 @@ export async function updateTaskAdmin(req: Request, res: Response) {
       if (req.body[f] !== undefined) data[f] = req.body[f];
     }
 
+    if (data.stepId !== undefined && data.stepId !== existing.stepId) {
+      const wipError = await verifyWipLimit(data.stepId, existing.projectId, id);
+      if (wipError) return sendErrorResponse(res, 400, wipError);
+    }
+
     // Status-driven timestamp fills
     if (data.status === TaskStatus.IN_PROGRESS && !existing.startedAt) {
       data.startedAt = new Date();
@@ -812,7 +842,6 @@ export async function updateTaskAdmin(req: Request, res: Response) {
 export async function deleteTaskAdmin(req: Request, res: Response) {
   try {
     if (!assertAdmin(req, res)) return;
-    // console.log("\n\n\n\n\n\n\n API CALL HERE");
 
     const adminAccountId = req.user?.accountId;
     if (!adminAccountId)
@@ -827,29 +856,28 @@ export async function deleteTaskAdmin(req: Request, res: Response) {
     if (!task) return sendErrorResponse(res, 404, "Task not found");
 
     const recipients = await resolveTaskRecipients(id);
+    const now = new Date();
 
     await prisma.$transaction(async (tx) => {
-      // await tx.task.update({
-      //   where: { id },
-      //   data: { deletedAt: new Date(), deletedBy: adminAccountId },
-      // });
-      await tx.task.delete({
+      // Soft delete — preserve record for audit trail
+      await tx.task.update({
         where: { id },
+        data: { deletedAt: now, deletedBy: adminAccountId },
       });
 
-      // await tx.activityLog.create({
-      //   data: {
-      //     entityType: "TASK",
-      //     entityId: id,
-      //     action: "DELETED",
-      //     performedBy: adminAccountId,
-      //     projectId: task.projectId,
-      //     taskId: id,
-      //   },
-      // });
+      await tx.activityLog.create({
+        data: {
+          entityType: "TASK",
+          entityId: id,
+          action: "DELETED",
+          performedBy: adminAccountId,
+          projectId: task.projectId,
+          taskId: id,
+        },
+      });
     });
 
-    emitTaskPatch(id, recipients, { deletedAt: new Date() });
+    emitTaskPatch(id, recipients, { deletedAt: now });
 
     return sendSuccessResponse(res, 200, "Task deleted");
   } catch (err: any) {
@@ -872,9 +900,6 @@ export async function deleteTasksBulkAdmin(req: Request, res: Response) {
 
     const { ids } = req.body as { ids: string[] };
 
-    // console.log("\n\n\n\n\n\n\nids", ids);
-
-
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
       return sendErrorResponse(res, 400, "Task IDs are required");
     }
@@ -896,8 +921,9 @@ export async function deleteTasksBulkAdmin(req: Request, res: Response) {
     }
 
     const taskIds = tasks.map((t) => t.id);
+    const now = new Date();
 
-    // Resolve recipients for all tasks
+    // Resolve recipients for all tasks before deleting
     const recipientsMap = await Promise.all(
       taskIds.map(async (id) => ({
         id,
@@ -906,31 +932,28 @@ export async function deleteTasksBulkAdmin(req: Request, res: Response) {
     );
 
     await prisma.$transaction(async (tx) => {
-      // HARD DELETE
-      await tx.task.deleteMany({
-        where: {
-          id: { in: taskIds },
-        },
+      // Soft delete — preserve records for audit trail
+      await tx.task.updateMany({
+        where: { id: { in: taskIds } },
+        data: { deletedAt: now, deletedBy: adminAccountId },
       });
 
-      // OPTIONAL: activity logs
-      // await tx.activityLog.createMany({
-      //   data: tasks.map((task) => ({
-      //     entityType: "TASK",
-      //     entityId: task.id,
-      //     action: "DELETED",
-      //     performedBy: adminAccountId,
-      //     projectId: task.projectId,
-      //     taskId: task.id,
-      //   })),
-      // });
+      await tx.activityLog.createMany({
+        data: tasks.map((task) => ({
+          entityType: "TASK" as any,
+          entityId: task.id,
+          action: "DELETED" as any,
+          performedBy: adminAccountId,
+          projectId: task.projectId,
+          taskId: task.id,
+          meta: { type: "bulk_delete" },
+        })),
+      });
     });
 
     // Emit socket events per task
     for (const item of recipientsMap) {
-      emitTaskPatch(item.id, item.recipients, {
-        deletedAt: new Date(),
-      });
+      emitTaskPatch(item.id, item.recipients, { deletedAt: now });
     }
 
     return sendSuccessResponse(
@@ -1042,20 +1065,13 @@ export async function listTasksAdmin(req: Request, res: Response) {
     const sortField = SORTABLE_FIELDS[sortBy] ?? "priority";
     const sortDir = sortOrder === "asc" ? "asc" : "desc";
 
-    // const orderBy = [
-    //   { [sortField]: sortDir },
-    //   // Stable secondary sorts so pagination doesn't shuffle between pages
-    //   ...(sortField !== "status"    ? [{ status:    "asc"  as const }] : []),
-    //   ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
-    //   ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
-    //   ...(sortField !== "createdAt" ? [{ createdAt: "desc" as const }] : []),
-    // ];
-
     const orderBy = [
-      { status: "asc" as const },
-      { priority: "desc" as const },
-      { createdAt: "desc" as const },
-      { dueDate: "asc" as const },
+      { [sortField]: sortDir  },
+      // Stable secondary sorts so pagination doesn't shuffle between pages
+      ...(sortField !== "status"    ? [{ status:    "asc"  as const }] : []),
+      ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
+      ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
+      ...(sortField !== "createdAt" ? [{ createdAt: "desc" as const }] : []),
     ];
 
     const [total, tasks] = await Promise.all([
@@ -1845,20 +1861,12 @@ export async function getMyTasksUser(req: Request, res: Response) {
     const sortOrder = sortDir === "desc" ? "desc" : "asc";
 
     const orderBy = [
-      { status: "asc" as const },
-      { createdAt: "desc" as const },
-      { priority: "desc" as const },
-      { dueDate: "asc" as const },
-      { updatedAt: "desc" as const },
+      { [sortField]: sortOrder  },
+      // stable secondary sorts so pagination is consistent
+      ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
+      ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
+      ...(sortField !== "updatedAt" ? [{ updatedAt: "desc" as const }] : []),
     ];
-
-    // const orderBy = [
-    //   { [sortField]: sortOrder },
-    //   // stable secondary sorts so pagination is consistent
-    //   ...(sortField !== "priority"  ? [{ priority:  "desc" as const }] : []),
-    //   ...(sortField !== "dueDate"   ? [{ dueDate:   "asc"  as const }] : []),
-    //   ...(sortField !== "updatedAt" ? [{ updatedAt: "desc" as const }] : []),
-    // ];
 
     const [total, tasks] = await Promise.all([
       prisma.task.count({ where }),
@@ -3893,13 +3901,31 @@ export async function bulkUpdateTasksAdmin(req: Request, res: Response) {
         sanitized[f] = updateData[f as keyof typeof updateData];
     }
 
-    // Status-driven timestamps
-    if (sanitized.status === TaskStatus.IN_PROGRESS) sanitized.startedAt = new Date();
+    // Status-driven timestamps — only set startedAt if not already started
+    if (sanitized.status === TaskStatus.IN_PROGRESS) {
+      // We cannot do per-row conditional in updateMany, so we split:
+      // tasks that already have startedAt will NOT get it overwritten
+      // We'll handle this inside the transaction per-task when needed.
+    }
     if (sanitized.status === TaskStatus.COMPLETED) sanitized.completedAt = new Date();
     if (sanitized.status === TaskStatus.CANCELLED) sanitized.cancelledAt = new Date();
 
     await prisma.$transaction(async (tx) => {
-      await tx.task.updateMany({ where: { id: { in: ids }, deletedAt: null }, data: sanitized });
+      if (sanitized.status === TaskStatus.IN_PROGRESS) {
+        const now = new Date();
+        // Only set startedAt for tasks that haven't been started yet
+        await tx.task.updateMany({
+          where: { id: { in: ids }, deletedAt: null, startedAt: null },
+          data: { ...sanitized, startedAt: now },
+        });
+        // Update the rest without touching startedAt
+        await tx.task.updateMany({
+          where: { id: { in: ids }, deletedAt: null, startedAt: { not: null } },
+          data: sanitized,
+        });
+      } else {
+        await tx.task.updateMany({ where: { id: { in: ids }, deletedAt: null }, data: sanitized });
+      }
 
       if (updateData.assigneeAccountId) {
         // Replace all assignments in bulk
@@ -4082,6 +4108,24 @@ export async function duplicateTaskAdmin(req: Request, res: Response) {
   }
 }
 
+async function hasDependencyPath(startId: string, targetId: string, visited: Set<string> = new Set()): Promise<boolean> {
+  if (startId === targetId) return true;
+  if (visited.has(startId)) return false;
+  visited.add(startId);
+
+  const dependencies = await prisma.taskDependency.findMany({
+    where: { dependentTaskId: startId },
+    select: { blockingTaskId: true },
+  });
+
+  for (const dep of dependencies) {
+    if (await hasDependencyPath(dep.blockingTaskId, targetId, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /* ─────────────────────────────────────────────────────────────
    POST /admin/tasks/:id/dependencies
    Body: { blockingTaskId: string }
@@ -4113,12 +4157,11 @@ export async function addTaskDependencyAdmin(req: Request, res: Response) {
     if (!dependent) return sendErrorResponse(res, 404, "Dependent task not found");
     if (!blocking) return sendErrorResponse(res, 404, "Blocking task not found");
 
-    // Guard: circular dependency — blockingTask must not already depend on dependentTask
-    const circular = await prisma.taskDependency.findFirst({
-      where: { dependentTaskId: blockingTaskId, blockingTaskId: dependentTaskId },
-    });
-    if (circular)
+    // Guard: recursive circular dependency check
+    const isCircular = await hasDependencyPath(blockingTaskId, dependentTaskId);
+    if (isCircular) {
       return sendErrorResponse(res, 409, "Circular dependency detected");
+    }
 
     const dep = await prisma.taskDependency.create({
       data: { dependentTaskId, blockingTaskId, createdBy: adminAccountId },
@@ -4334,6 +4377,65 @@ export async function updateTaskRecurrenceAdmin(req: Request, res: Response) {
   } catch (err: any) {
     console.error("[updateTaskRecurrenceAdmin]", err);
     return sendErrorResponse(res, 500, err?.message ?? "Failed to update recurrence");
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   PATCH /user/tasks/:id/time/:entryId
+   Update time entry details.
+───────────────────────────────────────────────────────────── */
+export async function updateTimeEntryUser(req: Request, res: Response) {
+  try {
+    const accountId = req.user?.accountId;
+    if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
+
+    const { id: taskId, entryId } = req.params;
+    const { durationMinutes, description, isBillable, startedAt, endedAt } = req.body as {
+      durationMinutes?: number;
+      description?: string;
+      isBillable?: boolean;
+      startedAt?: string;
+      endedAt?: string;
+    };
+
+    const entry = await prisma.taskTimeEntry.findFirst({
+      where: { id: entryId, taskId, accountId },
+    });
+    if (!entry) return sendErrorResponse(res, 404, "Time entry not found");
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const updateData: any = {};
+      if (description !== undefined) updateData.description = description;
+      if (isBillable !== undefined) updateData.isBillable = Boolean(isBillable);
+      if (startedAt !== undefined) updateData.startedAt = new Date(startedAt);
+      if (endedAt !== undefined) updateData.endedAt = endedAt ? new Date(endedAt) : null;
+
+      if (durationMinutes !== undefined) {
+        const dur = Number(durationMinutes);
+        if (isNaN(dur) || dur < 0) throw new Error("Duration must be a positive number");
+        updateData.durationMinutes = dur;
+
+        const oldDuration = entry.durationMinutes ?? 0;
+        const diff = dur - oldDuration;
+
+        if (diff !== 0) {
+          await tx.task.update({
+            where: { id: taskId },
+            data: { loggedMinutes: { increment: diff } },
+          });
+        }
+      }
+
+      return tx.taskTimeEntry.update({
+        where: { id: entryId },
+        data: updateData,
+      });
+    });
+
+    return sendSuccessResponse(res, 200, "Time entry updated", updated);
+  } catch (err: any) {
+    console.error("[updateTimeEntryUser]", err);
+    return sendErrorResponse(res, 500, err?.message ?? "Failed to update time entry");
   }
 }
 

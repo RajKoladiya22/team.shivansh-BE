@@ -49,6 +49,7 @@ import {
   logManualTimeUser,
   getTimeEntriesUser,
   deleteTimeEntryUser,
+  updateTimeEntryUser,
   // Watchers
   toggleWatchTaskUser,
   // Attachments
@@ -57,6 +58,10 @@ import {
   // Subtasks
   createSubtaskUser,
 } from "../../controller/user/task.controller";
+import {
+  setTaskCustomFieldValue,
+  getTaskCustomFieldValues,
+} from "../../controller/user/taskCustomValue.controller";
 import { requireAuth, requireRole } from "../../core/middleware/auth";
 
 const router = Router();
@@ -78,7 +83,7 @@ router.post("/admin/tasks", requireRole("ADMIN"), createTaskAdmin);
 router.get("/admin/tasks", requireRole("ADMIN"), listTasksAdmin);
 router.get("/admin/tasks/:id", requireRole("ADMIN"), getTaskByIdAdmin);
 router.patch("/admin/tasks/:id", requireRole("ADMIN"), updateTaskAdmin);
-router.delete("/admin/task/bulk", requireRole("ADMIN"), deleteTasksBulkAdmin);
+router.delete("/admin/tasks/bulk", requireRole("ADMIN"), deleteTasksBulkAdmin);
 router.delete("/admin/tasks/:id", requireRole("ADMIN"), deleteTaskAdmin);
 
 router.patch("/admin/tasks/:id/recurrence", requireRole("ADMIN"), updateTaskRecurrenceAdmin);
@@ -166,7 +171,12 @@ router.get("/user/tasks/:id/time", getTimeEntriesUser);
 router.post("/user/tasks/:id/time/start", startTimeEntryUser);
 router.post("/user/tasks/:id/time/:entryId/stop", stopTimeEntryUser);
 router.post("/user/tasks/:id/time/log", logManualTimeUser);
+router.patch("/user/tasks/:id/time/:entryId", updateTimeEntryUser);
 router.delete("/user/tasks/:id/time/:entryId", deleteTimeEntryUser);
+
+// ── Custom Values ──────────────────────────────────────────────
+router.get("/user/tasks/:id/custom-values", getTaskCustomFieldValues);
+router.post("/user/tasks/:id/custom-values", setTaskCustomFieldValue);
 
 // ── Attachments ────────────────────────────────────────────────
 router.post("/user/tasks/:id/attachments", addAttachmentUser);
