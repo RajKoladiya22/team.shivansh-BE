@@ -868,6 +868,91 @@ export async function expireCustomerProduct(req: Request, res: Response) {
   }
 }
 
+export async function purchaseCustomerProduct(req: Request, res: Response) {
+  try {
+    const { id, productId } = req.params;
+    const { purchasedAt, price } = req.body;
+
+    // productId is now always a CustomerProduct.id
+    const cp = await prisma.customerProduct.findFirst({
+      where: { id: productId, customerId: id },
+      select: { id: true, productCatalogId: true, createdAt: true, meta: true },
+    });
+
+    if (!cp) return sendErrorResponse(res, 404, "Product not found");
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Update normalized row
+      const dataToUpdate: any = {
+        isPurchase: true,
+        purchasedAt: purchasedAt ? new Date(purchasedAt) : cp.createdAt,
+      };
+
+      if (price !== undefined) {
+        const currentMeta: any = cp.meta || {};
+        dataToUpdate.meta = { ...currentMeta, price: Number(price) };
+      }
+
+      await tx.customerProduct.update({
+        where: { id: cp.id },
+        data: dataToUpdate,
+      });
+
+      // 2. Rebuild JSON blob from all CustomerProduct rows for this customer
+      const allCPs = await tx.customerProduct.findMany({
+        where: { customerId: id },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          productCatalogId: true,
+          productTitle: true,
+          purchasedAt: true,
+          expiresAt: true,
+          isActive: true,
+          isExpired: true,
+          createdAt: true,
+          meta: true,
+        },
+      });
+
+      const active = allCPs
+        .filter((p) => p.isActive && !p.isExpired)
+        .map((p) => ({
+          id: p.productCatalogId ?? p.id,
+          name: p.productTitle,
+          price: (p.meta as any)?.price ?? null,
+          slug: (p.meta as any)?.slug ?? null,
+          purchaseAt: p.purchasedAt?.toISOString() ?? null,
+          addedAt: p.createdAt.toISOString(),
+          status: "ACTIVE",
+        }));
+
+      const history = allCPs
+        .filter((p) => p.isExpired || !p.isActive)
+        .map((p) => ({
+          id: p.productCatalogId ?? p.id,
+          name: p.productTitle,
+          price: (p.meta as any)?.price ?? null,
+          slug: (p.meta as any)?.slug ?? null,
+          purchaseAt: p.purchasedAt?.toISOString() ?? null,
+          expiredAt: p.expiresAt?.toISOString() ?? null,
+          addedAt: p.createdAt.toISOString(),
+          status: "EXPIRED",
+        }));
+
+      await tx.customer.update({
+        where: { id },
+        data: { products: { active, history }, updatedAt: new Date() },
+      });
+    });
+
+    return sendSuccessResponse(res, 200, "Product marked as purchased");
+  } catch (err: any) {
+    return sendErrorResponse(res, 500, err.message);
+  }
+}
+
+
 /**
  * DELETE /admin/customers/:id/permanent
  * Hard delete customer with all related leads
@@ -1505,6 +1590,17 @@ export async function getCustomerAnalytics(req: Request, res: Response) {
 
     const hasDateFilter = !!(fromDate || toDate);
 
+    /* ── Configurable top-N limits ── */
+    const VALID_LIMITS = [10, 20, 30] as const;
+    const rawTopProductsLimit = Number(req.query.topProductsLimit ?? 10);
+    const rawHighValueLimit = Number(req.query.highValueLimit ?? 10);
+    const topProductsLimit: number = VALID_LIMITS.includes(rawTopProductsLimit as any)
+      ? rawTopProductsLimit
+      : 10;
+    const highValueLimit: number = VALID_LIMITS.includes(rawHighValueLimit as any)
+      ? rawHighValueLimit
+      : 10;
+
     /* Build a reusable Prisma where clause for createdAt range */
     const createdAtFilter: Prisma.CustomerWhereInput =
       hasDateFilter
@@ -1731,22 +1827,62 @@ export async function getCustomerAnalytics(req: Request, res: Response) {
       `,
     ]);
 
-    /* ── 6. Top active products (JSON array traversal) ── */
-    const productRows = await prisma.$queryRaw<
+    /* ── 6. Top active products (relational CustomerProduct table — authoritative) ── */
+    // Primary: use the CustomerProduct relational table joined to ProductCatalog
+    const cpProductRows = await prisma.$queryRaw<
       { name: string; cnt: bigint }[]
-    >`
-      SELECT  p->>'name'      AS name,
-              COUNT(*)::bigint AS cnt
-      FROM    "Customer",
-              jsonb_array_elements((products->'active')::jsonb) AS p
-      WHERE   products IS NOT NULL
-        AND   p->>'name' IS NOT NULL
-      GROUP   BY 1
-      ORDER   BY 2 DESC
-      LIMIT   10
-    `;
+    >(
+      Prisma.sql`
+        SELECT  COALESCE(pc.title, cp."productTitle") AS name,
+                COUNT(*)::bigint                       AS cnt
+        FROM    "CustomerProduct" cp
+        LEFT JOIN "ProductCatalog" pc ON pc.id = cp."productCatalogId"
+        WHERE   cp."isActive" = true
+          AND   cp."isExpired" = false
+        GROUP   BY 1
+        ORDER   BY 2 DESC
+        LIMIT   ${topProductsLimit}
+      `
+    );
 
-    /* ── 7. High-value customers (active products × leads) ── */
+    // Fallback: also query the legacy JSON products column so we never show empty
+    const jsonProductRows = await prisma.$queryRaw<
+      { name: string; cnt: bigint }[]
+    >(
+      Prisma.sql`
+        SELECT  p->>'name'       AS name,
+                COUNT(*)::bigint AS cnt
+        FROM    "Customer",
+                jsonb_array_elements((products->'active')::jsonb) AS p
+        WHERE   products IS NOT NULL
+          AND   p->>'name' IS NOT NULL
+        GROUP   BY 1
+        ORDER   BY 2 DESC
+        LIMIT   ${topProductsLimit}
+      `
+    );
+
+    // Merge: prefer relational data; supplement with JSON if relational is thin
+    const productMergeMap = new Map<string, number>();
+    for (const r of cpProductRows) {
+      const key = (r.name ?? "").trim();
+      if (key) productMergeMap.set(key, (productMergeMap.get(key) ?? 0) + Number(r.cnt));
+    }
+    // Only use JSON fallback if relational table has no entries at all
+    if (productMergeMap.size === 0) {
+      for (const r of jsonProductRows) {
+        const key = (r.name ?? "").trim();
+        if (key) productMergeMap.set(key, (productMergeMap.get(key) ?? 0) + Number(r.cnt));
+      }
+    }
+    const productRows = [...productMergeMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, topProductsLimit)
+      .map(([name, cnt]) => ({ name, cnt: BigInt(cnt) }));
+
+    /* ── 7. High-value customers ── */
+    // Over-fetch, score server-side using both relational CP count + JSON + leads
+    const overFetch = Math.max(highValueLimit * 3, 60);
     const highValueRaw = await prisma.customer.findMany({
       where: { ...createdAtFilter, isActive: true },
       select: {
@@ -1758,16 +1894,29 @@ export async function getCustomerAnalytics(req: Request, res: Response) {
         state: true,
         customerCategory: true,
         products: true,
-        _count: { select: { leads: true } },
+        _count: {
+          select: {
+            leads: true,
+            customerProducts: {
+              where: { isActive: true, isExpired: false },
+            },
+          },
+        },
       },
       orderBy: { leads: { _count: "desc" } },
-      take: 50, // over-fetch then re-score client-side
+      take: overFetch,
     });
 
     const highValueCustomers = highValueRaw
       .map((c) => {
-        const active: any[] = (c.products as any)?.active ?? [];
-        const score = active.length * 2 + c._count.leads;
+        // Relational CustomerProduct count (authoritative)
+        const cpCount = c._count.customerProducts;
+        // JSON legacy products — used as additional signal
+        const jsonActive: any[] = (c.products as any)?.active ?? [];
+        // Score: relational CP count × 3 + JSON active × 1 + leads count × 2
+        // Relational records are weighted higher as they are more reliable
+        const activeProducts = Math.max(cpCount, jsonActive.length);
+        const score = cpCount * 3 + jsonActive.length + c._count.leads * 2;
         return {
           id: c.id,
           name: c.name,
@@ -1776,13 +1925,13 @@ export async function getCustomerAnalytics(req: Request, res: Response) {
           city: c.city,
           state: c.state,
           customerCategory: c.customerCategory,
-          activeProducts: active.length,
+          activeProducts,
           totalLeads: c._count.leads,
           score,
         };
       })
       .sort((a, b) => b.score - a.score)
-      .slice(0, 10);
+      .slice(0, highValueLimit);
 
     /* ── 8. Average products per customer ── */
     const avgProductsRow = await prisma.$queryRaw<{ avg: number }[]>`
@@ -1853,7 +2002,7 @@ export async function getCustomerAnalytics(req: Request, res: Response) {
         })),
         topProducts: productRows.map((r) => ({
           name: r.name,
-          count: Number(r.cnt),
+          count: typeof r.cnt === 'bigint' ? Number(r.cnt) : (r.cnt as number),
         })),
       },
       trends: {

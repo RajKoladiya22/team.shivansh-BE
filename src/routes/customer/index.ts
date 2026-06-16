@@ -8,6 +8,7 @@ import {
   deleteCustomer,
   addCustomerProduct,
   expireCustomerProduct,
+  purchaseCustomerProduct,
   deleteCustomerPermanentAdmin,
   removeCustomerProductAdmin,
   bulkImportCustomers,
@@ -39,6 +40,11 @@ router.patch(
   "/:id/products/:productId/expire",
   requireAuth,
   expireCustomerProduct,
+);
+router.patch(
+  "/:id/products/:productId/purchase",
+  requireAuth,
+  purchaseCustomerProduct,
 );
 router.delete("/:id/permanent", requireAuth, deleteCustomerPermanentAdmin);
 
