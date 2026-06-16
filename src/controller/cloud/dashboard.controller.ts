@@ -60,6 +60,7 @@ interface DashboardStats {
     totalServices: number;
     totalActive: number;
     totalInactive: number;
+    totalExpired: number;
 
     // By type
     byType: TypeBreakdown[];
@@ -119,13 +120,20 @@ export async function getCloudServiceDashboardStats(
         // 1. Overall counts
         // ─────────────────────────────────────────────────────────────────────────
 
-        const [totalServices, totalActive, totalInactive] = await Promise.all([
+        const [totalServices, totalActive, totalInactive, totalExpired] = await Promise.all([
             prisma.cloudService.count(),
             prisma.cloudService.count({
                 where: { isActive: true },
             }),
             prisma.cloudService.count({
                 where: { isActive: false },
+            }),
+            prisma.cloudService.count({
+                where: {
+                    expiryDate: {
+                        lt: new Date(),
+                    },
+                },
             }),
         ]);
 
@@ -334,6 +342,7 @@ export async function getCloudServiceDashboardStats(
             totalServices,
             totalActive,
             totalInactive,
+            totalExpired,
 
             // By type
             byType: typeBreakdown,
@@ -466,10 +475,17 @@ export async function getCloudServiceDetailedStats(
         // Get overall stats first (unfiltered)
         // ─────────────────────────────────────────────────────────────────────────
 
-        const [totalServices, totalActive, totalInactive] = await Promise.all([
+        const [totalServices, totalActive, totalInactive, totalExpired] = await Promise.all([
             prisma.cloudService.count(),
             prisma.cloudService.count({ where: { isActive: true } }),
             prisma.cloudService.count({ where: { isActive: false } }),
+            prisma.cloudService.count({
+                where: {
+                    expiryDate: {
+                        lt: new Date(),
+                    },
+                },
+            }),
         ]);
 
         // ─────────────────────────────────────────────────────────────────────────
@@ -650,6 +666,7 @@ export async function getCloudServiceDetailedStats(
             totalServices,
             totalActive,
             totalInactive,
+            totalExpired,
             byType: typeBreakdown,
             miracle: {
                 total: miracleTotal,
@@ -744,6 +761,7 @@ interface QuickStats {
     expiringIn7Days: number;
     onTrial: number;
     needsSetup: number;
+    expired: number;
 }
 
 export async function getQuickCloudServiceStats(
@@ -768,6 +786,7 @@ export async function getQuickCloudServiceStats(
             expiring,
             onTrial,
             needsSetup,
+            expired,
         ] = await Promise.all([
             prisma.cloudService.count(),
             prisma.cloudService.count({ where: { isActive: true } }),
@@ -788,6 +807,13 @@ export async function getQuickCloudServiceStats(
             prisma.cloudService.count({
                 where: { isDriveSetup: false },
             }),
+            prisma.cloudService.count({
+                where: {
+                    expiryDate: {
+                        lt: now,
+                    },
+                },
+            }),
         ]);
 
         const stats: QuickStats = {
@@ -801,6 +827,7 @@ export async function getQuickCloudServiceStats(
             expiringIn7Days: expiring,
             onTrial,
             needsSetup,
+            expired,
         };
 
         return sendSuccessResponse(
