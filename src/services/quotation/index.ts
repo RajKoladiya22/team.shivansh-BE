@@ -408,3 +408,19 @@ export async function trySendQuotationEmail(q: any, isReminder: boolean): Promis
     console.error(`[quotation-email] Failed → ${email}:`, err?.message ?? err);
   }
 }
+
+export function formatQuotationResponse(q: any): any {
+  if (!q) return q;
+  if (Array.isArray(q)) {
+    return q.map(formatQuotationResponse);
+  }
+  const lineItems = (q.lineItems ?? []).map((item: any) => ({
+    ...item,
+    productId: item.productCatalogId ?? item.productId ?? null,
+  }));
+  return {
+    ...q,
+    lineItems,
+  };
+}
+

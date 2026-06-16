@@ -14,6 +14,7 @@ import {
   LineItemInput,
   toNullableNumber,
   trySendQuotationEmail,
+  formatQuotationResponse,
 } from "../../services/quotation";
 
 /* ─────────────────────────────────────────────
@@ -163,7 +164,7 @@ export async function createQuotationAdmin(req: Request, res: Response) {
       await tx.quotationLineItem.createMany({
         data: computed.map((item: any) => ({
           quotationId: q.id,
-          productCatalogId: item.productCatalogId ?? null,
+          productCatalogId: item.productCatalogId ?? item.productId ?? null,
           position: item.position,
           productSlug: item.productSlug ?? null,
           name: item.name,
@@ -202,7 +203,7 @@ export async function createQuotationAdmin(req: Request, res: Response) {
       });
     });
 
-    return sendSuccessResponse(res, 201, "Quotation created", quotation);
+    return sendSuccessResponse(res, 201, "Quotation created", formatQuotationResponse(quotation));
   } catch (err: any) {
     console.error("Create quotation error:", err);
     return sendErrorResponse(
@@ -300,7 +301,7 @@ export async function listQuotationsAdmin(req: Request, res: Response) {
     ]);
 
     return sendSuccessResponse(res, 200, "Quotations fetched", {
-      data: quotations,
+      data: formatQuotationResponse(quotations),
       meta: {
         page: pageNum,
         limit: pageSize,
@@ -331,7 +332,7 @@ export async function getQuotationByIdAdmin(req: Request, res: Response) {
       select: quotationFullSelect,
     });
     if (!quotation) return sendErrorResponse(res, 404, "Quotation not found");
-    return sendSuccessResponse(res, 200, "Quotation fetched", quotation);
+    return sendSuccessResponse(res, 200, "Quotation fetched", formatQuotationResponse(quotation));
   } catch (err: any) {
     return sendErrorResponse(
       res,
@@ -434,21 +435,21 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
       newComputedItems = computeLineItems(rawItems as LineItemInput[]);
       const financials = computeFinancials(
         newComputedItems,
-        extraDiscountType ?? (existing.extraDiscountType as any),
-        toNullableNumber(extraDiscountValue ?? existing.extraDiscountValue),
-        taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent),
+        extraDiscountType !== undefined ? extraDiscountType : (existing.extraDiscountType as any),
+        extraDiscountValue !== undefined ? toNullableNumber(extraDiscountValue) : toNullableNumber(existing.extraDiscountValue),
+        taxPercent !== undefined ? (taxPercent ? Number(taxPercent) : null) : toNullableNumber(existing.taxPercent),
       );
       updateData.subtotal = financials.subtotal;
       updateData.totalDiscount = financials.totalDiscount;
       updateData.totalTax = financials.totalTax;
       updateData.grandTotal = financials.grandTotal;
-    } else if (extraDiscountType !== undefined || extraDiscountValue !== undefined) {
-      // extra discount changed but no new line items — recompute from existing relation rows
+    } else if (extraDiscountType !== undefined || extraDiscountValue !== undefined || taxPercent !== undefined) {
+      // extra discount or tax changed but no new line items — recompute from existing relation rows
       const financials = computeFinancials(
         existingItemsAsInput as any,
-        extraDiscountType ?? (existing.extraDiscountType as any),
-        toNullableNumber(extraDiscountValue ?? existing.extraDiscountValue),
-        taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent),
+        extraDiscountType !== undefined ? extraDiscountType : (existing.extraDiscountType as any),
+        extraDiscountValue !== undefined ? toNullableNumber(extraDiscountValue) : toNullableNumber(existing.extraDiscountValue),
+        taxPercent !== undefined ? (taxPercent ? Number(taxPercent) : null) : toNullableNumber(existing.taxPercent),
       );
       updateData.subtotal = financials.subtotal;
       updateData.totalDiscount = financials.totalDiscount;
@@ -498,7 +499,7 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
             // (productId here refers to your adminProductId — pass it through your cache or skip)
             return {
               quotationId: id,
-              productCatalogId: item.productCatalogId ?? null, // set if your computeLineItems returns it
+              productCatalogId: item.productCatalogId ?? item.productId ?? null, // set if your computeLineItems returns it
               position: item.position,
               productSlug: item.productSlug ?? null,
               name: item.name,
@@ -538,7 +539,7 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
       return q;
     });
 
-    return sendSuccessResponse(res, 200, "Quotation updated", updated);
+    return sendSuccessResponse(res, 200, "Quotation updated", formatQuotationResponse(updated));
   } catch (err: any) {
     console.error("Update quotation error:", err);
     return sendErrorResponse(res, 500, err?.message ?? "Failed to update quotation");
@@ -612,7 +613,7 @@ export async function sendQuotationAdmin(req: Request, res: Response) {
 
     void trySendQuotationEmail(updated, false);
 
-    return sendSuccessResponse(res, 200, "Quotation marked as sent", updated);
+    return sendSuccessResponse(res, 200, "Quotation marked as sent", formatQuotationResponse(updated));
   } catch (err: any) {
     return sendErrorResponse(
       res,
@@ -687,7 +688,7 @@ export async function remindQuotationAdmin(req: Request, res: Response) {
 
     void trySendQuotationEmail(updated, true);
 
-    return sendSuccessResponse(res, 200, "Reminder logged", updated);
+    return sendSuccessResponse(res, 200, "Reminder logged", formatQuotationResponse(updated));
   } catch (err: any) {
     return sendErrorResponse(
       res,
@@ -904,27 +905,13 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
     const itemsToUse = rawItems?.length
       ? rawItems
       : (existing.lineItems as any[]);
-    // const edType = extraDiscountType ?? existing.extraDiscountType;
-    // const edValue =
-    //   extraDiscountValue !== undefined
-    //     ? extraDiscountValue
-    //     : toNullableNumber(existing.extraDiscountValue);
-    const edType = extraDiscountType
-    // extraDiscountType !== undefined
-    //   ? extraDiscountType
-    //   : existing.extraDiscountType;
 
-
-    const edValue =
-      edType !== undefined
-        ? extraDiscountValue
-        : undefined
-
-    // console.log("\n\n edType--->", edType);
-    // console.log("\n\n edValue--->", edValue);
+    const edType = extraDiscountType !== undefined ? extraDiscountType : existing.extraDiscountType;
+    const edValue = extraDiscountValue !== undefined ? toNullableNumber(extraDiscountValue) : toNullableNumber(existing.extraDiscountValue);
+    const globalTax = taxPercent !== undefined ? (taxPercent ? Number(taxPercent) : null) : toNullableNumber(existing.taxPercent);
 
     const computed = computeLineItems(itemsToUse as LineItemInput[]);
-    const financials = computeFinancials(computed, edType as any, edValue, taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent),);
+    const financials = computeFinancials(computed, edType as any, edValue, globalTax);
 
     const quotationNumber = await generateQuotationNumber();
 
@@ -945,11 +932,11 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
           totalTax: financials.totalTax,
           grandTotal: financials.grandTotal,
           extraDiscountType: (edType as any) ?? null,
-          extraDiscountValue: edValue || null,
+          extraDiscountValue: edValue ?? null,
           extraDiscountNote:
             extraDiscountNote ?? (existing.extraDiscountNote as any),
           taxType: (taxType ?? existing.taxType) as any,
-          taxPercent: taxPercent !== undefined ? taxPercent : toNullableNumber(existing.taxPercent),
+          taxPercent: globalTax ?? null,
           gstin: gstin ?? existing.gstin,
           customerGstin: customerGstin ?? existing.customerGstin,
           placeOfSupply: placeOfSupply ?? existing.placeOfSupply,
@@ -974,7 +961,7 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
       await tx.quotationLineItem.createMany({
         data: computed.map((item: any) => ({
           quotationId: q.id,
-          productCatalogId: item.productCatalogId ?? null,
+          productCatalogId: item.productCatalogId ?? item.productId ?? null,
           position: item.position,
           productSlug: item.productSlug ?? null,
           name: item.name,
@@ -1013,7 +1000,7 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
       });
     });
 
-    return sendSuccessResponse(res, 201, "Revised quotation created", revised);
+    return sendSuccessResponse(res, 201, "Revised quotation created", formatQuotationResponse(revised));
   } catch (err: any) {
     return sendErrorResponse(
       res,

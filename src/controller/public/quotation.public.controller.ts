@@ -14,7 +14,7 @@ import {
   sendErrorResponse,
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
-import { isQuotationExpired } from "../../services/quotation";
+import { isQuotationExpired, formatQuotationResponse } from "../../services/quotation";
 
 /* ─────────────────────────────────────────────
    Public select — strips internal-only fields
@@ -155,7 +155,7 @@ export async function getPublicQuotation(req: Request, res: Response) {
     }
 
     return sendSuccessResponse(res, 200, "Quotation fetched", {
-      quotation,
+      quotation: formatQuotationResponse(quotation),
       isExpired: expired,
       canRespond:
         !expired &&
