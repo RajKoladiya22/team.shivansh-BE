@@ -1,0 +1,4 @@
+graph TD
+    Client[React Frontend] <-->|REST / Sockets| Server[Express Backend]
+    Server <--> ORM[Prisma Client]
+    ORM <--> DB[(PostgreSQL)]

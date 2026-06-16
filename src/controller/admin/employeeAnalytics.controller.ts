@@ -1,6 +1,6 @@
 // src/controller/admin/employeeAnalytics.controller.ts
 import { Request, Response } from "express";
-import { Prisma } from "@prisma/client";
+import { Prisma, ExpertiseLevel } from "@prisma/client";
 import { prisma } from "../../config/database.config";
 import {
     sendErrorResponse,
@@ -1198,8 +1198,9 @@ interface LeadMetrics {
     revenuePerHour: number;
     workHours: number;
     avgHoursPerLead: number;
-    // demoCount removed — demo tracking belongs on the lead record, not a derived metric
-    // demoConversionRate removed — leads can convert without a demo, the ratio is misleading
+    demoCount: number;          // Total demo events conducted
+    leadsWithDemo: number;      // Leads with at least one demo
+    demoScheduledCount: number; // Leads with scheduled pending demo
 }
 
 interface TaskMetrics {
@@ -1209,6 +1210,8 @@ interface TaskMetrics {
     pending: number;
     overdue: number;
     completedOnTime: number;
+    completedLate: number; // Completed after due date
+    dueCount: number;      // Total tasks with a due date
     onTimeRate: number;
     completionRate: number;
     estimatedHours: number;
@@ -1217,6 +1220,39 @@ interface TaskMetrics {
     checklistCompletionRate: number;
     priorityBreakdown: PriorityBreakdown;
     avgCompletionTime: number;
+
+    // Learning tasks fields
+    learningTasks: number;
+    learningCompleted: number;
+    learningPending: number;
+    learningOverdue: number;
+    learningCompletedOnTime: number;
+    learningCompletedLate: number;
+}
+
+interface ProductExpertiseMetric {
+    id: string;
+    productCatalogId: string;
+    productTitle: string;
+    productSlug: string;
+    expertiseLevel: ExpertiseLevel;
+    yearsOfExperience: number | null;
+    completedProjects: number;
+    leadsConverted: number;
+    leadsCount: number;
+    demoCount: number;
+    successRate: number;
+    lastDemoAt: Date | null;
+    lastLeadAt: Date | null;
+}
+
+interface ProductExpertiseSummary {
+    totalProducts: number;
+    expertCount: number;
+    canDemoCount: number;
+    learningCount: number;
+    guidanceCount: number;
+    noneCount: number;
 }
 
 interface ProductivityMetrics {
@@ -1243,6 +1279,8 @@ interface EmployeeDetailedMetrics {
     attendance: AttendanceMetrics;
     leads: LeadMetrics;
     tasks: TaskMetrics;
+    productExpertise: ProductExpertiseMetric[];
+    productExpertiseSummary: ProductExpertiseSummary;
     productivity: ProductivityMetrics;
     performanceScore: number;
     riskFactors: string[];
@@ -1527,6 +1565,9 @@ async function computeLeadMetrics(
     let leadWorkSec = 0;
     let followUpDone = 0;
     let followUpTotal = 0;
+    let demoCount = 0;
+    let leadsWithDemo = 0;
+    let demoScheduledCount = 0;
 
     for (const lead of leads) {
         const s = lead.status as keyof LeadStatusBreakdown;
@@ -1558,6 +1599,14 @@ async function computeLeadMetrics(
 
         followUpTotal += lead.followUps.length;
         followUpDone += lead.followUps.filter((f) => f.status === 'DONE').length;
+
+        demoCount += lead.demoCount ?? 0;
+        if (lead.demoDoneAt || (lead.demoCount ?? 0) > 0 || lead.status === "DEMO_DONE") {
+            leadsWithDemo++;
+        }
+        if (lead.demoScheduledAt && !lead.demoDoneAt) {
+            demoScheduledCount++;
+        }
     }
 
     const totalAssigned = leads.length;
@@ -1576,6 +1625,9 @@ async function computeLeadMetrics(
         revenuePerHour: round(revenuePerHour),
         workHours: round(leadWorkHours),
         avgHoursPerLead: totalAssigned > 0 ? round(leadWorkHours / totalAssigned) : 0,
+        demoCount,
+        leadsWithDemo,
+        demoScheduledCount,
     };
 }
 
@@ -1632,6 +1684,16 @@ async function computeTaskMetrics(
     let completed = 0;
     let overdue = 0;
     let completedOnTime = 0;
+    let completedLate = 0;
+    let dueCount = 0;
+
+    let learningTasks = 0;
+    let learningCompleted = 0;
+    let learningPending = 0;
+    let learningOverdue = 0;
+    let learningCompletedOnTime = 0;
+    let learningCompletedLate = 0;
+
     let estimatedMin = 0;
     let loggedMin = 0;
     let totalCompletionMs = 0;
@@ -1645,27 +1707,53 @@ async function computeTaskMetrics(
         const pr = task.priority as keyof PriorityBreakdown;
         if (pr in priorityBreakdown) priorityBreakdown[pr]++;
 
+        const isTaskLearning = task.isLearning === true;
+        if (isTaskLearning) {
+            learningTasks++;
+        }
+
+        if (task.dueDate) {
+            dueCount++;
+        }
+
         // Completion metrics
         if (task.status === 'COMPLETED') {
             completed++;
-            if (task.dueDate && task.completedAt) {
-                if (new Date(task.completedAt) <= new Date(task.dueDate)) completedOnTime++;
+            if (isTaskLearning) {
+                learningCompleted++;
+            }
+
+            if (task.dueDate) {
+                const compTime = task.completedAt ? new Date(task.completedAt) : new Date(task.updatedAt);
+                if (compTime <= new Date(task.dueDate)) {
+                    completedOnTime++;
+                    if (isTaskLearning) {
+                        learningCompletedOnTime++;
+                    }
+                } else {
+                    completedLate++;
+                    if (isTaskLearning) {
+                        learningCompletedLate++;
+                    }
+                }
             }
 
             if (task.completedAt) {
                 const start = task.startedAt ?? task.createdAt;
                 totalCompletionMs += task.completedAt.getTime() - start.getTime();
             }
-        }
+        } else if (task.status !== 'CANCELLED') {
+            if (isTaskLearning) {
+                learningPending++;
+            }
 
-        // Overdue = active task whose due date has already passed
-        if (
-            task.status !== 'COMPLETED' &&
-            task.status !== 'CANCELLED' &&
-            task.dueDate &&
-            new Date(task.dueDate) < now
-        ) {
-            overdue++;
+            // Overdue = active task whose due date has already passed
+            if (task.dueDate && new Date(task.dueDate) < now) {
+                overdue++;
+                if (isTaskLearning) {
+                    learningOverdue++;
+                }
+            }
         }
 
         // Time tracking (use pre-aggregated field on the task — no extra query)
@@ -1694,10 +1782,11 @@ async function computeTaskMetrics(
         totalAssigned: totalTasks,
         statusBreakdown,
         completed,
-        // pending = actively not-done (PENDING + IN_PROGRESS)
-        pending: (statusBreakdown.PENDING ?? 0) + (statusBreakdown.IN_PROGRESS ?? 0),
+        pending: (statusBreakdown.PENDING ?? 0) + (statusBreakdown.IN_PROGRESS ?? 0) + (statusBreakdown.IN_REVIEW ?? 0) + (statusBreakdown.BLOCKED ?? 0),
         overdue,
         completedOnTime,
+        completedLate,
+        dueCount,
         onTimeRate: round(onTimeRate),
         completionRate: round(completionRate),
         estimatedHours: round(estimatedHours),
@@ -1706,6 +1795,12 @@ async function computeTaskMetrics(
         checklistCompletionRate: round(checklistRate),
         priorityBreakdown,
         avgCompletionTime: round(avgCompletionTime),
+        learningTasks,
+        learningCompleted,
+        learningPending,
+        learningOverdue,
+        learningCompletedOnTime,
+        learningCompletedLate,
     };
 }
 
@@ -1820,7 +1915,8 @@ async function getEmployeeMetrics(
     },
     from: Date,
     to: Date,
-    excludeSat: boolean
+    excludeSat: boolean,
+    expertiseEntries: any[]
 ): Promise<EmployeeDetailedMetrics> {
     // Run all three DB-heavy modules in parallel
     const [attendance, leads, tasks] = await Promise.all([
@@ -1849,6 +1945,28 @@ async function getEmployeeMetrics(
         attendance, leads, tasks, performanceScore
     );
 
+    const expertCount = expertiseEntries.filter((e) => e.expertiseLevel === "EXPERT").length;
+    const canDemoCount = expertiseEntries.filter((e) => e.expertiseLevel === "CAN_DEMO").length;
+    const learningCount = expertiseEntries.filter((e) => e.expertiseLevel === "LEARNING").length;
+    const guidanceCount = expertiseEntries.filter((e) => e.expertiseLevel === "GUIDANCE_NEEDED").length;
+    const noneCount = expertiseEntries.filter((e) => e.expertiseLevel === "NONE").length;
+
+    const formattedExpertise = expertiseEntries.map((e) => ({
+        id: e.id,
+        productCatalogId: e.productCatalogId,
+        productTitle: e.productCatalog.title,
+        productSlug: e.productCatalog.slug,
+        expertiseLevel: e.expertiseLevel,
+        yearsOfExperience: e.yearsOfExperience ?? null,
+        completedProjects: e.completedProjects,
+        leadsConverted: e.leadsConverted,
+        leadsCount: e.leadsCount,
+        demoCount: e.demoCount,
+        successRate: e.successRate,
+        lastDemoAt: e.lastDemoAt ? new Date(e.lastDemoAt) : null,
+        lastLeadAt: e.lastLeadAt ? new Date(e.lastLeadAt) : null,
+    }));
+
     return {
         accountId: emp.id,
         name: `${emp.firstName} ${emp.lastName}`,
@@ -1863,6 +1981,15 @@ async function getEmployeeMetrics(
         attendance,
         leads,
         tasks,
+        productExpertise: formattedExpertise,
+        productExpertiseSummary: {
+            totalProducts: expertiseEntries.length,
+            expertCount,
+            canDemoCount,
+            learningCount,
+            guidanceCount,
+            noneCount,
+        },
 
         productivity: {
             // Only attendance clock hours — avoids triple-counting with leads.workHours
@@ -2223,9 +2350,32 @@ export async function getEmployeeAnalyticsV3(req: Request, res: Response): Promi
 
         const accountIds = employees.map((e) => e.id);
 
+        // Bulk fetch all product expertise for the employees to avoid N+1 queries
+        const allExpertise = await prisma.userProductExpertise.findMany({
+            where: { userId: { in: accountIds } },
+            include: {
+                productCatalog: {
+                    select: {
+                        id: true,
+                        title: true,
+                        slug: true,
+                    }
+                }
+            }
+        });
+
+        // Group by userId
+        const expertiseByUserId: Record<string, typeof allExpertise> = {};
+        for (const exp of allExpertise) {
+            if (!expertiseByUserId[exp.userId]) {
+                expertiseByUserId[exp.userId] = [];
+            }
+            expertiseByUserId[exp.userId].push(exp);
+        }
+
         // ── 5. Per-employee detail — all three modules run in parallel per employee
         const detailed = await Promise.all(
-            employees.map((emp) => getEmployeeMetrics(emp, fromDate, toDate, excludeSat))
+            employees.map((emp) => getEmployeeMetrics(emp, fromDate, toDate, excludeSat, expertiseByUserId[emp.id] ?? []))
         );
 
         const filtered = minScore !== null
