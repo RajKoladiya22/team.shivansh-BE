@@ -616,30 +616,34 @@ export async function createTaskAdmin(req: Request, res: Response) {
       labels = [],
       checklist = [], // ✅ checklist support
       note,
-      accountId: assigneeAccountId,
+      accountId: assigneeAccountId, // singular support (fallback)
+      accountIds: assigneeAccountIds, // plural support (new)
       teamId: assigneeTeamId,
       isRecurring = false,
       recurrenceType = "ONE_TIME",
       recurrenceRule = null,
       isLearning = false,
+      bulkAssign = false, // new flag for bulk task creation (individual task for each)
     } = req.body as Record<string, any>;
 
     // ── Validation ─────────────────────────────────────────────
     if (!title?.trim())
       return sendErrorResponse(res, 400, "Task title is required");
 
-    if (!assigneeAccountId && !assigneeTeamId && !isSelfTask)
+    const targetAccountIds: string[] = assigneeAccountIds || (assigneeAccountId ? [assigneeAccountId] : []);
+
+    if (!targetAccountIds.length && !assigneeTeamId && !isSelfTask)
       return sendErrorResponse(
         res,
         400,
         "Assign to an account, a team, or mark as self task",
       );
 
-    if (assigneeAccountId && assigneeTeamId)
+    if (targetAccountIds.length > 0 && assigneeTeamId)
       return sendErrorResponse(
         res,
         400,
-        "Provide either accountId or teamId, not both",
+        "Provide either accountId(s) or teamId, not both",
       );
 
     if (!Object.values(TaskPriority).includes(priority))
@@ -666,13 +670,161 @@ export async function createTaskAdmin(req: Request, res: Response) {
       if (wipError) return sendErrorResponse(res, 400, wipError);
     }
 
+    // Resolve recipient account IDs for assignment
+    let recipientIds: string[] = [];
+    if (targetAccountIds.length > 0) {
+      recipientIds = targetAccountIds;
+    } else if (assigneeTeamId) {
+      const members = await prisma.teamMember.findMany({
+        where: { teamId: assigneeTeamId, isActive: true },
+        select: { accountId: true },
+      });
+      recipientIds = members.map((m) => m.accountId);
+    }
+
+    if (!isSelfTask && recipientIds.length === 0) {
+      return sendErrorResponse(
+        res,
+        400,
+        "No active assignees found for the assignment",
+      );
+    }
+
+    // ── Bulk Assignment Flow (Individual task for each assignee) ───────────────────
+    if (bulkAssign && !isSelfTask) {
+      const createdTasks = await prisma.$transaction(async (tx) => {
+        const tasks: any[] = [];
+        for (const recipientId of recipientIds) {
+          const created = await tx.task.create({
+            data: {
+              title: title.trim(),
+              description: description ?? null,
+              priority: priority as TaskPriority,
+              projectId: projectId ?? null,
+              stepId: stepId ?? null,
+              dueDate: dueDate ? new Date(dueDate) : null,
+              startDate: startDate ? new Date(startDate) : null,
+              estimatedMinutes: estimatedMinutes ?? null,
+              isSelfTask: false,
+              parentTaskId: parentTaskId ?? null,
+              createdBy: creatorAccountId,
+              status: TaskStatus.PENDING,
+              isRecurring: Boolean(isRecurring),
+              recurrenceType: isRecurring ? recurrenceType : "ONE_TIME",
+              recurrenceRule: isRecurring && recurrenceRule ? recurrenceRule : null,
+              isLearning: Boolean(isLearning),
+            },
+            select: TASK_LIST_SELECT,
+          });
+
+          // Create assignment to this specific member (with team relation if assigneeTeamId exists)
+          await tx.taskAssignment.create({
+            data: {
+              taskId: created.id,
+              type: AssignmentType.ACCOUNT,
+              teamId: assigneeTeamId ?? null,
+              accountId: recipientId,
+              assignedBy: creatorAccountId,
+              note: note ?? null,
+              status: TaskStatus.PENDING,
+            },
+          });
+
+          // Labels
+          if (labels.length > 0) {
+            await tx.taskLabel.createMany({
+              data: labels.map((labelId: string) => ({
+                taskId: created.id,
+                labelId,
+                addedBy: creatorAccountId,
+              })),
+              skipDuplicates: true,
+            });
+          }
+
+          // Checklist items fanned out to this specific member
+          if (Array.isArray(checklist) && checklist.length > 0) {
+            await tx.checklistItem.createMany({
+              data: checklist
+                .filter((item: any) => item?.title?.trim())
+                .map((item: any, idx: number) => ({
+                  taskId: created.id,
+                  title: item.title.trim(),
+                  order: idx,
+                  status: "PENDING" as const,
+                  assignedTo: recipientId,
+                  createdBy: creatorAccountId,
+                })),
+              skipDuplicates: true,
+            });
+          }
+
+          // Activity Log
+          const initialAssignee = await resolveAssigneeSnapshot({
+            accountId: recipientId,
+            teamId: assigneeTeamId ?? null,
+          });
+          await tx.activityLog.create({
+            data: {
+              entityType: "TASK",
+              entityId: created.id,
+              action: "CREATED",
+              performedBy: creatorAccountId,
+              projectId: projectId ?? null,
+              taskId: created.id,
+              toState: {
+                title,
+                priority,
+                dueDate: dueDate ?? null,
+                assignee: initialAssignee,
+                checklistCount: Array.isArray(checklist) ? checklist.length : 0,
+              },
+              meta: {
+                assignedTo: initialAssignee,
+                note: note ?? null,
+              },
+            },
+          });
+
+          tasks.push(created);
+        }
+        return tasks;
+      }, {
+        timeout: 15000,
+        maxWait: 5000,
+      });
+
+      // Emit events and trigger notifications for all tasks
+      for (const task of createdTasks) {
+        const assignment = task.assignments?.find((a: any) => a.type === "ACCOUNT");
+        const assignedAccountId = assignment?.accountId;
+        const notificationRecipientIds = assignedAccountId ? [assignedAccountId] : [];
+
+        emitTaskCreated(notificationRecipientIds, task as Record<string, unknown>);
+
+        await triggerTaskNotification({
+          taskId: task.id,
+          event: "CREATED",
+          performedByAccountId: creatorAccountId,
+          recipientAccountIds: notificationRecipientIds,
+        });
+      }
+
+      return sendSuccessResponse(
+        res,
+        201,
+        "Bulk tasks created successfully",
+        { id: createdTasks[0].id, tasks: createdTasks }
+      );
+    }
+
+    // ── Single Assignment Flow (As before, but supporting multiple accountIds) ────
     const initialAssignee = await resolveAssigneeSnapshot({
-      accountId: assigneeAccountId,
-      teamId: assigneeTeamId,
+      accountId: targetAccountIds[0] ?? null,
+      teamId: assigneeTeamId ?? null,
     });
 
-    // ── Transaction ────────────────────────────────────────────
-    const { task, recipientIds } = await prisma.$transaction(async (tx) => {
+    const { task, finalRecipientIds } = await prisma.$transaction(async (tx) => {
       const created = await tx.task.create({
         data: {
           title: title.trim(),
@@ -696,15 +848,26 @@ export async function createTaskAdmin(req: Request, res: Response) {
       });
 
       // ── Assignment ──────────────────────────────────────────
-      if (assigneeAccountId || assigneeTeamId) {
+      if (assigneeTeamId) {
         await createFanOutAssignments(
           tx,
           created.id,
-          assigneeAccountId ?? null,
-          assigneeTeamId ?? null,
+          null,
+          assigneeTeamId,
           creatorAccountId,
           note
         );
+      } else if (targetAccountIds.length > 0) {
+        for (const accountId of targetAccountIds) {
+          await createFanOutAssignments(
+            tx,
+            created.id,
+            accountId,
+            null,
+            creatorAccountId,
+            note
+          );
+        }
       }
 
       // ── Labels ─────────────────────────────────────────────
@@ -725,7 +888,7 @@ export async function createTaskAdmin(req: Request, res: Response) {
           tx,
           created.id,
           checklist,
-          assigneeAccountId ?? null,
+          targetAccountIds[0] ?? null,
           assigneeTeamId ?? null,
           creatorAccountId
         );
@@ -756,20 +919,7 @@ export async function createTaskAdmin(req: Request, res: Response) {
         },
       });
 
-      // ── Recipients ─────────────────────────────────────────
-      let recipientIds: string[] = [];
-
-      if (assigneeAccountId) {
-        recipientIds = [assigneeAccountId];
-      } else if (assigneeTeamId) {
-        const members = await tx.teamMember.findMany({
-          where: { teamId: assigneeTeamId, isActive: true },
-          select: { accountId: true },
-        });
-        recipientIds = members.map((m) => m.accountId);
-      }
-
-      return { task: created, recipientIds };
+      return { task: created, finalRecipientIds: recipientIds };
     },
       {
         timeout: 10000,
@@ -784,13 +934,13 @@ export async function createTaskAdmin(req: Request, res: Response) {
     });
 
     // ── Emit events ──────────────────────────────────────────
-    emitTaskCreated(recipientIds, fullTask as Record<string, unknown>);
+    emitTaskCreated(finalRecipientIds, fullTask as Record<string, unknown>);
 
     await triggerTaskNotification({
       taskId: task.id,
       event: "CREATED",
       performedByAccountId: creatorAccountId,
-      recipientAccountIds: recipientIds,
+      recipientAccountIds: finalRecipientIds,
     });
 
     return sendSuccessResponse(
