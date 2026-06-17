@@ -28,6 +28,9 @@ interface TrialStats {
     onTrial: number;
     trialCompleted: number;
     neverTrialed: number;
+    trialsCompleted: number;
+    trialsConverted: number;
+    trialConversionRate: number;
 }
 
 interface RenewalTypeStats {
@@ -61,6 +64,8 @@ interface DashboardStats {
     totalActive: number;
     totalInactive: number;
     totalExpired: number;
+    expiredServicesList: any[];
+    expiringSoonServicesList: any[];
 
     // By type
     byType: TypeBreakdown[];
@@ -219,8 +224,6 @@ export async function getCloudServiceDashboardStats(
             comhardActive,
             comhardInactive,
             comhardOnTrial,
-            comhardTrialCompleted,
-            comhardNeverTrial,
             comhardSetupComplete,
         ] = await Promise.all([
             prisma.cloudService.count({
@@ -239,6 +242,17 @@ export async function getCloudServiceDashboardStats(
                 },
             }),
             prisma.cloudService.count({
+                where: { type: "COMHARD", isDriveSetup: true },
+            }),
+        ]);
+
+        const [
+            comhardTrialCompleted,
+            comhardNeverTrial,
+            comhardTrialsCompleted,
+            comhardTrialsConverted,
+        ] = await Promise.all([
+            prisma.cloudService.count({
                 where: {
                     type: "COMHARD",
                     isOnTrial: false,
@@ -248,14 +262,27 @@ export async function getCloudServiceDashboardStats(
             prisma.cloudService.count({
                 where: {
                     type: "COMHARD",
-                    isOnTrial: false,
-                    trialDoneAt: null,
+                    trialStartDate: null,
                 },
             }),
             prisma.cloudService.count({
-                where: { type: "COMHARD", isDriveSetup: true },
+                where: {
+                    type: "COMHARD",
+                    trialDoneAt: { not: null },
+                },
+            }),
+            prisma.cloudService.count({
+                where: {
+                    type: "COMHARD",
+                    trialDoneAt: { not: null },
+                    isActive: true,
+                },
             }),
         ]);
+
+        const comhardTrialConversionRate = comhardTrialsCompleted > 0
+            ? Math.round((comhardTrialsConverted / comhardTrialsCompleted) * 1000) / 10
+            : 0;
 
         // ─────────────────────────────────────────────────────────────────────────
         // 3. By renewal type (QUARTERLY, SIX_MONTHS, YEARLY)
@@ -289,6 +316,49 @@ export async function getCloudServiceDashboardStats(
                 },
             },
         });
+
+        // ── Get expired and expiring soon lists ──────────────────────────────────
+        const [expiredServicesList, expiringSoonServicesList] = await Promise.all([
+            prisma.cloudService.findMany({
+                where: {
+                    expiryDate: {
+                        lt: now,
+                    },
+                },
+                take: 5,
+                orderBy: {
+                    expiryDate: "desc",
+                },
+                include: {
+                    customer: {
+                        select: {
+                            name: true,
+                            customerCompanyName: true,
+                        },
+                    },
+                },
+            }),
+            prisma.cloudService.findMany({
+                where: {
+                    expiryDate: {
+                        gte: now,
+                        lte: futureDate,
+                    },
+                },
+                take: 5,
+                orderBy: {
+                    expiryDate: "asc",
+                },
+                include: {
+                    customer: {
+                        select: {
+                            name: true,
+                            customerCompanyName: true,
+                        },
+                    },
+                },
+            }),
+        ]);
 
         // ─────────────────────────────────────────────────────────────────────────
         // 5. Drive setup status
@@ -343,6 +413,8 @@ export async function getCloudServiceDashboardStats(
             totalActive,
             totalInactive,
             totalExpired,
+            expiredServicesList,
+            expiringSoonServicesList,
 
             // By type
             byType: typeBreakdown,
@@ -361,6 +433,9 @@ export async function getCloudServiceDashboardStats(
                     onTrial: comhardOnTrial,
                     trialCompleted: comhardTrialCompleted,
                     neverTrialed: comhardNeverTrial,
+                    trialsCompleted: comhardTrialsCompleted,
+                    trialsConverted: comhardTrialsConverted,
+                    trialConversionRate: comhardTrialConversionRate,
                 },
                 setupComplete: comhardSetupComplete,
                 notSetup: comhardTotal - comhardSetupComplete,
@@ -554,13 +629,12 @@ export async function getCloudServiceDetailedStats(
             }),
         ]);
 
+        // Get Comhard stats
         const [
             comhardTotal,
             comhardActive,
             comhardInactive,
             comhardOnTrial,
-            comhardTrialCompleted,
-            comhardNeverTrial,
             comhardSetupComplete,
         ] = await Promise.all([
             prisma.cloudService.count({
@@ -579,6 +653,17 @@ export async function getCloudServiceDetailedStats(
                 },
             }),
             prisma.cloudService.count({
+                where: { type: "COMHARD", isDriveSetup: true },
+            }),
+        ]);
+
+        const [
+            comhardTrialCompleted,
+            comhardNeverTrial,
+            comhardTrialsCompleted,
+            comhardTrialsConverted,
+        ] = await Promise.all([
+            prisma.cloudService.count({
                 where: {
                     type: "COMHARD",
                     isOnTrial: false,
@@ -588,14 +673,27 @@ export async function getCloudServiceDetailedStats(
             prisma.cloudService.count({
                 where: {
                     type: "COMHARD",
-                    isOnTrial: false,
-                    trialDoneAt: null,
+                    trialStartDate: null,
                 },
             }),
             prisma.cloudService.count({
-                where: { type: "COMHARD", isDriveSetup: true },
+                where: {
+                    type: "COMHARD",
+                    trialDoneAt: { not: null },
+                },
+            }),
+            prisma.cloudService.count({
+                where: {
+                    type: "COMHARD",
+                    trialDoneAt: { not: null },
+                    isActive: true,
+                },
             }),
         ]);
+
+        const comhardTrialConversionRate = comhardTrialsCompleted > 0
+            ? Math.round((comhardTrialsConverted / comhardTrialsCompleted) * 1000) / 10
+            : 0;
 
         const [quarterly, sixMonths, yearly] = await Promise.all([
             prisma.cloudService.count({
@@ -621,6 +719,49 @@ export async function getCloudServiceDetailedStats(
                 },
             },
         });
+
+        // ── Get expired and expiring soon lists ──────────────────────────────────
+        const [expiredServicesList, expiringSoonServicesList] = await Promise.all([
+            prisma.cloudService.findMany({
+                where: {
+                    expiryDate: {
+                        lt: now,
+                    },
+                },
+                take: 5,
+                orderBy: {
+                    expiryDate: "desc",
+                },
+                include: {
+                    customer: {
+                        select: {
+                            name: true,
+                            customerCompanyName: true,
+                        },
+                    },
+                },
+            }),
+            prisma.cloudService.findMany({
+                where: {
+                    expiryDate: {
+                        gte: now,
+                        lte: futureDate,
+                    },
+                },
+                take: 5,
+                orderBy: {
+                    expiryDate: "asc",
+                },
+                include: {
+                    customer: {
+                        select: {
+                            name: true,
+                            customerCompanyName: true,
+                        },
+                    },
+                },
+            }),
+        ]);
 
         const [setupComplete, notSetup] = await Promise.all([
             prisma.cloudService.count({
@@ -667,6 +808,8 @@ export async function getCloudServiceDetailedStats(
             totalActive,
             totalInactive,
             totalExpired,
+            expiredServicesList,
+            expiringSoonServicesList,
             byType: typeBreakdown,
             miracle: {
                 total: miracleTotal,
@@ -683,6 +826,9 @@ export async function getCloudServiceDetailedStats(
                     onTrial: comhardOnTrial,
                     trialCompleted: comhardTrialCompleted,
                     neverTrialed: comhardNeverTrial,
+                    trialsCompleted: comhardTrialsCompleted,
+                    trialsConverted: comhardTrialsConverted,
+                    trialConversionRate: comhardTrialConversionRate,
                 },
                 setupComplete: comhardSetupComplete,
                 notSetup: comhardTotal - comhardSetupComplete,

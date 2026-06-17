@@ -360,7 +360,7 @@ async function updateTaskAndAssignmentStatus(
     await tx.taskComment.create({
       data: {
         taskId,
-        content: `[STATUS] **${performerName}** updated their status to **${status}**.\n\n**Team Progress:**\n- Completed: **${completedPct}%** (${completedCount}/${totalCount})\n- In Progress: **${inProgressPct}%** (${inProgressCount}/${totalCount})`,
+        // content: `[STATUS] **${performerName}** updated their status to **${status}**.\n\n**Team Progress:**\n- Completed: **${completedPct}%** (${completedCount}/${totalCount})\n- In Progress: **${inProgressPct}%** (${inProgressCount}/${totalCount})`,
         authorId: accountId,
       },
     });
@@ -1320,8 +1320,8 @@ export async function listTasksAdmin(req: Request, res: Response) {
     //   ...(sortField !== "createdAt" ? [{ createdAt: "desc" as const }] : []),
     // ];
     const orderBy = [
-      { status: "asc" as const }, 
       { createdAt: "desc" as const },
+      { status: "asc" as const }, 
       { priority: "desc" as const },
       { dueDate: "asc" as const },
     ];
@@ -2161,8 +2161,8 @@ export async function getMyTasksUser(req: Request, res: Response) {
     //   ...(sortField !== "updatedAt" ? [{ updatedAt: "desc" as const }] : []),
     // ];
     const orderBy = [
-      { status: "asc" as const }, 
       { createdAt: "desc" as const },
+      { status: "asc" as const }, 
       { priority: "desc" as const },
       { dueDate: "asc" as const },
     ];
