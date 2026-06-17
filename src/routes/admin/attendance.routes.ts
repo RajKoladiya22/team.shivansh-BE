@@ -26,7 +26,7 @@ router.patch("/:id/override", adminOverrideAttendance);
 router.delete("/checklog/:checkLogId", adminDeleteCheckLog);
 
 // Admin — Leave
-router.get("/admin/leave", adminGetLeaves);
-router.patch("/admin/leave/:id", adminDecideLeave);
+router.get("/leave", adminGetLeaves);
+router.patch("/leave/:id", adminDecideLeave);
 
 export default router;

@@ -601,6 +601,8 @@ export async function userGetLeaves(req: Request, res: Response) {
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
 
     const status = req.query.status as LeaveStatus | undefined;
+    const fromStr = req.query.from as string | undefined;
+    const toStr = req.query.to as string | undefined;
     const page = Math.max(1, parseInt((req.query.page as string) ?? "1"));
     const limit = Math.min(50, parseInt((req.query.limit as string) ?? "10"));
     const skip = (page - 1) * limit;
@@ -615,6 +617,11 @@ export async function userGetLeaves(req: Request, res: Response) {
           `status must be one of: ${validStatuses.join(", ")}`,
         );
       where.status = status;
+    }
+    if (fromStr || toStr) {
+      where.startDate = {};
+      if (fromStr) where.startDate.gte = fromStr;
+      if (toStr) where.startDate.lte = toStr;
     }
 
     const [leaves, total] = await prisma.$transaction([
@@ -967,4 +974,23 @@ export function buildBreaks(checkLogs: any[]) {
         : null,
     isOpen: !!b.breakStart && !b.breakEnd,
   }));
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   GET /user/attendance/holidays
+   Allow employees to view the list of public holidays.
+───────────────────────────────────────────────────────────────────────────── */
+export async function userGetHolidays(req: Request, res: Response) {
+  try {
+    const holidays = await prisma.publicHoliday.findMany({
+      orderBy: { date: "asc" },
+    });
+    return sendSuccessResponse(res, 200, "Public holidays fetched successfully", holidays);
+  } catch (err: any) {
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch holidays",
+    );
+  }
 }

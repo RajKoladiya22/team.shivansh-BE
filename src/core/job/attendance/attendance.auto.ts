@@ -46,6 +46,10 @@ export async function autoFinalizeAttendance() {
         include: { checkLogs: true },
       });
 
+      if (log && (log.status === AttendanceStatus.HOLIDAY || log.status === AttendanceStatus.LEAVE)) {
+        return;
+      }
+
       // 🟥 CASE 1 — No log → mark ABSENT
       if (!log) {
         await tx.attendanceLog.create({

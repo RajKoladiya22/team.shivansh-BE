@@ -778,6 +778,8 @@ export async function adminGetLeaves(req: Request, res: Response) {
     const {
       status,
       accountId,
+      from: fromStr,
+      to: toStr,
       page: pageStr = "1",
       limit: limitStr = "20",
     } = req.query as Record<string, string>;
@@ -797,6 +799,11 @@ export async function adminGetLeaves(req: Request, res: Response) {
           `status must be one of: ${validStatuses.join(", ")}`,
         );
       where.status = status as LeaveStatus;
+    }
+    if (fromStr || toStr) {
+      where.startDate = {};
+      if (fromStr) where.startDate.gte = fromStr;
+      if (toStr) where.startDate.lte = toStr;
     }
 
     const [leaves, total] = await prisma.$transaction([
@@ -888,7 +895,7 @@ export async function adminDecideLeave(req: Request, res: Response) {
         const leaveAttendanceStatus =
           leave.type === LeaveType.HALF_DAY
             ? AttendanceStatus.HALF_DAY
-            : AttendanceStatus.ABSENT;
+            : AttendanceStatus.LEAVE;
 
         for (const rawDate of dates) {
           const date = toDateOnly(rawDate);

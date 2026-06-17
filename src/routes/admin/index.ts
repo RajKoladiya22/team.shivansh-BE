@@ -12,7 +12,7 @@ import attendanceRoutes from "./attendance.routes";
 import quotationRoutes from "./quotation.routes";
 import employeeAnalyticsRoutes from "./employeeAnalytics.routes";
 import leadAnalyticsRoutes from "./leadAnalytics.routes";
-// import holidayRoutes from "./holiday.routes"
+import holidayRoutes from "./holiday.routes";
 import pipelineRouter from "./pipelineTemplate.routes"
 // import tasksRoutes from "./task.routes"
 
@@ -28,8 +28,7 @@ router.use("/attendance", attendanceRoutes);
 router.use("/analytics", employeeAnalyticsRoutes);
 router.use("/analytics", leadAnalyticsRoutes);
 router.use("/pipeline-templates", pipelineRouter);
-
-// router.use("/holiday", holidayRoutes);
+router.use("/holidays", holidayRoutes);
 // router.use("/tasks", tasksRoutes);
 
 // export main

@@ -12,6 +12,7 @@ import {
   userCancelLeave,
   userBreakStart,
   userBreakEnd,
+  userGetHolidays,
 } from "../../controller/user/attendance.controller";
 
 const router = Router();
@@ -25,6 +26,7 @@ router.get("/today", userGetTodayAttendance);
 router.get("/", userGetAttendanceHistory);
 router.post("/break/start", userBreakStart);
 router.post("/break/end", userBreakEnd);
+router.get("/holidays", userGetHolidays);
 
 // User — Leave
 router.post("/leave", userApplyLeave);
