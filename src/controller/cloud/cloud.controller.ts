@@ -108,7 +108,7 @@ function diff<T>(
 
 /** Return full detail shape — reused after every mutation */
 async function fetchFullService(id: string) {
-    return prisma.cloudService.findUnique({
+    const service = await prisma.cloudService.findUnique({
         where: { id },
         include: {
             customer: {
@@ -151,6 +151,8 @@ async function fetchFullService(id: string) {
             },
         },
     });
+
+    return decryptServiceUsers(service);
 }
 const TRIAL_DAYS = 7;
 
@@ -255,6 +257,37 @@ async function logActivity(
 // =============================================================================
 // POST /cloud-services
 // =============================================================================
+
+import { encrypt, decrypt } from "../../core/utils/crypto.util";
+
+function safeEncrypt(text: string | null | undefined): string | null {
+    if (!text) return null;
+    try {
+        return encrypt(text);
+    } catch {
+        return text;
+    }
+}
+
+function safeDecrypt(text: string | null | undefined): string | null {
+    if (!text) return null;
+    try {
+        return decrypt(text);
+    } catch {
+        return text; // backwards compat for unencrypted ones
+    }
+}
+
+function decryptServiceUsers(service: any) {
+    if (!service) return service;
+    if (service.users && Array.isArray(service.users)) {
+        service.users.forEach((u: any) => {
+            u.username = safeDecrypt(u.username);
+            u.password = safeDecrypt(u.password);
+        });
+    }
+    return service;
+}
 
 export async function createCloudService(req: Request, res: Response) {
     try {
@@ -440,8 +473,8 @@ export async function createCloudService(req: Request, res: Response) {
             await tx.cloudServiceUser.createMany({
                 data: body.users.map((u) => ({
                     cloudServiceId: created.id,
-                    username: u.username ?? null,
-                    password: u.password ?? null,
+                    username: safeEncrypt(u.username) ?? null,
+                    password: safeEncrypt(u.password) ?? null,
                     userCost: u.userCost ?? null,
                     purchaseAt: u.purchaseAt ? new Date(u.purchaseAt) : null,
                     note: u.note ?? null,
@@ -1030,16 +1063,7 @@ export async function getCloudServiceList(req: Request, res: Response) {
                         },
                     },
 
-                    {
-                        users: {
-                            some: {
-                                username: {
-                                    contains: search.trim(),
-                                    mode: "insensitive",
-                                },
-                            },
-                        },
-                    },
+
 
                     {
                         adminId: {
@@ -1338,7 +1362,7 @@ export async function getCloudServiceList(req: Request, res: Response) {
                 limit,
                 total,
                 pages: Math.ceil(total / limit),
-                items,
+                items: items.map(decryptServiceUsers),
             },
         );
     } catch (err: any) {
@@ -1404,7 +1428,7 @@ export async function getCloudServiceDetails(req: Request, res: Response) {
 
         if (!service) return sendErrorResponse(res, 404, "Cloud service not found");
 
-        return sendSuccessResponse(res, 200, "Cloud service details fetched", service);
+        return sendSuccessResponse(res, 200, "Cloud service details fetched", decryptServiceUsers(service));
     } catch (err: any) {
         console.error("getCloudServiceDetails error:", err);
         return sendErrorResponse(res, 500, err?.message ?? "Failed to fetch cloud service");
@@ -1800,8 +1824,8 @@ export async function addCloudServiceUser(req: Request, res: Response) {
             await tx.cloudServiceUser.create({
                 data: {
                     cloudServiceId: id,
-                    username: user.username ?? null,
-                    password: user.password ?? null,
+                    username: safeEncrypt(user.username) ?? null,
+                    password: safeEncrypt(user.password) ?? null,
                     userCost: user.userCost ?? null,
                     purchaseAt: user.purchaseAt ? new Date(user.purchaseAt) : null,
                     note: user.note ?? null,
@@ -1883,14 +1907,14 @@ export async function updateCloudServiceUser(req: Request, res: Response) {
         const updateData: Prisma.CloudServiceUserUpdateInput = {};
 
         if (body.username !== undefined) {
-            diff(changes, "username", currentUser.username, body.username);
-            updateData.username = body.username ?? null;
+            diff(changes, "username", safeDecrypt(currentUser.username), body.username);
+            updateData.username = safeEncrypt(body.username) ?? null;
         }
         if (body.password !== undefined) {
-            if ((body.password ?? null) !== (currentUser.password ?? null)) {
+            if ((body.password ?? null) !== (safeDecrypt(currentUser.password) ?? null)) {
                 changes["password"] = { from: "***", to: body.password ? "***" : null };
             }
-            updateData.password = body.password ?? null;
+            updateData.password = safeEncrypt(body.password) ?? null;
         }
         if (body.note !== undefined) {
             diff(changes, "note", currentUser.note, body.note);
