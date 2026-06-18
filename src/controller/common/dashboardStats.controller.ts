@@ -79,6 +79,10 @@ export async function getDashboardStats(req: Request, res: Response) {
       // ── Today's leads ──
       todayLeads,
 
+      // Tasks
+      pendingTasks,
+      overdueTasks,
+
       // Active employees (admin only meaningful, but safe for all)
       activeEmployees,
 
@@ -233,14 +237,29 @@ export async function getDashboardStats(req: Request, res: Response) {
       }),
 
       // ── Today's leads ──
-      isAdmin
-        ? prisma.lead.count({
-            where: {
-              ...leadScope,
-              createdAt: { gte: startOfToday },
-            },
-          })
-        : Promise.resolve(null),
+      prisma.lead.count({
+        where: {
+          ...leadScope,
+          createdAt: { gte: startOfToday },
+        },
+      }),
+
+      // ── Pending Tasks ──
+      prisma.task.count({
+        where: {
+          status: { notIn: ["COMPLETED", "CANCELLED"] },
+          ...(isAdmin ? {} : { assignments: { some: { accountId } } })
+        }
+      }),
+
+      // ── Overdue Tasks ──
+      prisma.task.count({
+        where: {
+          status: { notIn: ["COMPLETED", "CANCELLED"] },
+          dueDate: { lt: now },
+          ...(isAdmin ? {} : { assignments: { some: { accountId } } })
+        }
+      }),
       // ── Active employees ──
       isAdmin
         ? prisma.account.count({ where: { isActive: true } })
@@ -345,6 +364,11 @@ export async function getDashboardStats(req: Request, res: Response) {
               ) / 10
             : 0,
       },
+      tasks: {
+        pending: pendingTasks,
+        overdue: overdueTasks,
+      },
+      todayLeads,
     };
 
     // Admin-only fields
@@ -356,7 +380,6 @@ export async function getDashboardStats(req: Request, res: Response) {
       data.teams = {
         total: totalTeams,
       };
-      data.todayLeads = todayLeads;
     }
 
     return sendSuccessResponse(res, 200, "Dashboard stats fetched", data);
