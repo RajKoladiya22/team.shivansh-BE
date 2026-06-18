@@ -338,16 +338,20 @@ export async function createCloudService(req: Request, res: Response) {
             const normalizedMobile = body.customerMobile.replace(/\D/g, "");
             const existingByMobile = await prisma.customer.findUnique({
                 where: { normalizedMobile },
-                select: { id: true },
+                select: { id: true, isActive: true },
             });
             if (existingByMobile) {
-                return sendErrorResponse(
-                    res,
-                    409,
-                    "A customer with this mobile number already exists. Please provide their customerId instead.",
-                );
+                if (!existingByMobile.isActive) {
+                    return sendErrorResponse(
+                        res,
+                        400,
+                        "Cannot attach cloud service to an inactive customer found by this mobile number",
+                    );
+                }
+                customerId = existingByMobile.id;
+            } else {
+                customerId = "__pending__";
             }
-            customerId = "__pending__";
         }
 
         // -- 6. Duplicate active service guard ------------------------------------
