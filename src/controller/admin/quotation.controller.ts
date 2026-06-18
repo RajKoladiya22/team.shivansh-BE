@@ -17,6 +17,30 @@ import {
   formatQuotationResponse,
 } from "../../services/quotation";
 
+async function resolveCatalogIds(items: any[]) {
+  const incomingIds = items
+    .map((i) => i.productCatalogId || i.productId)
+    .filter(Boolean);
+  if (!incomingIds.length) return new Map<string, string>();
+
+  const catalogs = await prisma.productCatalog.findMany({
+    where: {
+      OR: [
+        { id: { in: incomingIds } },
+        { adminProductId: { in: incomingIds } },
+      ],
+    },
+    select: { id: true, adminProductId: true },
+  });
+
+  const catalogMap = new Map<string, string>();
+  for (const cat of catalogs) {
+    catalogMap.set(cat.id, cat.id);
+    catalogMap.set(cat.adminProductId, cat.id);
+  }
+  return catalogMap;
+}
+
 /* ─────────────────────────────────────────────
    POST /admin/quotations
    Create a new quotation (DRAFT)
@@ -119,6 +143,7 @@ export async function createQuotationAdmin(req: Request, res: Response) {
 
     const quotationNumber = await generateQuotationNumber();
     const customerSnapshot = buildCustomerSnapshot(customer);
+    const catalogMap = await resolveCatalogIds(computed);
 
     const quotation = await prisma.$transaction(async (tx) => {
       const q = await tx.quotation.create({
@@ -164,7 +189,7 @@ export async function createQuotationAdmin(req: Request, res: Response) {
       await tx.quotationLineItem.createMany({
         data: computed.map((item: any) => ({
           quotationId: q.id,
-          productCatalogId: item.productCatalogId ?? item.productId ?? null,
+          productCatalogId: catalogMap.get(item.productCatalogId || item.productId) || null,
           position: item.position,
           productSlug: item.productSlug ?? null,
           name: item.name,
@@ -487,6 +512,11 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
     if (quotationDate !== undefined)
       updateData.quotationDate = new Date(quotationDate);
 
+    let catalogMap = new Map<string, string>();
+    if (newComputedItems && newComputedItems.length > 0) {
+      catalogMap = await resolveCatalogIds(newComputedItems);
+    }
+
     // ── Transaction: update quotation + replace line items if changed ──────
     const updated = await prisma.$transaction(async (tx) => {
       // If new line items were provided, delete old rows and insert new ones
@@ -499,7 +529,7 @@ export async function updateQuotationAdmin(req: Request, res: Response) {
             // (productId here refers to your adminProductId — pass it through your cache or skip)
             return {
               quotationId: id,
-              productCatalogId: item.productCatalogId ?? item.productId ?? null, // set if your computeLineItems returns it
+              productCatalogId: catalogMap.get(item.productCatalogId || item.productId) || null, // set if your computeLineItems returns it
               position: item.position,
               productSlug: item.productSlug ?? null,
               name: item.name,
@@ -914,6 +944,7 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
     const financials = computeFinancials(computed, edType as any, edValue, globalTax);
 
     const quotationNumber = await generateQuotationNumber();
+    const catalogMap = await resolveCatalogIds(computed);
 
     const revised = await prisma.$transaction(async (tx) => {
       const q = await tx.quotation.create({
@@ -961,7 +992,7 @@ export async function reviseQuotationAdmin(req: Request, res: Response) {
       await tx.quotationLineItem.createMany({
         data: computed.map((item: any) => ({
           quotationId: q.id,
-          productCatalogId: item.productCatalogId ?? item.productId ?? null,
+          productCatalogId: catalogMap.get(item.productCatalogId || item.productId) || null,
           position: item.position,
           productSlug: item.productSlug ?? null,
           name: item.name,
