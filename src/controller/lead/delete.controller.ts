@@ -26,8 +26,14 @@ export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
                 customerId: true,
                 product: true,
                 productTitle: true,
+                productCatalogId: true,
+                status: true,
                 cost: true,
                 customerProducts: true,
+                assignments: {
+                    where: { isActive: true },
+                    select: { accountId: true },
+                },
             },
         });
 
@@ -172,6 +178,35 @@ export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
                         updatedAt: new Date(),
                     },
                 });
+            }
+
+            if (existing.productCatalogId) {
+                const LeadOwner = existing.assignments[0]?.accountId ?? null;
+                const expertiseUserId = LeadOwner ? LeadOwner : performerAccountId;
+
+                const decrementData: any = {
+                    leadsCount: { decrement: 1 }
+                };
+                
+                if (existing.status === "DEMO_DONE") {
+                    decrementData.demoCount = { decrement: 1 };
+                }
+                if (existing.status === "CONVERTED") {
+                    decrementData.leadsConverted = { decrement: 1 };
+                    decrementData.completedProjects = { decrement: 1 };
+                }
+
+                try {
+                    await tx.userProductExpertise.updateMany({
+                        where: {
+                            userId: expertiseUserId,
+                            productCatalogId: existing.productCatalogId
+                        },
+                        data: decrementData
+                    });
+                } catch (err) {
+                    console.warn("Failed to decrement userProductExpertise", err);
+                }
             }
 
             await tx.lead.update({ where: { id }, data: { accounts: { set: [] } } });
