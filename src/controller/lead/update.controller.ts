@@ -88,6 +88,9 @@ export async function updateLeadAdmin(req: Request, res: Response) {
             ...(existing.statusMark as Record<string, boolean> | null),
         };
 
+        const LeadOwner = existing.assignments[0]?.accountId ?? null;
+        // console.log("\n\n\n\n\n\n\n existing.assignments->", existing.assignments);
+
         if (data.status === "CLOSED") statusMark.close = true;
 
         if (data.status === "DEMO_DONE" && existing.product && performerAccountId) {
@@ -111,12 +114,12 @@ export async function updateLeadAdmin(req: Request, res: Response) {
                     prisma.userProductExpertise.upsert({
                         where: {
                             userId_productCatalogId: {
-                                userId: performerAccountId,
+                                userId: LeadOwner ? LeadOwner : performerAccountId,
                                 productCatalogId,
                             },
                         },
                         create: {
-                            userId: performerAccountId,
+                            userId: LeadOwner ? LeadOwner : performerAccountId,
                             productCatalogId,
                             demoCount: 1,
                             lastDemoAt: new Date(),
@@ -224,7 +227,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
             if (data.status && existing.productCatalogId) {
                 await updateUserProductExpertise({
                     prisma: tx as any,
-                    accountId: performerAccountId,
+                    accountId: LeadOwner ? LeadOwner : performerAccountId,
                     productCatalogId: existing.productCatalogId,
                     previousStatus,
                     newStatus: data.status,
@@ -289,18 +292,20 @@ export async function updateLeadAdmin(req: Request, res: Response) {
 
 
                 /* ── Expertise ───────────────────────── */
+                // console.log("\n\n LeadOwner->", LeadOwner);
+                
 
                 await Promise.all(
                     productCatalogIds.map((productCatalogId: string) =>
                         tx.userProductExpertise.upsert({
                             where: {
                                 userId_productCatalogId: {
-                                    userId: performerAccountId,
+                                    userId: LeadOwner ? LeadOwner : performerAccountId,
                                     productCatalogId,
                                 },
                             },
                             create: {
-                                userId: performerAccountId,
+                                userId: LeadOwner ? LeadOwner : performerAccountId,
                                 productCatalogId,
                                 leadsConverted: 1,
                                 lastLeadAt: now,
@@ -1533,10 +1538,17 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
                     },
                 ],
             },
+            include: {
+                assignments: {
+                    where: { isActive: true },
+                    select: { accountId: true },
+                },
+            },
         });
 
         if (!lead) return sendErrorResponse(res, 403, "Access denied");
         const previousStatus = lead.status;
+        const LeadOwner = lead.assignments[0]?.accountId ?? null;
 
         const performerSnapshot = await resolvePerformerSnapshot(accountId);
 
@@ -1673,7 +1685,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
             if (status) {
                 await updateUserProductExpertise({
                     prisma: tx as any,
-                    accountId: accountId,
+                    accountId: LeadOwner ? LeadOwner : accountId,
                     productCatalogId: lead.productCatalogId,
                     previousStatus,
                     newStatus: status,
