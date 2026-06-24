@@ -366,14 +366,14 @@ export async function adminGetEmployeeExpertiseDetail(req: Request, res: Respons
         const expertiseWhere: Prisma.UserProductExpertiseWhereInput = {
             userId: employeeId,
             ...(expertiseLevel ? { expertiseLevel: expertiseLevel as ExpertiseLevel } : {}),
-            ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
+            ...(createdAtFilter ? { lastUpdatedAt: createdAtFilter } : {}),
         };
 
         // Stats where (always global — no level filter, but DOES apply date filter
         // so summary stats reflect the same time window the user is browsing)
         const statsWhere: Prisma.UserProductExpertiseWhereInput = {
             userId: employeeId,
-            ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
+            ...(createdAtFilter ? { lastUpdatedAt: createdAtFilter } : {}),
         };
 
         // ── Sort ───────────────────────────────────────────────────────────
@@ -398,13 +398,29 @@ export async function adminGetEmployeeExpertiseDetail(req: Request, res: Respons
             // 1. filtered count (drives pagination)
             prisma.userProductExpertise.count({ where: expertiseWhere }),
 
-            // 2. current page with full product include
             prisma.userProductExpertise.findMany({
                 where: expertiseWhere,
                 orderBy: { [orderByField]: orderByDir },
                 skip,
                 take: limitNum,
-                include: {
+                select: {
+                    id: true,
+                    userId: true,
+                    productCatalogId: true,
+                    expertiseLevel: true,
+                    yearsOfExperience: true,
+                    leadsConverted: true,
+                    leadsCount: true,
+                    demoCount: true,
+                    successRate: true,
+                    completedProjects: true,
+                    notes: true,
+                    lastDemoAt: true,
+                    lastLeadAt: true,
+                    skills: true,
+                    certifications: true,
+                    createdAt: true,
+                    lastUpdatedAt: true,
                     productCatalog: {
                         select: {
                             id: true, title: true, slug: true, subtitle: true,
@@ -478,6 +494,7 @@ export async function adminGetEmployeeExpertiseDetail(req: Request, res: Respons
             yearsOfExperience: e.yearsOfExperience ?? null,
             completedProjects: e.completedProjects,
             leadsConverted:   e.leadsConverted,
+            leadsCount:       e.leadsCount,
             demoCount:        e.demoCount,
             successRate:      e.successRate,
             skills:           safeParseJson(e.skills),

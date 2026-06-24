@@ -232,10 +232,12 @@ export async function getProductExperts(req: Request, res: Response) {
             },
         });
 
-        return res.json({
-            success: true,
-            data: experts,
-        });
+        return sendSuccessResponse(
+            res,
+            200,
+            "Experts fetched successfully",
+            experts
+        );
     } catch (error) {
         console.error("[UserExpertise] getProductExperts error", error);
 
@@ -285,10 +287,11 @@ export async function removeExpertise(req: Request, res: Response) {
             where: { id },
         });
 
-        return res.json({
-            success: true,
-            message: "Expertise record removed",
-        });
+        return sendSuccessResponse(
+            res,
+            200,
+            "Expertise record removed"
+        );
     } catch (error) {
         console.error("[UserExpertise] removeExpertise error", error);
 
