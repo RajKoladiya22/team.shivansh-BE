@@ -32,6 +32,7 @@ export async function listLeadsAdmin(req: Request, res: Response) {
             followUpFromDate,
             followUpToDate,
             isImportant,
+            purchaseRange,
         } = req.query as Record<string, string>;
 
         const pageNumber = Math.max(Number(page), 1);
@@ -159,6 +160,37 @@ export async function listLeadsAdmin(req: Request, res: Response) {
             }
 
             where.followUps = { some: followUpWhere };
+        }
+
+        if (purchaseRange) {
+            where.status = "CONVERTED";
+            const now = new Date();
+            let start = new Date(now);
+            let end = new Date(now);
+            start.setHours(0, 0, 0, 0);
+            end.setHours(23, 59, 59, 999);
+
+            if (purchaseRange === "yesterday") {
+                start.setDate(start.getDate() - 1);
+                end.setDate(end.getDate() - 1);
+            } else if (purchaseRange === "3_days_ago") {
+                start.setDate(start.getDate() - 3);
+                end.setDate(end.getDate() - 3);
+            } else if (purchaseRange === "4_days_ago") {
+                start.setDate(start.getDate() - 4);
+                end.setDate(end.getDate() - 4);
+            } else if (purchaseRange === "5_days_ago") {
+                start.setDate(start.getDate() - 5);
+                end.setDate(end.getDate() - 5);
+            } else if (purchaseRange === "6_days_ago") {
+                start.setDate(start.getDate() - 6);
+                end.setDate(end.getDate() - 6);
+            }
+            
+            where.closedAt = {
+                gte: start,
+                lte: end,
+            };
         }
 
         const orderBy = [
