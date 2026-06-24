@@ -6,6 +6,7 @@ import {
     sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { getIo } from "../../core/utils/socket";
+import { syncLeadExpertise } from "./utils";
 
 
 /**
@@ -184,25 +185,14 @@ export async function deleteLeadPermanentAdmin(req: Request, res: Response) {
                 const LeadOwner = existing.assignments[0]?.accountId ?? null;
                 const expertiseUserId = LeadOwner ? LeadOwner : performerAccountId;
 
-                const decrementData: any = {
-                    leadsCount: { decrement: 1 }
-                };
-                
-                if (existing.status === "DEMO_DONE") {
-                    decrementData.demoCount = { decrement: 1 };
-                }
-                if (existing.status === "CONVERTED") {
-                    decrementData.leadsConverted = { decrement: 1 };
-                    decrementData.completedProjects = { decrement: 1 };
-                }
-
                 try {
-                    await tx.userProductExpertise.updateMany({
-                        where: {
-                            userId: expertiseUserId,
-                            productCatalogId: existing.productCatalogId
-                        },
-                        data: decrementData
+                    await syncLeadExpertise({
+                        prisma: tx,
+                        accountId: expertiseUserId,
+                        productCatalogId: existing.productCatalogId,
+                        leadsCountDelta: -1,
+                        demoCountDelta: existing.status === "DEMO_DONE" ? -1 : 0,
+                        leadsConvertedDelta: existing.status === "CONVERTED" ? -1 : 0,
                     });
                 } catch (err) {
                     console.warn("Failed to decrement userProductExpertise", err);

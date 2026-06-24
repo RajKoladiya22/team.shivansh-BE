@@ -12,7 +12,8 @@ import {
 import { getIo } from "../../core/utils/socket";
 
 import {
-    resolveAssigneeSnapshot
+    resolveAssigneeSnapshot,
+    syncLeadExpertise
 } from "./utils";
 
 
@@ -26,6 +27,12 @@ export async function assignLeadAdmin(req: Request, res: Response) {
 
         const { id } = req.params;
         const { accountId, teamId, remark } = req.body;
+
+        const lead = await prisma.lead.findUnique({
+            where: { id },
+            select: { productCatalogId: true, status: true },
+        });
+        if (!lead) return sendErrorResponse(res, 404, "Lead not found");
 
         const previousAssignment = await prisma.leadAssignment.findFirst({
             where: { leadId: id, isActive: true },
@@ -73,6 +80,33 @@ export async function assignLeadAdmin(req: Request, res: Response) {
                     meta: { from: fromSnapshot, to: toSnapshot, remark: remark ?? null },
                 },
             });
+
+            if (lead.productCatalogId) {
+                // decrement from old account
+                if (previousAssignment?.accountId) {
+                    await syncLeadExpertise({
+                        prisma: tx,
+                        accountId: previousAssignment.accountId,
+                        productCatalogId: lead.productCatalogId,
+                        leadsCountDelta: -1,
+                        demoCountDelta: lead.status === "DEMO_DONE" ? -1 : 0,
+                        leadsConvertedDelta: lead.status === "CONVERTED" ? -1 : 0,
+                    });
+                }
+                // increment for new account
+                if (accountId) {
+                    await syncLeadExpertise({
+                        prisma: tx,
+                        accountId: accountId,
+                        productCatalogId: lead.productCatalogId,
+                        leadsCountDelta: 1,
+                        demoCountDelta: lead.status === "DEMO_DONE" ? 1 : 0,
+                        leadsConvertedDelta: lead.status === "CONVERTED" ? 1 : 0,
+                        lastDemoAt: lead.status === "DEMO_DONE" ? new Date() : null,
+                        lastLeadAt: new Date(),
+                    });
+                }
+            }
 
             let newRecipients: string[] = [];
             if (accountId) {

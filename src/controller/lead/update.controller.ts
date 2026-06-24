@@ -96,45 +96,6 @@ export async function updateLeadAdmin(req: Request, res: Response) {
         if (data.status === "DEMO_DONE" && existing.product && performerAccountId) {
             statusMark.demo = true;
             data.demoDoneAt = new Date();
-
-            const products = Array.isArray(existing.product)
-                ? existing.product
-                : [];
-
-            const productCatalogIds = [
-                ...new Set(
-                    products
-                        .map((p: any) => p?.productCatalogId || p?.id)
-                        .filter(Boolean),
-                ),
-            ];
-
-            await Promise.all(
-                productCatalogIds.map((productCatalogId: string) =>
-                    prisma.userProductExpertise.upsert({
-                        where: {
-                            userId_productCatalogId: {
-                                userId: LeadOwner ? LeadOwner : performerAccountId,
-                                productCatalogId,
-                            },
-                        },
-                        create: {
-                            userId: LeadOwner ? LeadOwner : performerAccountId,
-                            productCatalogId,
-                            demoCount: 1,
-                            lastDemoAt: new Date(),
-                            lastLeadAt: new Date(),
-                        },
-                        update: {
-                            demoCount: {
-                                increment: 1,
-                            },
-                            lastDemoAt: new Date(),
-                            lastLeadAt: new Date(),
-                        },
-                    }),
-                ),
-            );
         }
 
         const products = Array.isArray(existing.product)
@@ -280,7 +241,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
                         },
                     });
 
-                const productCatalogIds = [
+                const finalProductCatalogIds = [
                     ...new Set(
                         resolvedCatalogs.map(
                             (p: any) => p.id,
@@ -296,7 +257,7 @@ export async function updateLeadAdmin(req: Request, res: Response) {
                 
 
                 await Promise.all(
-                    productCatalogIds.map((productCatalogId: string) =>
+                    finalProductCatalogIds.map((productCatalogId: string) =>
                         tx.userProductExpertise.upsert({
                             where: {
                                 userId_productCatalogId: {

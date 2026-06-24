@@ -1015,6 +1015,22 @@ export async function createLeadCore(
             },
         });
 
+        // Add to expertise if assigned to an account
+        if (assigneeAccountId && products.length > 0) {
+            const { catalogId } = await resolveProductCatalogId(tx, products[0]);
+            if (catalogId) {
+                await syncLeadExpertise({
+                    prisma: tx,
+                    accountId: assigneeAccountId,
+                    productCatalogId: catalogId,
+                    leadsCountDelta: 1,
+                    demoCountDelta: demoDate ? 1 : 0,
+                    lastDemoAt: demoDate ? new Date(demoDate) : null,
+                    lastLeadAt: new Date(),
+                });
+            }
+        }
+
         /* ── 6. Activity log ────────────────────────────────────────────── */
         await tx.leadActivityLog.create({
             data: {
@@ -1373,92 +1389,118 @@ export function normalizeIncomingProducts(
 }
 
 
-type UpdateUserProductExpertiseArgs = {
-    prisma: PrismaClient | Omit<PrismaClient, "$connect" | "$disconnect" | "$on" | "$use" | "$extends">;
+
+export interface SyncLeadExpertiseArgs {
+    prisma: any;
     accountId: string;
+    productCatalogIds?: (string | null)[];
     productCatalogId?: string | null;
-    previousStatus?: Lead_Status | null;
-    newStatus: Lead_Status;
+    leadsCountDelta?: number;
+    demoCountDelta?: number;
+    leadsConvertedDelta?: number;
+    lastDemoAt?: Date | null;
+    lastLeadAt?: Date | null;
+}
+
+export async function syncLeadExpertise({
+    prisma,
+    accountId,
+    productCatalogId,
+    productCatalogIds,
+    leadsCountDelta = 0,
+    demoCountDelta = 0,
+    leadsConvertedDelta = 0,
+    lastDemoAt,
+    lastLeadAt
+}: SyncLeadExpertiseArgs) {
+    if (!accountId) return;
+    const rawIds = productCatalogIds || (productCatalogId ? [productCatalogId] : []);
+    const ids = rawIds.filter((id): id is string => Boolean(id));
+    if (ids.length === 0) return;
+    if (leadsCountDelta === 0 && demoCountDelta === 0 && leadsConvertedDelta === 0 && !lastDemoAt && !lastLeadAt) return;
+
+    await Promise.all(ids.map(async (pId) => {
+        const expertise = await prisma.userProductExpertise.upsert({
+            where: {
+                userId_productCatalogId: {
+                    userId: accountId,
+                    productCatalogId: pId,
+                },
+            },
+            create: {
+                userId: accountId,
+                productCatalogId: pId,
+                leadsCount: Math.max(0, leadsCountDelta),
+                demoCount: Math.max(0, demoCountDelta),
+                leadsConverted: Math.max(0, leadsConvertedDelta),
+                completedProjects: Math.max(0, leadsConvertedDelta),
+                lastDemoAt: lastDemoAt || null,
+                lastLeadAt: lastLeadAt || new Date(),
+                successRate: 0,
+            },
+            update: {
+                ...(leadsCountDelta !== 0 ? { leadsCount: { increment: leadsCountDelta } } : {}),
+                ...(demoCountDelta !== 0 ? { demoCount: { increment: demoCountDelta } } : {}),
+                ...(leadsConvertedDelta !== 0 ? { leadsConverted: { increment: leadsConvertedDelta }, completedProjects: { increment: leadsConvertedDelta } } : {}),
+                ...(lastDemoAt ? { lastDemoAt } : {}),
+                ...(lastLeadAt ? { lastLeadAt } : {}),
+            },
+            select: {
+                id: true,
+                leadsCount: true,
+                leadsConverted: true,
+            },
+        });
+
+        const successRate =
+            expertise.leadsCount > 0
+                ? Number(Math.min(100, (expertise.leadsConverted / expertise.leadsCount) * 100).toFixed(2))
+                : expertise.leadsConverted > 0 ? 100 : 0;
+
+        await prisma.userProductExpertise.update({
+            where: { id: expertise.id },
+            data: { successRate },
+        });
+    }));
+}
+
+export interface UpdateUserProductExpertiseArgs {
+    prisma: any;
+    accountId: string;
+    productCatalogIds?: string[];
+    productCatalogId?: string | null;
+    previousStatus?: string | null;
+    newStatus?: string | null;
     leadId?: string | null;
-};
+}
 
 export async function updateUserProductExpertise({
     prisma,
     accountId,
     productCatalogId,
+    productCatalogIds,
     previousStatus,
     newStatus,
     leadId,
 }: UpdateUserProductExpertiseArgs) {
-    if (!productCatalogId || !accountId) return;
-
-    // avoid unnecessary updates
+    if (!accountId) return;
     if (previousStatus === newStatus) return;
 
     const now = new Date();
-
-    // ── status transition flags ───────────────────────────────────────────────
     const enteredDemo = previousStatus !== "DEMO_DONE" && newStatus === "DEMO_DONE";
     const leftDemo = previousStatus === "DEMO_DONE" && newStatus !== "DEMO_DONE";
     const enteredConverted = previousStatus !== "CONVERTED" && newStatus === "CONVERTED";
     const leftConverted = previousStatus === "CONVERTED" && newStatus !== "CONVERTED";
 
-    // ── upsert expertise row ──────────────────────────────────────────────────
-    const expertise = await prisma.userProductExpertise.upsert({
-        where: {
-            userId_productCatalogId: {
-                userId: accountId,
-                productCatalogId,
-            },
-        },
-
-        create: {
-            userId: accountId,
-            productCatalogId,
-            leadsCount: 1,
-            demoCount: enteredDemo ? 1 : 0,
-            leadsConverted: enteredConverted ? 1 : 0,
-            completedProjects: enteredConverted ? 1 : 0,
-            lastDemoAt: enteredDemo ? now : null,
-            lastLeadAt: now,
-            successRate: enteredConverted ? 100 : 0,
-        },
-
-        update: {
-            // increment leadsCount only on the lead's first status transition
-            ...(previousStatus == null ? { leadsCount: { increment: 1 } } : {}),
-
-            // demo
-            ...(enteredDemo ? { demoCount: { increment: 1 }, lastDemoAt: now } : {}),
-            ...(leftDemo ? { demoCount: { decrement: 1 } } : {}),
-
-            // converted
-            ...(enteredConverted
-                ? { leadsConverted: { increment: 1 }, completedProjects: { increment: 1 } }
-                : {}),
-            ...(leftConverted
-                ? { leadsConverted: { decrement: 1 }, completedProjects: { decrement: 1 } }
-                : {}),
-
-            lastLeadAt: now,
-        },
-
-        select: {
-            id: true,
-            leadsCount: true,
-            leadsConverted: true,
-        },
-    });
-
-    // ── recalculate successRate ───────────────────────────────────────────────
-    const successRate =
-        expertise.leadsCount > 0
-            ? Number(((expertise.leadsConverted / expertise.leadsCount) * 100).toFixed(2))
-            : 0;
-
-    await prisma.userProductExpertise.update({
-        where: { id: expertise.id },
-        data: { successRate },
+    await syncLeadExpertise({
+        prisma,
+        accountId,
+        productCatalogId,
+        productCatalogIds,
+        demoCountDelta: enteredDemo ? 1 : leftDemo ? -1 : 0,
+        leadsConvertedDelta: enteredConverted ? 1 : leftConverted ? -1 : 0,
+        lastDemoAt: enteredDemo ? now : undefined,
+        lastLeadAt: now,
     });
 
     // ── CustomerProduct: mark purchase on CONVERTED, revert on un-convert ────
