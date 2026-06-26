@@ -2818,6 +2818,7 @@ model CloudService {
   isDriveSetup  Boolean          @default(false)
   isActive      Boolean          @default(true)
   adminPassword String? // consider encryption
+  lastReminderSentAt DateTime?
 
   // Miracle-specific
   ipAddress String?

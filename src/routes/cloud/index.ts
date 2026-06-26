@@ -16,12 +16,22 @@ import {
 } from "../../controller/cloud/cloud.controller";
 import { requireAuth } from "../../core/middleware/auth";
 import { getCloudServiceDashboardStats, getCloudServiceDetailedStats, getQuickCloudServiceStats } from "../../controller/cloud/dashboard.controller";
+import { getUpcomingRenewals, sendRenewalReminders } from "../../controller/cloud/reminders.controller";
 
 const router = Router();
 
 // ── Collection ────────────────────────────────────────────────────────────────
 router.get("/", requireAuth, getCloudServiceList);
 router.post("/", requireAuth, createCloudService);
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+router.get("/stats/dashboard", requireAuth, getCloudServiceDashboardStats);
+router.get("/stats/detailed", requireAuth, getCloudServiceDetailedStats);
+router.get("/stats/quick", requireAuth, getQuickCloudServiceStats);
+
+// ── Reminders ─────────────────────────────────────────────────────────────────
+router.get("/reminders/upcoming", requireAuth, getUpcomingRenewals);
+router.post("/reminders/send", requireAuth, sendRenewalReminders);
 
 // ── Single resource ───────────────────────────────────────────────────────────
 router.get("/:id", requireAuth, getCloudServiceDetails);
@@ -41,9 +51,5 @@ router.delete("/:id/users/:userId", requireAuth, removeCloudServiceUser);
 // ── Activity & notes ──────────────────────────────────────────────────────────
 router.get("/:id/activity", requireAuth, getCloudServiceActivity);
 router.post("/:id/note", requireAuth, addCloudServiceNote);
-
-router.get("/stats/dashboard", requireAuth, getCloudServiceDashboardStats);
-router.get("/stats/detailed", requireAuth, getCloudServiceDetailedStats);
-router.get("/stats/quick", requireAuth, getQuickCloudServiceStats);
 
 export default router;

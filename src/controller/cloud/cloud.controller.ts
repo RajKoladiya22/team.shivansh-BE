@@ -65,6 +65,7 @@ interface UpdateCloudServiceBody {
     isActive?: boolean;
     adminPassword?: string | null;
     remark?: string; // optional note appended to the UPDATED log
+    email?: string; // syncs to Customer.email
 
     // ── Miracle-specific ────────────────────────────────────────────────────────
     ipAddress?: string | null;
@@ -628,6 +629,7 @@ export async function updateCloudService(req: Request, res: Response) {
                 trialEndDate: true,
                 trialDoneAt: true,
                 numberOfTally: true,
+                customer: { select: { email: true } },
             },
         });
 
@@ -908,6 +910,11 @@ export async function updateCloudService(req: Request, res: Response) {
             }
         }
 
+        // -- 8.5 Handle Customer Email Sync -----------------------------------------
+        if (body.email !== undefined && body.email !== current.customer.email) {
+            diff(changes, "customerEmail", current.customer.email, body.email);
+        }
+
         // -- 9. Guard: nothing actually changed ------------------------------------
         const hasFieldChanges = Object.keys(changes).length > 0;
         const hasTrialOp = extraActions.some((a) =>
@@ -922,6 +929,14 @@ export async function updateCloudService(req: Request, res: Response) {
         await prisma.$transaction(async (tx) => {
             // 10a. Apply field updates
             await tx.cloudService.update({ where: { id }, data: updateData });
+
+            // 10a2. Sync Customer email if provided
+            if (body.email !== undefined && body.email !== current.customer.email) {
+                await tx.customer.update({
+                    where: { id: current.customerId },
+                    data: { email: body.email || null },
+                });
+            }
 
             // 10b. Log primary UPDATED (only if non-trivial field changes exist)
             //      We skip it when the only logged things are isActive / isDriveSetup /
