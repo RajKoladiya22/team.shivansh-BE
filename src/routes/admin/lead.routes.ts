@@ -29,6 +29,7 @@ import {
   deleteFollowUp,
   sendLeadReminder,
 } from "../../controller/admin/lead.controller";
+import { adminParseVoiceLead } from "../../controller/admin/voice.controller";
 import { createLeadAdmin, addLeadState } from "../../controller/lead/create.controller";
 import { updateLeadAdmin, updateLeadProductAdmin, addLeadProductsAdmin, updateLeadCustomerAdmin, updateLeadState } from "../../controller/lead/update.controller";
 import { listLeadsAdmin, getLeadCountByStatusAdmin, getLeadValueStatsAdmin, getLeadActivityTimelineAdmin } from "../../controller/lead/list.controller";
@@ -46,6 +47,8 @@ router.post("/leads/:id/products", requireAuth, addLeadProductsAdmin);
 router.post("/leads/:id/states", requireAuth, addLeadState); 
 router.patch("/leads/:id/states/:stateId", requireAuth, updateLeadState); 
 router.delete("/leads/:id/states/:stateId", requireAuth, deleteLeadState);
+
+router.post("/leads/voice-parse", requireAuth, adminParseVoiceLead);
 
 router
   .route("/leads")

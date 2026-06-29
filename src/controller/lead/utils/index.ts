@@ -75,6 +75,7 @@ export interface CreateLeadInput {
     isImportant?: boolean;
     forceCreate?: boolean;
     products?: LeadProductItem[];
+    voiceCommandText?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -819,6 +820,7 @@ export async function createLeadCore(
         tallyVersion,
         isImportant = false,
         products = [],
+        voiceCommandText,
     } = input;
 
     const normalizedMobile = normalizeMobile(mobileNumber);
@@ -951,6 +953,19 @@ export async function createLeadCore(
                         ],
                     }
                     : undefined,
+                states: voiceCommandText ? [
+                    {
+                        id: randomUUID(),
+                        text: `Created via Voice Command: "${voiceCommandText}"`,
+                        by: {
+                            accountId: creatorAccountId,
+                            firstName: "System",
+                            lastName: "",
+                            avatar: null,
+                        },
+                        at: new Date().toISOString(),
+                    }
+                ] : undefined,
             },
         });
 

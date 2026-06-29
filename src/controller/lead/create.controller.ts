@@ -56,6 +56,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
       tallyVersion,
       isImportant,
       forceCreate = false,
+      voiceCommandText,
     } = req.body as Record<string, any>;
 
     if (!source || !type)
@@ -121,6 +122,7 @@ export async function createLeadAdmin(req: Request, res: Response) {
         isImportant: isImportant === true,
         forceCreate,
         products: products ?? undefined,
+        voiceCommandText,
       },
     );
 
@@ -189,6 +191,7 @@ export async function createMyLead(req: Request, res: Response) {
       tallyVersion,
       isImportant,
       forceCreate = false,
+      voiceCommandText,
     } = req.body as Record<string, any>;
 
     if (!source || !type)
@@ -255,6 +258,7 @@ export async function createMyLead(req: Request, res: Response) {
         isImportant: isImportant === true,
         forceCreate,
         products: products ?? undefined,
+        voiceCommandText,
       },
     );
 

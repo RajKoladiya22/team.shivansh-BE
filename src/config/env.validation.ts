@@ -40,6 +40,7 @@ export const envSchema = z.object({
 
   VAPID_PUBLIC_KEY: z.string(),
   VAPID_PRIVATE_KEY: z.string(),
+  GEMINI_API_KEY: z.string().optional(), // Optional property for GEMINI_API_KEY
 });
 
 export type EnvVars = z.infer<typeof envSchema>;

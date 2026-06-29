@@ -36,6 +36,7 @@ export interface EnvConfig {
         publicKey: string;
         privateKey: string;
     };
+    geminiApiKey?: string; // Optional property for GEMINI_API_KEY
 }
 
 const {
@@ -62,6 +63,7 @@ const {
     RESET_OTP_EXPIRES_MIN,
     VAPID_PUBLIC_KEY,
     VAPID_PRIVATE_KEY,
+    GEMINI_API_KEY,
 } = validatedEnv;
 
 export const envConfiguration = (): EnvConfig => ({
@@ -98,4 +100,5 @@ export const envConfiguration = (): EnvConfig => ({
         publicKey: VAPID_PUBLIC_KEY,
         privateKey: VAPID_PRIVATE_KEY,
     },
+    geminiApiKey: GEMINI_API_KEY, // Assign GEMINI_API_KEY from environment variables
 });
