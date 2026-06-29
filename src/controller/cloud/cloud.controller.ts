@@ -34,6 +34,7 @@ interface CreateCloudServiceBody {
     cost?: number;
     renewalType: "QUARTERLY" | "SIX_MONTHS" | "YEARLY";
     purchaseDate?: string;
+    billingDate?: string;
     expiryDate?: string;
     isDriveSetup?: boolean;
     isActive?: boolean;
@@ -60,6 +61,7 @@ interface UpdateCloudServiceBody {
     cost?: number | null;
     renewalType?: "QUARTERLY" | "SIX_MONTHS" | "YEARLY";
     purchaseDate?: string | null;
+    billingDate?: string | null;
     expiryDate?: string | null;
     isDriveSetup?: boolean;
     isActive?: boolean;
@@ -446,6 +448,7 @@ export async function createCloudService(req: Request, res: Response) {
                 cost: body.cost !== undefined ? new Prisma.Decimal(body.cost) : null,
                 renewalType: body.renewalType,
                 purchaseDate: purchaseDateObj,
+                billingDate: body.billingDate ? new Date(body.billingDate) : null,
                 expiryDate: expiryDateObj,
                 isDriveSetup: body.isDriveSetup ?? false,
                 isActive: body.isActive ?? true,
@@ -616,6 +619,7 @@ export async function updateCloudService(req: Request, res: Response) {
                 cost: true,
                 renewalType: true,
                 purchaseDate: true,
+                billingDate: true,
                 expiryDate: true,
                 isDriveSetup: true,
                 isActive: true,
@@ -761,6 +765,16 @@ export async function updateCloudService(req: Request, res: Response) {
                 newDate?.toISOString() ?? null,
             );
             updateData.purchaseDate = newDate;
+        }
+
+        // ── billingDate ───────────────────────────────────────────────────────────
+        if (body.billingDate !== undefined) {
+            const newDate = body.billingDate ? new Date(body.billingDate) : null;
+            diff(changes, "billingDate",
+                current.billingDate?.toISOString() ?? null,
+                newDate?.toISOString() ?? null,
+            );
+            updateData.billingDate = newDate;
         }
 
         // ── expiryDate ────────────────────────────────────────────────────────────────
@@ -1021,6 +1035,10 @@ export async function getCloudServiceList(req: Request, res: Response) {
             purchaseDateFrom,
             purchaseDateTo,
 
+            // billing date
+            billingDateFrom,
+            billingDateTo,
+
             // expiry date
             expiryDateFrom,
             expiryDateTo,
@@ -1231,6 +1249,24 @@ export async function getCloudServiceList(req: Request, res: Response) {
 
                     ...(purchaseDateTo && {
                         lte: new Date(purchaseDateTo),
+                    }),
+                },
+            });
+        }
+
+        // -------------------------------------------------------------------------
+        // Billing Date Range
+        // -------------------------------------------------------------------------
+
+        if (billingDateFrom || billingDateTo) {
+            andConditions.push({
+                billingDate: {
+                    ...(billingDateFrom && {
+                        gte: new Date(billingDateFrom),
+                    }),
+
+                    ...(billingDateTo && {
+                        lte: new Date(billingDateTo),
                     }),
                 },
             });

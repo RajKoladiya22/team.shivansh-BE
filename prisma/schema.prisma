@@ -2814,6 +2814,7 @@ model CloudService {
   cost          Decimal?         @db.Decimal(12, 2)
   renewalType   CloudRenewalType
   purchaseDate  DateTime?
+  billingDate   DateTime?
   expiryDate    DateTime?
   isDriveSetup  Boolean          @default(false)
   isActive      Boolean          @default(true)
