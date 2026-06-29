@@ -274,6 +274,22 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
   let skipped = 0;
   let errors = 0;
 
+  /* ── 0. Load active approved leaves for skip logic ──────────── */
+  const activeLeaves = await prisma.leaveRequest.findMany({
+    where: {
+      status: "APPROVED",
+      OR: [
+        { endDate: null },
+        { endDate: { gte: catchupFloor } },
+      ],
+    },
+    select: {
+      accountId: true,
+      startDate: true,
+      endDate: true,
+    },
+  });
+
   /* ── 1. Load all active recurring root-task definitions ─────── */
   const rootTasks = await prisma.task.findMany({
     where: {
@@ -413,8 +429,26 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
 
       /* ── 2e. Resolve assignments, labels, checklist ─────────── */
       // Prefer the last child's data (may have been re-assigned after creation).
-      const assignmentSource =
+      let assignmentSource =
         lastChild?.assignments?.length ? lastChild.assignments : task.assignments;
+
+      const originalAssignmentCount = assignmentSource.length;
+
+      // Filter out assignees who are on an approved leave on nextWindowStart
+      assignmentSource = assignmentSource.filter((assignment) => {
+        if (!assignment.accountId) return true; // Team assignment or unassigned
+        
+        const isOnLeave = activeLeaves.some((leave) => {
+          if (leave.accountId !== assignment.accountId) return false;
+          const leaveStart = toMidnightUTC(leave.startDate);
+          const leaveEnd = leave.endDate ? toMidnightUTC(leave.endDate) : null;
+          return nextWindowStart >= leaveStart && (!leaveEnd || nextWindowStart <= leaveEnd);
+        });
+        
+        return !isOnLeave;
+      });
+
+      const isCancelledDueToLeave = originalAssignmentCount > 0 && assignmentSource.length === 0;
       const labelSource =
         lastChild?.labels?.length ? lastChild.labels : task.labels;
       const checklistSource =
@@ -446,7 +480,7 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
         // Create the child task
         const child = await tx.task.create({
           data: {
-            title: task.title,
+            title: isCancelledDueToLeave ? `[SKIPPED - LEAVE] ${task.title}` : task.title,
             description: task.description,
             priority: task.priority,
             projectId: task.projectId,
@@ -467,7 +501,7 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
             dueDate: childDueDate,
 
             // Fresh status
-            status: TaskStatus.PENDING,
+            status: isCancelledDueToLeave ? TaskStatus.CANCELLED : TaskStatus.PENDING,
 
             // Audit metadata (NOT the idempotency key)
             recurrenceRule: { dedupeKey, windowKey: nextKey } as any,

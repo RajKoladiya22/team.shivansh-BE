@@ -37,7 +37,10 @@ export async function getUpcomingRenewals(req: Request, res: Response) {
                         id: true,
                         name: true,
                         customerCompanyName: true,
+                        contactPerson: true,
                         email: true,
+                        mobile: true,
+                        phones: true,
                     }
                 }
             },
