@@ -1036,12 +1036,9 @@ export async function getCloudServiceList(req: Request, res: Response) {
             purchaseDateTo,
 
             // billing date
+            // billing date
             billingDateFrom,
             billingDateTo,
-
-            // expiry date
-            expiryDateFrom,
-            expiryDateTo,
 
             // trial start
             trialStartDateFrom,
@@ -1124,7 +1121,7 @@ export async function getCloudServiceList(req: Request, res: Response) {
 
             if (hasExpired === "true") {
                 andConditions.push({
-                    expiryDate: {
+                    billingDate: {
                         lt: now,
                     },
                 });
@@ -1132,10 +1129,10 @@ export async function getCloudServiceList(req: Request, res: Response) {
                 andConditions.push({
                     OR: [
                         {
-                            expiryDate: null,
+                            billingDate: null,
                         },
                         {
-                            expiryDate: {
+                            billingDate: {
                                 gte: now,
                             },
                         },
@@ -1158,7 +1155,7 @@ export async function getCloudServiceList(req: Request, res: Response) {
                 future.setDate(future.getDate() + days);
 
                 andConditions.push({
-                    expiryDate: {
+                    billingDate: {
                         gte: now,
                         lte: future,
                     },
@@ -1272,23 +1269,6 @@ export async function getCloudServiceList(req: Request, res: Response) {
             });
         }
 
-        // -------------------------------------------------------------------------
-        // Expiry Date Range
-        // -------------------------------------------------------------------------
-
-        if (expiryDateFrom || expiryDateTo) {
-            andConditions.push({
-                expiryDate: {
-                    ...(expiryDateFrom && {
-                        gte: new Date(expiryDateFrom),
-                    }),
-
-                    ...(expiryDateTo && {
-                        lte: new Date(expiryDateTo),
-                    }),
-                },
-            });
-        }
 
         // -------------------------------------------------------------------------
         // Trial Start Date Range
@@ -1361,7 +1341,7 @@ export async function getCloudServiceList(req: Request, res: Response) {
 
                 orderBy: [
                     {
-                        expiryDate: {
+                        billingDate: {
                             sort: "asc",
                             nulls: "last",
                         },
@@ -1620,6 +1600,7 @@ interface RenewCloudServiceBody {
     renewalType?: "QUARTERLY" | "SIX_MONTHS" | "YEARLY";
     purchaseDate?: string;
     expiryDate?: string;
+    billingDate?: string;
     cost?: number;
     remark?: string;
 }
@@ -1641,6 +1622,7 @@ export async function renewCloudService(req: Request, res: Response) {
                 renewalType: true,
                 purchaseDate: true,
                 expiryDate: true,
+                billingDate: true,
                 cost: true,
             },
         });
@@ -1662,9 +1644,9 @@ export async function renewCloudService(req: Request, res: Response) {
             // Auto-calculate base date for renewal
             const now = new Date();
             now.setHours(0, 0, 0, 0);
-            if (current.expiryDate && new Date(current.expiryDate) >= now) {
-                // If not expired, start from current expiryDate
-                newPurchaseDate = new Date(current.expiryDate);
+            if (current.billingDate && new Date(current.billingDate) >= now) {
+                // If not expired, start from current billingDate
+                newPurchaseDate = new Date(current.billingDate);
                 newPurchaseDate.setHours(0, 0, 0, 0);
             } else {
                 // If expired or null, start from today
@@ -1686,6 +1668,18 @@ export async function renewCloudService(req: Request, res: Response) {
         }
         updateData.expiryDate = newExpiryDate;
 
+        // 3b. Resolve Billing Date
+        let newBillingDate: Date | null = null;
+        if (body.billingDate) {
+            newBillingDate = new Date(body.billingDate);
+            newBillingDate.setHours(0, 0, 0, 0);
+        } else if (newExpiryDate) {
+            newBillingDate = new Date(newExpiryDate);
+            newBillingDate.setDate(1); // 1st of the month
+            newBillingDate.setHours(0, 0, 0, 0);
+        }
+        updateData.billingDate = newBillingDate;
+
         // 4. Resolve Cost
         const newCost = body.cost !== undefined
             ? (body.cost !== null ? new Prisma.Decimal(body.cost) : null)
@@ -1701,6 +1695,10 @@ export async function renewCloudService(req: Request, res: Response) {
         diff(changes, "expiryDate",
             current.expiryDate?.toISOString() ?? null,
             newExpiryDate?.toISOString() ?? null,
+        );
+        diff(changes, "billingDate",
+            current.billingDate?.toISOString() ?? null,
+            newBillingDate?.toISOString() ?? null,
         );
         diff(changes, "cost",
             current.cost ? Number(current.cost) : null,

@@ -135,7 +135,7 @@ export async function getCloudServiceDashboardStats(
             }),
             prisma.cloudService.count({
                 where: {
-                    expiryDate: {
+                    billingDate: {
                         lt: new Date(),
                     },
                 },
@@ -310,7 +310,7 @@ export async function getCloudServiceDashboardStats(
 
         const expiringCount = await prisma.cloudService.count({
             where: {
-                expiryDate: {
+                billingDate: {
                     gte: now,
                     lte: futureDate,
                 },
@@ -321,13 +321,13 @@ export async function getCloudServiceDashboardStats(
         const [expiredServicesList, expiringSoonServicesList] = await Promise.all([
             prisma.cloudService.findMany({
                 where: {
-                    expiryDate: {
+                    billingDate: {
                         lt: now,
                     },
                 },
                 take: 5,
                 orderBy: {
-                    expiryDate: "desc",
+                    billingDate: "desc",
                 },
                 include: {
                     customer: {
@@ -340,14 +340,14 @@ export async function getCloudServiceDashboardStats(
             }),
             prisma.cloudService.findMany({
                 where: {
-                    expiryDate: {
+                    billingDate: {
                         gte: now,
                         lte: futureDate,
                     },
                 },
                 take: 5,
                 orderBy: {
-                    expiryDate: "asc",
+                    billingDate: "asc",
                 },
                 include: {
                     customer: {
@@ -713,7 +713,7 @@ export async function getCloudServiceDetailedStats(
 
         const expiringCount = await prisma.cloudService.count({
             where: {
-                expiryDate: {
+                billingDate: {
                     gte: now,
                     lte: futureDate,
                 },
@@ -724,13 +724,13 @@ export async function getCloudServiceDetailedStats(
         const [expiredServicesList, expiringSoonServicesList] = await Promise.all([
             prisma.cloudService.findMany({
                 where: {
-                    expiryDate: {
+                    billingDate: {
                         lt: now,
                     },
                 },
                 take: 5,
                 orderBy: {
-                    expiryDate: "desc",
+                    billingDate: "desc",
                 },
                 include: {
                     customer: {
@@ -743,14 +743,14 @@ export async function getCloudServiceDetailedStats(
             }),
             prisma.cloudService.findMany({
                 where: {
-                    expiryDate: {
+                    billingDate: {
                         gte: now,
                         lte: futureDate,
                     },
                 },
                 take: 5,
                 orderBy: {
-                    expiryDate: "asc",
+                    billingDate: "asc",
                 },
                 include: {
                     customer: {

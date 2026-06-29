@@ -20,7 +20,7 @@ export async function getUpcomingRenewals(req: Request, res: Response) {
             targetDate.setDate(targetDate.getDate() + numDays);
             
             dateFilter = {
-                expiryDate: {
+                billingDate: {
                     lte: targetDate,
                 }
             };
@@ -42,15 +42,15 @@ export async function getUpcomingRenewals(req: Request, res: Response) {
                 }
             },
             orderBy: {
-                expiryDate: 'asc'
+                billingDate: 'asc'
             }
         });
 
         const today = new Date();
         const results = services.map(s => {
             let daysRemaining;
-            if (s.expiryDate) {
-                const diffTime = new Date(s.expiryDate).getTime() - today.getTime();
+            if (s.billingDate) {
+                const diffTime = new Date(s.billingDate).getTime() - today.getTime();
                 daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
             }
             return {
@@ -98,8 +98,8 @@ export async function sendRenewalReminders(req: Request, res: Response) {
                 }
 
                 let daysRemaining = 0;
-                if (service.expiryDate) {
-                    const diffTime = new Date(service.expiryDate).getTime() - today.getTime();
+                if (service.billingDate) {
+                    const diffTime = new Date(service.billingDate).getTime() - today.getTime();
                     daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
                 }
 
@@ -107,7 +107,8 @@ export async function sendRenewalReminders(req: Request, res: Response) {
                     customerName: service.customer?.contactPerson || 'Customer',
                     customerCompanyName: service.customer?.name || undefined,
                     serviceType: service.type,
-                    expiryDate: service.expiryDate ? service.expiryDate.toISOString() : new Date().toISOString(),
+                    billingDate: service.billingDate ? service.billingDate.toISOString() : new Date().toISOString(),
+                    expiryDate: service.expiryDate ? service.expiryDate.toISOString() : undefined, // Keep expiryDate for informational purposes
                     daysRemaining,
                     cost: service.cost?.toNumber() ?? 0,
                 };

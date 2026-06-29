@@ -4,7 +4,8 @@ export interface RenewalReminderData {
   customerName: string;
   customerCompanyName?: string;
   serviceType: string;
-  expiryDate: string;
+  billingDate: string;
+  expiryDate?: string;
   daysRemaining: number;
   cost: number;
   supportPhone1?: string;
@@ -32,6 +33,7 @@ export function generateRenewalReminderEmailHtml(data: RenewalReminderData): str
     customerName,
     customerCompanyName,
     serviceType,
+    billingDate,
     expiryDate,
     daysRemaining,
     cost,
@@ -42,8 +44,8 @@ export function generateRenewalReminderEmailHtml(data: RenewalReminderData): str
 
   const isExpired = daysRemaining < 0;
   const daysText = isExpired
-    ? `expired ${Math.abs(daysRemaining)} days ago`
-    : `will expire in ${daysRemaining} days`;
+    ? `was due for billing ${Math.abs(daysRemaining)} days ago`
+    : `is due for billing in ${daysRemaining} days`;
 
   const urgencyColor = isExpired ? "#b91c1c" : daysRemaining <= 7 ? "#dc2626" : daysRemaining <= 15 ? "#ea580c" : "#0284c7";
 
@@ -88,7 +90,7 @@ export function generateRenewalReminderEmailHtml(data: RenewalReminderData): str
       ${customerCompanyName ? `<div style="font-size:14px;color:#64748b;margin-bottom:20px;font-weight:500;">${customerCompanyName}</div>` : ""}
       
       <p style="margin:0 0 24px;font-size:15px;color:#475569;line-height:1.6;">
-        This is a friendly reminder that your <strong>${serviceType}</strong> service <span style="color:${urgencyColor};font-weight:600;">${daysText}</span> on <strong>${fmtDate(expiryDate)}</strong>.
+        This is a friendly reminder that your <strong>${serviceType}</strong> service <span style="color:${urgencyColor};font-weight:600;">${daysText}</span> on <strong>${fmtDate(billingDate)}</strong>.
       </p>
     </td>
   </tr>
@@ -106,8 +108,9 @@ export function generateRenewalReminderEmailHtml(data: RenewalReminderData): str
                   <div style="font-size:16px;color:#0f172a;font-weight:500;">${serviceType}</div>
                 </td>
                 <td style="padding-bottom:12px;border-bottom:1px solid #e2e8f0;text-align:right;">
-                  <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;font-weight:600;">Expiry Date</div>
-                  <div style="font-size:16px;color:${urgencyColor};font-weight:600;">${fmtDate(expiryDate)}</div>
+                  <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;font-weight:600;">Billing Date</div>
+                  <div style="font-size:16px;color:${urgencyColor};font-weight:600;">${fmtDate(billingDate)}</div>
+                  ${expiryDate ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">(Expires: ${fmtDate(expiryDate)})</div>` : ''}
                 </td>
               </tr>
               <tr>
@@ -173,6 +176,7 @@ export function generateRenewalReminderEmailText(data: RenewalReminderData): str
   const {
     customerName,
     serviceType,
+    billingDate,
     expiryDate,
     daysRemaining,
     cost,
@@ -183,8 +187,8 @@ export function generateRenewalReminderEmailText(data: RenewalReminderData): str
 
   const isExpired = daysRemaining < 0;
   const daysText = isExpired
-    ? `expired ${Math.abs(daysRemaining)} days ago`
-    : `will expire in ${daysRemaining} days`;
+    ? `was due for billing ${Math.abs(daysRemaining)} days ago`
+    : `is due for billing in ${daysRemaining} days`;
 
-  return `Dear ${customerName},\n\nThis is a friendly reminder that your ${serviceType} service ${daysText} on ${fmtDate(expiryDate)}.\n\nRenewal Cost (Est.): ₹${fmt(cost)}\n\nTo ensure uninterrupted service, please arrange for renewal at your earliest convenience.\n\nReady to renew or have questions? Contact us directly:\n📞 ${supportPhone1} / ${supportPhone2}\n✉️ ${supportEmail}\n\n— Shivansh Infosys`;
+  return `Dear ${customerName},\n\nThis is a friendly reminder that your ${serviceType} service ${daysText} on ${fmtDate(billingDate)}.\n\nRenewal Cost (Est.): ₹${fmt(cost)}\n\nTo ensure uninterrupted service, please arrange for renewal at your earliest convenience.\n\nReady to renew or have questions? Contact us directly:\n📞 ${supportPhone1} / ${supportPhone2}\n✉️ ${supportEmail}\n\n— Shivansh Infosys`;
 }
