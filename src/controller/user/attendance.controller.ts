@@ -552,7 +552,10 @@ export async function userApplyLeave(req: Request, res: Response) {
             endDate: { gte: start },
           },
           {
-            startDate: { lte: start },
+            startDate: {
+              gte: start,
+              lte: end ?? start,
+            },
             endDate: null,
           },
         ],
