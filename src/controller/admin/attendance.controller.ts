@@ -229,7 +229,7 @@ export async function adminGetAttendance(req: Request, res: Response) {
     } = req.query as Record<string, string>;
 
     const page = Math.max(1, parseInt(pageStr));
-    const limit = Math.min(200, parseInt(limitStr));
+    const limit = Math.min(2000, parseInt(limitStr));
     const skip = (page - 1) * limit;
 
     const where: any = {};
