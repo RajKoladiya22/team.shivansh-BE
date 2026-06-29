@@ -104,13 +104,13 @@ export async function sendRenewalReminders(req: Request, res: Response) {
                 }
 
                 const data = {
-                    customerName: service.customer?.contactPerson || 'Customer',
-                    customerCompanyName: service.customer?.name || undefined,
+                    customerName: service.customer?.name || 'Customer',
+                    customerCompanyName: service.customer?.customerCompanyName || undefined,
+                    contactPerson: service.customer?.contactPerson || undefined,
                     serviceType: service.type,
                     billingDate: service.billingDate ? service.billingDate.toISOString() : new Date().toISOString(),
-                    expiryDate: service.expiryDate ? service.expiryDate.toISOString() : undefined, // Keep expiryDate for informational purposes
+                    expiryDate: service.expiryDate ? service.expiryDate.toISOString() : undefined,
                     daysRemaining,
-                    cost: service.cost?.toNumber() ?? 0,
                 };
 
                 const html = generateRenewalReminderEmailHtml(data);
