@@ -434,9 +434,13 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
 
       const originalAssignmentCount = assignmentSource.length;
 
-      // Filter out assignees who are on an approved leave on nextWindowStart
-      assignmentSource = assignmentSource.filter((assignment) => {
-        if (!assignment.accountId) return true; // Team assignment or unassigned
+      // Identify assignees who are on an approved leave on nextWindowStart
+      let activeAssigneesCount = 0;
+      const resolvedAssignments = assignmentSource.map((assignment) => {
+        if (!assignment.accountId) {
+          activeAssigneesCount++;
+          return { ...assignment, isOnLeave: false };
+        }
         
         const isOnLeave = activeLeaves.some((leave) => {
           if (leave.accountId !== assignment.accountId) return false;
@@ -445,18 +449,23 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
           return nextWindowStart >= leaveStart && (!leaveEnd || nextWindowStart <= leaveEnd);
         });
         
-        return !isOnLeave;
+        if (!isOnLeave) {
+          activeAssigneesCount++;
+        }
+        
+        return { ...assignment, isOnLeave };
       });
 
-      const isCancelledDueToLeave = originalAssignmentCount > 0 && assignmentSource.length === 0;
+      const isCancelledDueToLeave = originalAssignmentCount > 0 && activeAssigneesCount === 0;
       const labelSource =
         lastChild?.labels?.length ? lastChild.labels : task.labels;
       const checklistSource =
         lastChild?.checklist?.length ? lastChild.checklist : task.checklist;
 
       /* ── 2f. Resolve team members for notifications (before tx) */
+      const activeAssignments = resolvedAssignments.filter((a) => !a.isOnLeave);
       const recipientAccountIds = await resolveRecipients(
-        assignmentSource,
+        activeAssignments,
         // task.createdBy,
       );
 
@@ -508,17 +517,17 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
           },
         });
 
-        // Copy assignments
-        if (assignmentSource.length > 0) {
+        // Copy assignments (including those on leave, marked as CANCELLED)
+        if (resolvedAssignments.length > 0) {
           await tx.taskAssignment.createMany({
-            data: assignmentSource.map((a) => ({
+            data: resolvedAssignments.map((a) => ({
               taskId: child.id,
               type: a.type,
               accountId: a.accountId ?? null,
               teamId: a.teamId ?? null,
               note: a.note ?? null,
               assignedBy: task.createdBy ?? null,
-              status: TaskStatus.PENDING,
+              status: a.isOnLeave ? TaskStatus.CANCELLED : TaskStatus.PENDING,
             })),
             skipDuplicates: true,
           });
