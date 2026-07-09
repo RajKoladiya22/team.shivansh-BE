@@ -13,7 +13,7 @@ import {
    Priority: X-Forwarded-For (first IP) → X-Real-IP → req.ip
 ═══════════════════════════════════════════════════════════ */
 
-function extractClientIp(req: Request): string | null {
+export function extractClientIp(req: Request): string | null {
   const forwarded = req.headers["x-forwarded-for"];
   if (forwarded) {
     const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)
@@ -59,7 +59,7 @@ interface GeoResult {
 const _geoCache = new Map<string, { data: GeoResult; expiresAt: number }>();
 const GEO_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours per IP
 
-async function resolveGeo(ip: string): Promise<GeoResult> {
+export async function resolveGeo(ip: string): Promise<GeoResult> {
   const nullResult: GeoResult = {
     country: null, countryCode: null, region: null,
     city: null, latitude: null, longitude: null,

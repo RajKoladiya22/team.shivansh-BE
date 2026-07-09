@@ -4,6 +4,7 @@ import {
   sendErrorResponse,
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
+import { extractClientIp, resolveGeo } from "../admin/analytics.report.controller";
 
 /* ═══════════════════════════════════════════════════════════
    HELPERS
@@ -65,6 +66,23 @@ export async function trackSessionStart(req: Request, res: Response) {
     if (!fingerprint)
       return sendErrorResponse(res, 400, "fingerprint required");
 
+    // Attempt to resolve location from the request IP if the client didn't provide it fully
+    const clientIp = extractClientIp(req);
+    let finalLocation = location || {};
+    if (clientIp && (!finalLocation.country || !finalLocation.city)) {
+      const geo = await resolveGeo(clientIp);
+      finalLocation = {
+        ...finalLocation,
+        country: geo.country ?? finalLocation.country ?? null,
+        countryCode: geo.countryCode ?? finalLocation.countryCode ?? null,
+        region: geo.region ?? finalLocation.region ?? null,
+        city: geo.city ?? finalLocation.city ?? null,
+        latitude: geo.latitude ?? finalLocation.latitude ?? null,
+        longitude: geo.longitude ?? finalLocation.longitude ?? null,
+        timezone: geo.timezone ?? finalLocation.timezone ?? null,
+      };
+    }
+
     /* ── Find or create visitor ──────────────────────────────── */
     let visitor = await prisma.analyticsVisitor.findUnique({
       where: { fingerprint },
@@ -95,10 +113,10 @@ export async function trackSessionStart(req: Request, res: Response) {
           initialUtmSource: utm?.source ?? null,
           initialUtmMedium: utm?.medium ?? null,
           initialUtmCampaign: utm?.campaign ?? null,
-          country: location?.country ?? null,
-          countryCode: location?.countryCode ?? null,
-          region: location?.region ?? null,
-          city: location?.city ?? null,
+          country: finalLocation?.country ?? null,
+          countryCode: finalLocation?.countryCode ?? null,
+          region: finalLocation?.region ?? null,
+          city: finalLocation?.city ?? null,
         },
       });
     } else {
@@ -108,10 +126,10 @@ export async function trackSessionStart(req: Request, res: Response) {
         data: {
           sessionCount: { increment: 1 },
           // Refresh geo from the new session's location data (if provided)
-          ...(location?.country && { country: location.country }),
-          ...(location?.countryCode && { countryCode: location.countryCode }),
-          ...(location?.region && { region: location.region }),
-          ...(location?.city && { city: location.city }),
+          ...(finalLocation?.country && { country: finalLocation.country }),
+          ...(finalLocation?.countryCode && { countryCode: finalLocation.countryCode }),
+          ...(finalLocation?.region && { region: finalLocation.region }),
+          ...(finalLocation?.city && { city: finalLocation.city }),
         },
       });
     }
@@ -147,13 +165,13 @@ export async function trackSessionStart(req: Request, res: Response) {
         ip: req.ip ?? null,
         ipHashed: null,
 
-        country: location?.country ?? null,
-        countryCode: location?.countryCode ?? null,
-        region: location?.region ?? null,
-        city: location?.city ?? null,
-        latitude: location?.latitude ?? null,
-        longitude: location?.longitude ?? null,
-        timezone: location?.timezone ?? null,
+        country: finalLocation?.country ?? null,
+        countryCode: finalLocation?.countryCode ?? null,
+        region: finalLocation?.region ?? null,
+        city: finalLocation?.city ?? null,
+        latitude: finalLocation?.latitude ?? null,
+        longitude: finalLocation?.longitude ?? null,
+        timezone: finalLocation?.timezone ?? null,
 
         language: req.headers["accept-language"] ?? null,
       },
