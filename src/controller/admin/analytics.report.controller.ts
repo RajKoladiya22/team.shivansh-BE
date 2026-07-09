@@ -1,5 +1,6 @@
 // src/controller/admin/analytics.report.controller.ts
 import { Request, Response } from "express";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/database.config";
 import {
   sendErrorResponse,
@@ -990,7 +991,7 @@ export async function getEventReport(req: Request, res: Response) {
         SELECT DATE_TRUNC('day', "occurredAt") AS date, COUNT(*) AS count
           FROM "AnalyticsEvent"
          WHERE "occurredAt" >= ${from} AND "occurredAt" <= ${to}
-           ${category ? prisma.$queryRaw`AND category = ${category}` : prisma.$queryRaw``}
+           ${category ? Prisma.sql`AND category = ${category}` : Prisma.empty}
          GROUP BY 1
          ORDER BY 1`,
 
