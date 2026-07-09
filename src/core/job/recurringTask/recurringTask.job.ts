@@ -412,7 +412,10 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
       const alreadyExists = await prisma.task.findFirst({
         where: {
           recurrenceParentId: task.id,
-          startDate: nextWindowStart,
+          startDate: {
+            gte: nextWindowStart,
+            lt: addDays(nextWindowStart, 1),
+          },
           deletedAt: null,
         },
         select: { id: true },
@@ -478,7 +481,7 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
       //   },
       //   nextWindowStart,
       // );
-      const childStartDate = computeChildStartDate(now);
+      const childStartDate = computeChildStartDate(nextWindowStart);
       const childDueDate = computeChildDueDate(childStartDate);
 
       /* ── 2h. Build dedupe metadata (audit only, not used for idempotency) */
