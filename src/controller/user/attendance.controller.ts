@@ -630,8 +630,18 @@ export async function userGetLeaves(req: Request, res: Response) {
     }
     if (fromStr || toStr) {
       where.startDate = {};
-      if (fromStr) where.startDate.gte = fromStr;
-      if (toStr) where.startDate.lte = toStr;
+      if (fromStr) {
+        const fromDate = new Date(fromStr);
+        if (!isNaN(fromDate.getTime())) {
+          where.startDate.gte = fromDate;
+        }
+      }
+      if (toStr) {
+        const toDate = new Date(toStr);
+        if (!isNaN(toDate.getTime())) {
+          where.startDate.lte = toDate;
+        }
+      }
     }
 
     const [leaves, total] = await prisma.$transaction([
