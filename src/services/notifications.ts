@@ -930,3 +930,192 @@ export async function triggerTaskNotification({
     console.error("triggerTaskNotification failed:", err);
   }
 }
+
+export async function triggerLeaveRequestNotification({
+  leaveId,
+  accountId,
+  type,
+}: {
+  leaveId: string;
+  accountId: string;
+  type: string;
+}) {
+  try {
+    const account = await prisma.account.findUnique({
+      where: { id: accountId },
+      select: { firstName: true, lastName: true },
+    });
+    if (!account) return;
+
+    const requesterName = `${account.firstName ?? ""} ${account.lastName ?? ""}`.trim();
+
+    // 1. Fetch ADMIN accounts
+    const admins = await prisma.userRole.findMany({
+      where: {
+        role: { name: "ADMIN" },
+        user: { account: { isActive: true } },
+      },
+      select: { user: { select: { accountId: true } } },
+    });
+
+    const adminIds = [...new Set(admins.map((a) => a.user?.accountId).filter(Boolean) as string[])];
+    if (adminIds.length === 0) return;
+
+    // 2. Persist notifications
+    const notifications = await prisma.$transaction(
+      adminIds.map((adminId) =>
+        prisma.notification.create({
+          data: {
+            accountId: adminId,
+            category: "SYSTEM",
+            level: "INFO",
+            title: "New Leave Request",
+            body: `${requesterName} applied for ${type} leave`,
+            actionUrl: `/adminattendance`, 
+            dedupeKey: `leave:${leaveId}:request:${adminId}`,
+            deliveryChannels: ["web", "chrome"],
+            payload: {
+              leaveId,
+              requesterName,
+              type,
+            },
+          },
+        }),
+      ),
+    );
+
+    // 3. Socket delivery
+    let io;
+    try { io = getIo(); } catch { io = null; }
+
+    if (io) {
+      notifications.forEach((n) => {
+        io!.to(`notif:${n.accountId}`).emit("notification", {
+          id: n.id,
+          category: n.category,
+          level: n.level,
+          title: n.title,
+          body: n.body,
+          actionUrl: n.actionUrl ?? undefined,
+          payload: n.payload,
+          createdAt: n.createdAt.toISOString(),
+        });
+      });
+    }
+
+    // 4. Push notifications
+    const subscriptions = await prisma.notificationSubscription.findMany({
+      where: {
+        accountId: { in: adminIds },
+      },
+    });
+
+    for (const sub of subscriptions) {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          JSON.stringify({
+            title: "New Leave Request",
+            body: `${requesterName} applied for ${type} leave`,
+            actionUrl: `/adminattendance`,
+            data: { actionUrl: `/adminattendance` },
+          }),
+          { TTL: 3600, headers: { urgency: 'high' } }
+        );
+      } catch (err: any) {
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          await prisma.notificationSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+        }
+      }
+    }
+
+    // 5. Mark sent
+    await prisma.notification.updateMany({
+      where: { id: { in: notifications.map((n) => n.id) } },
+      data: { sentAt: new Date() },
+    });
+  } catch (err) {
+    console.error("triggerLeaveRequestNotification failed:", err);
+  }
+}
+
+export async function triggerLeaveDecidedNotification({
+  leaveId,
+  accountId,
+  status,
+}: {
+  leaveId: string;
+  accountId: string;
+  status: string;
+}) {
+  try {
+    const dedupeKey = `leave:${leaveId}:decided:${accountId}`;
+    const title = status === "APPROVED" ? "Leave Approved" : "Leave Rejected";
+    const body = `Your leave request has been ${status.toLowerCase()}`;
+
+    const notification = await prisma.notification.create({
+      data: {
+        accountId,
+        category: "SYSTEM",
+        level: status === "APPROVED" ? "SUCCESS" : "ERROR",
+        title,
+        body,
+        actionUrl: `/attendance`,
+        dedupeKey,
+        deliveryChannels: ["web", "chrome"],
+        payload: {
+          leaveId,
+          status,
+        },
+      },
+    });
+
+    // Socket
+    let io;
+    try { io = getIo(); } catch { io = null; }
+    if (io) {
+      io.to(`notif:${accountId}`).emit("notification", {
+        id: notification.id,
+        category: notification.category,
+        level: notification.level,
+        title: notification.title,
+        body: notification.body,
+        actionUrl: notification.actionUrl ?? undefined,
+        payload: notification.payload,
+        createdAt: notification.createdAt.toISOString(),
+      });
+    }
+
+    // Push
+    const subscriptions = await prisma.notificationSubscription.findMany({
+      where: { accountId },
+    });
+
+    for (const sub of subscriptions) {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          JSON.stringify({
+            title,
+            body,
+            actionUrl: `/attendance`,
+            data: { actionUrl: `/attendance` },
+          }),
+          { TTL: 3600, headers: { urgency: 'high' } }
+        );
+      } catch (err: any) {
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          await prisma.notificationSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+        }
+      }
+    }
+
+    // Mark sent
+    await prisma.notification.update({
+      where: { id: notification.id },
+      data: { sentAt: new Date() },
+    });
+  } catch (err) {
+    console.error("triggerLeaveDecidedNotification failed:", err);
+  }
+}

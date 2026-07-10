@@ -15,6 +15,7 @@ import {
   LeaveStatus,
   LeaveType,
 } from "@prisma/client";
+import { triggerLeaveRequestNotification } from "../../services/notifications";
 
 /* ═══════════════════════════════════════════════════════════════
    INTERNAL HELPERS
@@ -588,6 +589,12 @@ export async function userApplyLeave(req: Request, res: Response) {
       startDate: leave.startDate,
       endDate: leave.endDate,
     });
+
+    triggerLeaveRequestNotification({
+      leaveId: leave.id,
+      accountId,
+      type: leave.type,
+    }).catch((err) => console.error("Failed to send leave request notification:", err));
 
     return sendSuccessResponse(res, 201, "Leave request submitted", leave);
   } catch (err: any) {

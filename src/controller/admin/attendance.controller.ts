@@ -14,6 +14,7 @@ import {
   LeaveStatus,
   LeaveType,
 } from "@prisma/client";
+import { triggerLeaveDecidedNotification } from "../../services/notifications";
 
 /* ═══════════════════════════════════════════════════════════════
    INTERNAL HELPERS
@@ -932,6 +933,12 @@ export async function adminDecideLeave(req: Request, res: Response) {
       status,
       decisionReason: decisionReason ?? null,
     });
+
+    triggerLeaveDecidedNotification({
+      leaveId: id,
+      accountId: leave.accountId,
+      status,
+    }).catch((err) => console.error("Failed to send leave decided notification:", err));
 
     return sendSuccessResponse(
       res,
