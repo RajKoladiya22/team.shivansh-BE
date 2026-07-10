@@ -252,8 +252,16 @@ export async function listEmployees(req: Request, res: Response) {
           leaveRequests: {
             where: {
               status: "APPROVED",
-              startDate: { lte: todayEnd },
-              endDate: { gte: todayStart },
+              OR: [
+                {
+                  startDate: { lte: todayEnd },
+                  endDate: { gte: todayStart },
+                },
+                {
+                  startDate: { gte: todayStart, lte: todayEnd },
+                  endDate: null,
+                },
+              ]
             },
             select: { id: true },
           },
@@ -341,6 +349,8 @@ export async function listEmployees(req: Request, res: Response) {
         // Secondary: more leads handled first
         return (b.expertise?.leadsCount ?? 0) - (a.expertise?.leadsCount ?? 0);
       });
+
+      console.log("\n\n\n\n\nlistEmployees formattedData:", data); 
 
     return sendSuccessResponse(res, 200, "Employees fetched", {
       data,

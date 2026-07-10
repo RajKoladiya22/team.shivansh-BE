@@ -4,6 +4,7 @@ import {
   sendErrorResponse,
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
+import { log } from "console";
 
 /* ======================================================
    LIST EMPLOYEES (BASIC INFO)
@@ -13,6 +14,12 @@ export async function listEmployees(req: Request, res: Response) {
     const page = Number(req.query.page || 1);
     const limit = Number(req.query.limit || 10);
     const skip = (page - 1) * limit;
+
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    const todayEnd = new Date();
+    todayEnd.setUTCHours(23, 59, 59, 999);
 
     const searchRaw = (req.query.search as string)?.trim();
     const search = searchRaw?.toLowerCase();
@@ -116,12 +123,49 @@ export async function listEmployees(req: Request, res: Response) {
           isActive: true,
           joinedAt: true,
           createdAt: true,
+          leaveRequests: {
+            where: {
+              status: "APPROVED",
+              OR: [
+                {
+                  startDate: { lte: todayEnd },
+                  endDate: { gte: todayStart },
+                },
+                {
+                  startDate: { gte: todayStart, lte: todayEnd },
+                  endDate: null,
+                },
+              ]
+            },
+            select: { id: true },
+          },
         },
       }),
     ]);
 
+    const formattedData = data.map((a) => {
+      return {
+        id: a.id,
+        firstName: a.firstName,
+        lastName: a.lastName,
+        contactEmail: a.contactEmail,
+        contactPhone: a.contactPhone,
+        designation: a.designation,
+        isBusy: a.isBusy,
+        isAvailable: a.isAvailable,
+        avatar: a.avatar,
+        jobType: a.jobType,
+        isActive: a.isActive,
+        joinedAt: a.joinedAt,
+        createdAt: a.createdAt,
+        isOnLeave: (a as any).leaveRequests && (a as any).leaveRequests.length > 0,
+      };
+    });
+    
+    // console.log("\n\n\n\n\nlistEmployees formattedData:", formattedData); // Debugging line
+
     return sendSuccessResponse(res, 200, "Employees fetched", {
-      data,
+      data: formattedData,
       meta: {
         page,
         limit,
