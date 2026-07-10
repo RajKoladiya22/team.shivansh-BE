@@ -981,7 +981,7 @@ export async function getEventReport(req: Request, res: Response) {
     const [topEvents, byCategory, eventTrend, total] = await Promise.all([
       // Top events by frequency
       prisma.analyticsEvent.groupBy({
-        by: ["category", "name", "label"],
+        by: ["category", "name", "label", "pagePath"],
         where,
         _count: { id: true },
         _avg: { value: true },
@@ -1033,6 +1033,7 @@ export async function getEventReport(req: Request, res: Response) {
         category: r.category,
         name: r.name,
         label: r.label,
+        pagePath: r.pagePath,
         count: r._count.id,
         avgValue: r._avg.value != null ? Math.round(r._avg.value * 100) / 100 : null,
       })),
