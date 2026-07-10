@@ -178,6 +178,12 @@ export async function listEmployees(req: Request, res: Response) {
     const pageNumber = Math.max(Number(page), 1);
     const pageSize = Math.min(Number(limit), 100);
 
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+
+    const todayEnd = new Date();
+    todayEnd.setUTCHours(23, 59, 59, 999);
+
     const where: any = {};
 
     if (isActive !== "all") where.isActive = isActive === "true";
@@ -243,6 +249,14 @@ export async function listEmployees(req: Request, res: Response) {
           isBusy: true,
           bio: true,
           isAvailable: true,
+          leaveRequests: {
+            where: {
+              status: "APPROVED",
+              startDate: { lte: todayEnd },
+              endDate: { gte: todayStart },
+            },
+            select: { id: true },
+          },
           teams: {
             where: { isActive: true },
             select: { team: { select: { id: true, name: true } } },
@@ -287,6 +301,7 @@ export async function listEmployees(req: Request, res: Response) {
           contactEmail: a.contactEmail,
           avatar: a.avatar,
           isBusy: a.isBusy,
+          isOnLeave: (a as any).leaveRequests && (a as any).leaveRequests.length > 0,
           bio: a.bio,
           isAvailable: a.isAvailable,
           teams: a.teams.map((t) => t.team),
