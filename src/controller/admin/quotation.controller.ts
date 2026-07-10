@@ -641,7 +641,10 @@ export async function sendQuotationAdmin(req: Request, res: Response) {
 
     // console.log("\n\n\n\n\n\n\n\n\n\n\nsend updated", updated, "\n\n\n");
 
-    void trySendQuotationEmail(updated, false);
+    // Only pass sentTo to trySendQuotationEmail if it looks like an email and channel is EMAIL
+    const isEmail = (str: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str);
+    const emailToSend = channel === "EMAIL" && sentTo && isEmail(sentTo) ? sentTo : undefined;
+    void trySendQuotationEmail(updated, false, emailToSend);
 
     return sendSuccessResponse(res, 200, "Quotation marked as sent", formatQuotationResponse(updated));
   } catch (err: any) {
