@@ -448,8 +448,8 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
         const isOnLeave = activeLeaves.some((leave) => {
           if (leave.accountId !== assignment.accountId) return false;
           const leaveStart = toMidnightUTC(leave.startDate);
-          const leaveEnd = leave.endDate ? toMidnightUTC(leave.endDate) : null;
-          return nextWindowStart >= leaveStart && (!leaveEnd || nextWindowStart <= leaveEnd);
+          const leaveEnd = leave.endDate ? toMidnightUTC(leave.endDate) : leaveStart;
+          return nextWindowStart >= leaveStart && nextWindowStart <= leaveEnd;
         });
         
         if (!isOnLeave) {
