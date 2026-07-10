@@ -888,7 +888,7 @@ export async function getGeoBreakdown(req: Request, res: Response) {
     const limit = Math.min(100, Number(req.query.limit ?? 50));
     const where = { startedAt: { gte: from, lte: to } };
 
-    const [byCountry, byCity] = await Promise.all([
+    const [byCountry, byCity, byRegion] = await Promise.all([
       prisma.analyticsSession.groupBy({
         by: ["country", "countryCode"],
         where: { ...where, country: { not: null } },
@@ -899,6 +899,13 @@ export async function getGeoBreakdown(req: Request, res: Response) {
       prisma.analyticsSession.groupBy({
         by: ["city", "country", "countryCode"],
         where: { ...where, city: { not: null } },
+        _count: { id: true },
+        orderBy: { _count: { id: "desc" } },
+        take: limit,
+      }),
+      prisma.analyticsSession.groupBy({
+        by: ["region", "countryCode"],
+        where: { ...where, region: { not: null } },
         _count: { id: true },
         orderBy: { _count: { id: "desc" } },
         take: limit,
@@ -936,6 +943,11 @@ export async function getGeoBreakdown(req: Request, res: Response) {
       cities: byCity.map((r) => ({
         city: r.city,
         country: r.country,
+        countryCode: r.countryCode,
+        sessions: r._count.id,
+      })),
+      regions: byRegion.map((r) => ({
+        region: r.region,
         countryCode: r.countryCode,
         sessions: r._count.id,
       })),
