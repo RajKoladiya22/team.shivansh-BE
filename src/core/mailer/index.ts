@@ -5,7 +5,7 @@ import { env } from "../../config/database.config";
 const host = env.SMTP_HOST || "smtp.gmail.com";
 const port = Number(env.SMTP_PORT) || 465;
 const user = env.SMTP_USER || "magicallydev@gmail.com";
-const pass = env.SMTP_PASS || "azjkfwgqfqmdjfto";
+const pass = env.SMTP_PASS;
 const from = env.MAIL_FROM ?? user;
 
 if (!user || !pass) {
