@@ -126,6 +126,14 @@ export async function createSupportAdmin(req: Request, res: Response) {
                     create: {
                         action: "CREATED",
                         performedByAccount: createdBy ? { connect: { id: createdBy } } : undefined,
+                        meta: {
+                            event: "SUPPORT_CREATED",
+                            subject,
+                            type,
+                            priority,
+                            customerName: customer.name,
+                            customerCompany: customer.customerCompanyName || null
+                        }
                     }
                 }
             },
@@ -205,6 +213,14 @@ export async function createSupportUser(req: Request, res: Response) {
                     create: {
                         action: "CREATED",
                         performedByAccount: createdBy ? { connect: { id: createdBy } } : undefined,
+                        meta: {
+                            event: "SUPPORT_CREATED",
+                            subject,
+                            type,
+                            priority,
+                            customerName: customer.name,
+                            customerCompany: customer.customerCompanyName || null
+                        }
                     }
                 }
             },
@@ -261,7 +277,12 @@ export async function listSupportsAdmin(req: Request, res: Response) {
 
         let allSupports = await prisma.support.findMany({
             where,
-            include: { customer: true, assignments: { include: { account: true, team: true } }, createdByAcc: true }
+            include: {
+                customer: true,
+                assignments: { include: { account: true, team: true } },
+                supportHelpers: { where: { isActive: true }, include: { account: true, addedByAcc: true } },
+                createdByAcc: true
+            }
         });
 
         allSupports = sortSupportsArray(allSupports);
@@ -338,7 +359,8 @@ export async function getSupportCountByStatusUser(req: Request, res: Response) {
         const where: any = {
             OR: [
                 { assignments: { some: { accountId, isActive: true } } },
-                { createdBy: accountId }
+                { createdBy: accountId },
+                { supportHelpers: { some: { accountId, isActive: true } } }
             ]
         };
 
@@ -401,7 +423,8 @@ export async function listSupportsUser(req: Request, res: Response) {
         const where: any = {
             OR: [
                 { assignments: { some: { accountId, isActive: true } } },
-                { createdBy: accountId }
+                { createdBy: accountId },
+                { supportHelpers: { some: { accountId, isActive: true } } }
             ]
         };
         
@@ -434,7 +457,12 @@ export async function listSupportsUser(req: Request, res: Response) {
 
         let allSupports = await prisma.support.findMany({
             where,
-            include: { customer: true, assignments: { include: { account: true, team: true } }, createdByAcc: true }
+            include: {
+                customer: true,
+                assignments: { include: { account: true, team: true } },
+                supportHelpers: { where: { isActive: true }, include: { account: true, addedByAcc: true } },
+                createdByAcc: true
+            }
         });
 
         allSupports = sortSupportsArray(allSupports);
@@ -455,7 +483,8 @@ export async function getSupportDetailsAdmin(req: Request, res: Response) {
             where: { id },
             include: {
                 customer: true,
-                assignments: { include: { account: true } },
+                assignments: { include: { account: true, team: true } },
+                supportHelpers: { where: { isActive: true }, include: { account: true, addedByAcc: true } },
                 activityLogs: { include: { performedByAccount: true }, orderBy: { createdAt: 'desc' } },
                 timeLogs: { include: { loggedByAccount: true }, orderBy: { loggedAt: 'desc' } },
                 createdByAcc: true
@@ -478,7 +507,8 @@ export async function getSupportDetailsUser(req: Request, res: Response) {
             where: { id },
             include: {
                 customer: true,
-                assignments: { include: { account: true } },
+                assignments: { include: { account: true, team: true } },
+                supportHelpers: { where: { isActive: true }, include: { account: true, addedByAcc: true } },
                 activityLogs: { include: { performedByAccount: true }, orderBy: { createdAt: 'desc' } },
                 timeLogs: { include: { loggedByAccount: true }, orderBy: { loggedAt: 'desc' } },
                 createdByAcc: true
@@ -486,7 +516,10 @@ export async function getSupportDetailsUser(req: Request, res: Response) {
         });
         if (!support) return sendErrorResponse(res, 404, "Support not found");
         
-        const isAuthorized = support.createdBy === accountId || support.assignments.some(a => a.accountId === accountId && a.isActive);
+        const isAuthorized =
+            support.createdBy === accountId ||
+            support.assignments.some(a => a.accountId === accountId && a.isActive) ||
+            support.supportHelpers.some(h => h.accountId === accountId && h.isActive);
         if (!isAuthorized) return sendErrorResponse(res, 403, "Unauthorized access to this support ticket");
 
         return sendSuccessResponse(res, 200, "Support fetched successfully", support);
@@ -506,17 +539,27 @@ export async function updateSupportAdmin(req: Request, res: Response) {
             data.productCatalog = data.productCatalogId ? { connect: { id: data.productCatalogId } } : { set: [] };
         }
 
+        const oldSupport = await prisma.support.findUnique({ where: { id } });
+        if (!oldSupport) return sendErrorResponse(res, 404, "Support not found");
+
         const support = await prisma.support.update({
             where: { id },
             data,
         });
 
+        const isStatusChange = data.status && data.status !== oldSupport.status;
         await prisma.supportActivityLog.create({
             data: {
                 supportId: id,
                 action: "STATUS_CHANGED",
                 performedBy: performedBy || null,
-                meta: { updatedData: data }
+                meta: {
+                    event: isStatusChange ? "STATUS_UPDATED" : "SUPPORT_UPDATED",
+                    oldStatus: oldSupport.status,
+                    newStatus: data.status || oldSupport.status,
+                    status: data.status || oldSupport.status,
+                    updatedFields: Object.keys(data)
+                }
             }
         });
 
@@ -535,6 +578,9 @@ export async function updateSupportUser(req: Request, res: Response) {
         const { status } = req.body; // Users mostly only update status
         const performedBy = req.user?.accountId;
 
+        const oldSupport = await prisma.support.findUnique({ where: { id } });
+        if (!oldSupport) return sendErrorResponse(res, 404, "Support not found");
+
         const support = await prisma.support.update({
             where: { id },
             data: { status, closedAt: status === "SUPPORT_DONE" ? new Date() : null },
@@ -545,7 +591,12 @@ export async function updateSupportUser(req: Request, res: Response) {
                 supportId: id,
                 action: "STATUS_CHANGED",
                 performedBy: performedBy || null,
-                meta: { status }
+                meta: {
+                    event: "STATUS_UPDATED",
+                    oldStatus: oldSupport.status,
+                    newStatus: status,
+                    status
+                }
             }
         });
 
@@ -566,6 +617,15 @@ export async function assignSupportAdmin(req: Request, res: Response) {
 
         if (!accountId && !teamId) {
             return sendErrorResponse(res, 400, "Provide accountId or teamId for assignment");
+        }
+
+        let assignedToName = "Unassigned";
+        if (accountId) {
+            const acc = await prisma.account.findUnique({ where: { id: accountId } });
+            if (acc) assignedToName = `${acc.firstName || ""} ${acc.lastName || ""}`.trim();
+        } else if (teamId) {
+            const team = await prisma.team.findUnique({ where: { id: teamId } });
+            if (team) assignedToName = team.name;
         }
 
         await prisma.$transaction(async (tx) => {
@@ -589,7 +649,12 @@ export async function assignSupportAdmin(req: Request, res: Response) {
                     supportId: id,
                     action: "ASSIGNED",
                     performedBy: assignedBy || null,
-                    meta: { assignedTo: accountId || teamId, remark: remark || null }
+                    meta: {
+                        event: "SUPPORT_ASSIGNED",
+                        assignedTo: assignedToName,
+                        assignedToId: accountId || teamId,
+                        remark: remark || null
+                    }
                 }
             });
         });
@@ -927,4 +992,164 @@ export async function deleteSupportAdmin(req: Request, res: Response) {
         return sendErrorResponse(res, 500, "Error deleting support");
     }
 }
+
+export async function addSupportHelper(req: Request, res: Response) {
+    try {
+        const { id } = req.params;
+        const { accountId, role = "EXPORT", remark } = req.body;
+        const addedBy = req.user?.accountId;
+
+        if (!accountId) {
+            return sendErrorResponse(res, 400, "accountId is required to add helper");
+        }
+
+        const support = await prisma.support.findUnique({ where: { id } });
+        if (!support) return sendErrorResponse(res, 404, "Support ticket not found");
+
+        const existing = await prisma.supportHelper.findUnique({
+            where: {
+                supportId_accountId: {
+                    supportId: id,
+                    accountId,
+                }
+            }
+        });
+
+        let helper;
+        if (existing) {
+            helper = await prisma.supportHelper.update({
+                where: { id: existing.id },
+                data: {
+                    role: role as any,
+                    remark: remark || null,
+                    addedBy,
+                    isActive: true,
+                    addedAt: new Date(),
+                    removedAt: null
+                },
+                include: { account: true, addedByAcc: true }
+            });
+        } else {
+            helper = await prisma.supportHelper.create({
+                data: {
+                    supportId: id,
+                    accountId,
+                    role: role as any,
+                    remark: remark || null,
+                    addedBy,
+                    isActive: true
+                },
+                include: { account: true, addedByAcc: true }
+            });
+        }
+
+        const helperAccount = await prisma.account.findUnique({ where: { id: accountId } });
+        const helperName = helperAccount
+            ? `${helperAccount.firstName || ""} ${helperAccount.lastName || ""}`.trim()
+            : "Account";
+        const roleLabel = role === "EXPORT" ? "Expert" : role === "SUPPORT" ? "Support" : role === "CONSULT" ? "Consult" : role;
+
+        await prisma.supportActivityLog.create({
+            data: {
+                supportId: id,
+                action: "ASSIGNED",
+                performedBy: addedBy || null,
+                meta: {
+                    event: "HELPER_ADDED",
+                    helperId: helper.id,
+                    helperAccountId: accountId,
+                    helperName,
+                    helper: helperName,
+                    role: roleLabel,
+                    remark: remark || null
+                }
+            }
+        });
+
+        const updatedSupport = await prisma.support.findUnique({
+            where: { id },
+            include: {
+                customer: true,
+                assignments: { include: { account: true, team: true } },
+                supportHelpers: { where: { isActive: true }, include: { account: true, addedByAcc: true } },
+                activityLogs: { include: { performedByAccount: true }, orderBy: { createdAt: 'desc' } },
+                timeLogs: { include: { loggedByAccount: true }, orderBy: { loggedAt: 'desc' } },
+                createdByAcc: true
+            }
+        });
+
+        if (updatedSupport) {
+            await emitSupportPatch(id, updatedSupport);
+        }
+
+        return sendSuccessResponse(res, 201, "Support helper added successfully", updatedSupport);
+    } catch (error: any) {
+        console.error("Error adding support helper:", error);
+        return sendErrorResponse(res, 500, error?.message || "Error adding support helper");
+    }
+}
+
+export async function removeSupportHelper(req: Request, res: Response) {
+    try {
+        const { id, helperId } = req.params;
+        const performedBy = req.user?.accountId;
+
+        const helper = await prisma.supportHelper.findUnique({ where: { id: helperId } });
+        if (!helper || helper.supportId !== id) {
+            return sendErrorResponse(res, 404, "Support helper not found");
+        }
+
+        await prisma.supportHelper.update({
+            where: { id: helperId },
+            data: {
+                isActive: false,
+                removedAt: new Date()
+            }
+        });
+
+        const helperAccount = helper.accountId
+            ? await prisma.account.findUnique({ where: { id: helper.accountId } })
+            : null;
+        const helperName = helperAccount
+            ? `${helperAccount.firstName || ""} ${helperAccount.lastName || ""}`.trim()
+            : "Account";
+
+        await prisma.supportActivityLog.create({
+            data: {
+                supportId: id,
+                action: "ASSIGNED",
+                performedBy: performedBy || null,
+                meta: {
+                    event: "HELPER_REMOVED",
+                    helperId,
+                    helperAccountId: helper.accountId,
+                    helperName,
+                    helper: helperName
+                }
+            }
+        });
+
+        const updatedSupport = await prisma.support.findUnique({
+            where: { id },
+            include: {
+                customer: true,
+                assignments: { include: { account: true, team: true } },
+                supportHelpers: { where: { isActive: true }, include: { account: true, addedByAcc: true } },
+                activityLogs: { include: { performedByAccount: true }, orderBy: { createdAt: 'desc' } },
+                timeLogs: { include: { loggedByAccount: true }, orderBy: { loggedAt: 'desc' } },
+                createdByAcc: true
+            }
+        });
+
+        if (updatedSupport) {
+            await emitSupportPatch(id, updatedSupport);
+        }
+
+        return sendSuccessResponse(res, 200, "Support helper removed successfully", updatedSupport);
+    } catch (error: any) {
+        console.error("Error removing support helper:", error);
+        return sendErrorResponse(res, 500, error?.message || "Error removing support helper");
+    }
+}
+
 
