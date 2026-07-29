@@ -1699,43 +1699,25 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
       };
     }
 
-    /* ─────────────────────────────
-       Overdue filter
-       (preserves existing status filter)
-    ───────────────────────────── */
+    // For status breakdown stats, we exclude status filter so stat cards show full counts
+    const statusCountWhere = { ...where };
+    delete statusCountWhere.status;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const overdueWhere: any = {
-      ...where,
+      ...statusCountWhere,
       dueDate: {
         lt: today,
       },
-    };
-
-    // If frontend already filtered statuses,
-    // preserve them while excluding completed/cancelled
-    if (where.status?.in) {
-      const allowedStatuses = where.status.in.filter(
-        (s: string) =>
-          ![
-            'COMPLETED',
-            'CANCELLED',
-          ].includes(s)
-      );
-
-      overdueWhere.status = {
-        in: allowedStatuses,
-      };
-    } else {
-      overdueWhere.status = {
+      status: {
         notIn: [
           TaskStatus.COMPLETED,
           TaskStatus.CANCELLED,
         ],
-      };
-    }
+      },
+    };
 
     /* ─────────────────────────────
        Queries
@@ -1744,7 +1726,7 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
     const [grouped, overdueCount] = await Promise.all([
       prisma.task.groupBy({
         by: ["status"],
-        where,
+        where: statusCountWhere,
         _count: {
           _all: true,
         },
@@ -4205,33 +4187,97 @@ export async function getMyTaskStatsUser(req: Request, res: Response) {
 
     const teamIds = teamMemberships.map((m) => m.teamId);
 
+    const {
+      status,
+      priority,
+      projectId,
+      search,
+      dueBefore,
+      dueAfter,
+      fromDate,
+      toDate,
+      isSelfTask,
+    } = req.query as Record<string, string>;
+
     /* ─────────────────────────────
        Base filter
     ───────────────────────────── */
 
     const baseWhere: any = {
       deletedAt: null,
+      AND: [],
+    };
 
-      assignments: {
-        some: {
-          OR: [
-            {
-              accountId,
-            },
+    baseWhere.assignments = {
+      some: {
+        OR: [
+          {
+            accountId,
+          },
 
-            ...(teamIds.length > 0
-              ? [
-                {
-                  teamId: {
-                    in: teamIds,
-                  },
+          ...(teamIds.length > 0
+            ? [
+              {
+                teamId: {
+                  in: teamIds,
                 },
-              ]
-              : []),
-          ],
-        },
+              },
+            ]
+            : []),
+        ],
       },
     };
+
+    if (priority) baseWhere.priority = priority as TaskPriority;
+    if (projectId) baseWhere.projectId = projectId;
+
+    if (isSelfTask === "true") baseWhere.isSelfTask = true;
+    if (isSelfTask === "false") baseWhere.isSelfTask = false;
+    if (req.query.isLearning === "true") baseWhere.isLearning = true;
+    if (req.query.isLearning === "false") baseWhere.isLearning = false;
+
+    if (req.query.isTeamTask === "true") {
+      baseWhere.AND.push({
+        assignments: {
+          some: {
+            type: "TEAM",
+          },
+        },
+      });
+    } else if (req.query.isTeamTask === "false") {
+      baseWhere.AND.push({
+        assignments: {
+          none: {
+            type: "TEAM",
+          },
+        },
+      });
+    }
+
+    if (search?.trim()) {
+      baseWhere.AND.push({
+        OR: [
+          { title: { contains: search.trim(), mode: "insensitive" } },
+          { description: { contains: search.trim(), mode: "insensitive" } },
+        ],
+      });
+    }
+
+    if (baseWhere.AND.length === 0) {
+      delete baseWhere.AND;
+    }
+
+    if (dueBefore || dueAfter) {
+      baseWhere.dueDate = {};
+      if (dueAfter) baseWhere.dueDate.gte = new Date(dueAfter);
+      if (dueBefore) baseWhere.dueDate.lte = new Date(dueBefore);
+    }
+
+    if (fromDate || toDate) {
+      baseWhere.createdAt = {};
+      if (fromDate) baseWhere.createdAt.gte = new Date(`${fromDate}T00:00:00.000Z`);
+      if (toDate) baseWhere.createdAt.lte = new Date(`${toDate}T23:59:59.999Z`);
+    }
 
     /* ─────────────────────────────
        Overdue filter
@@ -4261,32 +4307,16 @@ export async function getMyTaskStatsUser(req: Request, res: Response) {
 
     const [grouped, overdueCount, activeTimer] =
       await Promise.all([
-        prisma.taskAssignment.groupBy({
+        prisma.task.groupBy({
           by: ["status"],
-          where: {
-            accountId,
-            task: {
-              deletedAt: null,
-            },
-          },
+          where: baseWhere,
           _count: {
             _all: true,
           },
         }),
 
-        prisma.taskAssignment.count({
-          where: {
-            accountId,
-            status: {
-              notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED],
-            },
-            task: {
-              deletedAt: null,
-              dueDate: {
-                lt: today,
-              },
-            },
-          },
+        prisma.task.count({
+          where: overdueWhere,
         }),
 
         prisma.taskTimeEntry.findFirst({
@@ -4294,7 +4324,6 @@ export async function getMyTaskStatsUser(req: Request, res: Response) {
             accountId,
             endedAt: null,
           },
-
           select: {
             id: true,
             taskId: true,
@@ -4331,6 +4360,10 @@ export async function getMyTaskStatsUser(req: Request, res: Response) {
     /* ─────────────────────────────
        Response
     ───────────────────────────── */
+
+    // console.log("\n\n\n\n\n\n stats\n ->", stats);
+    // console.log("\n activeTimer\n ->", activeTimer);
+    
 
     return sendSuccessResponse(
       res,
