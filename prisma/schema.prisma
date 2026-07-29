@@ -122,6 +122,15 @@ model Account {
   cloudServices            CloudService[]
   cloudServiceActivityLogs CloudServiceActivityLog[]
 
+  // Support Management
+  supportsCreated          Support[]                  @relation("SupportCreatedBy")
+  supportAssignments       SupportAssignment[]        @relation("SupportAssignedTo")
+  supportAssignmentsBy     SupportAssignment[]        @relation("SupportAssignedBy")
+  supportActivityLogs      SupportActivityLog[]
+  supportTimeLogs          SupportTimeLog[]
+  supportHelpers           SupportHelper[]            @relation("SupportHelperAccount")
+  supportHelpersAdded      SupportHelper[]            @relation("SupportHelperAddedBy")
+
   @@index([isActive])
   @@index([jobType])
   @@index([contactEmail])
@@ -434,6 +443,7 @@ model Team {
   members         TeamMember[]
   taskAssignments TaskAssignment[]
   leadAssignments LeadAssignment[]
+  supportAssignments SupportAssignment[]
   dsuTemplates    DsuTemplate[]
 
   @@unique([name])
@@ -1266,6 +1276,8 @@ model Lead {
 
   isActive    Boolean @default(true)
   isWorking   Boolean @default(false)
+  currentWorkSessionStart DateTime?
+
   isImportant Boolean @default(false)
 
   createdBy    String? // accountId
@@ -1478,6 +1490,7 @@ model Customer {
   leads         Lead[]
   quotations    Quotation[]
   cloudServices CloudService[]
+  supports      Support[]
 
   @@index([normalizedMobile])
   @@index([customerCompanyName])
@@ -2678,6 +2691,7 @@ model ProductCatalog {
   salesPriority Int @default(0)
 
   leads              Lead[]
+  supports           Support[]
   customerProducts   CustomerProduct[]
   quotationLineItems QuotationLineItem[]
 
@@ -2954,4 +2968,200 @@ model CloudServiceActivityLog {
   @@index([createdAt])
   @@index([cloudServiceId, createdAt]) // fetch full log for one service, ordered
   @@index([cloudServiceId, action]) // filter by action type per service
+}
+
+// ------------------------------------------------------------------
+// Support Management
+// ------------------------------------------------------------------
+
+enum SupportStatus {
+  OPEN
+  IN_PROGRESS
+  ON_HOLD
+  WAITING_FOR_CUSTOMER
+  SUPPORT_DONE
+  NOT_DONE
+  CANCELLED
+}
+
+enum SupportType {
+  TECHNICAL_ISSUE
+  PRODUCT_TRAINING
+  FEATURE_EXPLANATION
+  NEW_SETUP
+  INSTALLATION
+  CONFIGURATION
+  BUG_REPORT
+  MAINTENANCE
+  FOLLOW_UP
+  CONSULTATION
+  OTHER
+}
+
+enum SupportPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum SupportActivityAction {
+  CREATED
+  ASSIGNED
+  STATUS_CHANGED
+  EXPERT_ADDED
+  TIME_LOGGED
+  REMARK_ADDED
+  PRODUCT_CHANGED
+  COMPLETED
+}
+
+model Support {
+  id          String   @id @default(uuid())
+  subject     String
+  description String?  @db.Text
+  
+  type        SupportType
+  status      SupportStatus   @default(OPEN)
+  priority    SupportPriority @default(MEDIUM)
+
+  customer   Customer @relation(fields: [customerId], references: [id])
+  customerId String
+
+  // Future-ready Product link, storing JSON similar to Lead.product
+  product      Json?
+
+  productCatalogId String?
+  productCatalog   ProductCatalog[]
+
+  isWorking   Boolean @default(false)
+  currentWorkSessionStart DateTime?
+
+
+  expert       String? // Optionally an expert name or ID
+  
+  // [
+  //   {
+  //     "id": "uuid",
+  //     "text": "Called customer, interested in demo",
+  //     "by": {
+  //       "accountId": "",
+  //       "firstName": "",
+  //       "lastName": "",
+  //       "avatar": ""
+  //     },
+  //     "at": "2026-05-19T10:00:00.000Z"
+  //   }
+  // ]
+  remarks      Json?
+  
+  createdBy    String?
+  createdByAcc Account? @relation("SupportCreatedBy", fields: [createdBy], references: [id])
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  closedAt     DateTime?
+
+  totalWorkSeconds Int @default(0)
+
+  assignments  SupportAssignment[]
+  activityLogs SupportActivityLog[]
+  timeLogs     SupportTimeLog[]
+  supportHelpers SupportHelper[]
+
+  @@index([status])
+  @@index([customerId])
+  @@index([createdAt])
+}
+
+model SupportAssignment {
+  id        String   @id @default(uuid())
+  
+  support   Support  @relation(fields: [supportId], references: [id], onDelete: Cascade)
+  supportId String
+
+  account   Account? @relation("SupportAssignedTo", fields: [accountId], references: [id])
+  accountId String?
+
+  teamId String?
+  team   Team?   @relation(fields: [teamId], references: [id])
+
+  type      AssignmentType?
+
+  assignedBy    String?
+  assignedByAcc Account? @relation("SupportAssignedBy", fields: [assignedBy], references: [id])
+  
+  assignedAt    DateTime @default(now())
+  unassignedAt  DateTime?
+  isActive      Boolean  @default(true)
+
+  @@index([supportId])
+  @@index([accountId])
+}
+
+model SupportActivityLog {
+  id        String   @id @default(uuid())
+
+  support   Support  @relation(fields: [supportId], references: [id], onDelete: Cascade)
+  supportId String
+
+  action    SupportActivityAction
+  meta      Json? // To store old/new values, remarks, etc.
+
+  performedBy        String?
+  performedByAccount Account? @relation(fields: [performedBy], references: [id])
+  
+  createdAt DateTime @default(now())
+
+  @@index([supportId])
+  @@index([createdAt])
+}
+
+model SupportTimeLog {
+  id        String   @id @default(uuid())
+
+  support   Support  @relation(fields: [supportId], references: [id], onDelete: Cascade)
+  supportId String
+
+  seconds   Int
+  remark    String?
+
+  loggedBy        String?
+  loggedByAccount Account? @relation(fields: [loggedBy], references: [id])
+  
+  loggedAt  DateTime @default(now())
+
+  @@index([supportId])
+  @@index([loggedAt])
+}
+
+enum SupportHelperRole {
+  EXPORT
+  SUPPORT
+  CONSULT
+}
+
+model SupportHelper {
+  id String @id @default(uuid())
+
+  supportId String
+  support   Support   @relation(fields: [supportId], references: [id], onDelete: Cascade)
+
+  accountId String
+  account   Account @relation("SupportHelperAccount", fields: [accountId], references: [id])
+
+  role SupportHelperRole @default(EXPORT)
+
+  addedBy    String? // accountId
+  addedByAcc Account? @relation("SupportHelperAddedBy", fields: [addedBy], references: [id])
+
+  isActive Boolean @default(true)
+  remark   String?
+
+  addedAt   DateTime  @default(now())
+  removedAt DateTime?
+
+  @@unique([supportId, accountId])
+  @@index([supportId])
+  @@index([accountId])
 }

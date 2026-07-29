@@ -14,11 +14,13 @@ import employeeAnalyticsRoutes from "./employeeAnalytics.routes";
 import leadAnalyticsRoutes from "./leadAnalytics.routes";
 import holidayRoutes from "./holiday.routes";
 import pipelineRouter from "./pipelineTemplate.routes"
+import supportRoutes from "./support.routes";
 // import tasksRoutes from "./task.routes"
 
 // base path for each module
 router.use("/quotations", quotationRoutes);
 router.use("/", leadRoutes);
+router.use("/", supportRoutes);
 router.use("/", employeesRouter);
 router.use("/", registerRouter);
 router.use("/", teamRouter);

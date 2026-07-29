@@ -72,9 +72,13 @@ export function initIo(server: http.Server) {
     // Tasks
     socket.join(`tasks:user:${user.accountId}`);
 
+    // Supports
+    socket.join(`supports:user:${user.accountId}`);
+
     if (user.roles?.some((r) => r.role.name === "ADMIN")) {
       socket.join("leads:admin");
       socket.join("tasks:admin");
+      socket.join("supports:admin");
 
       console.log(
         `\n📡 ${user.username} -> is an admin, joining leads:admin room\n`,

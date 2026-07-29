@@ -350,7 +350,7 @@ export async function listEmployees(req: Request, res: Response) {
         return (b.expertise?.leadsCount ?? 0) - (a.expertise?.leadsCount ?? 0);
       });
 
-      console.log("\n\n\n\n\nlistEmployees formattedData:", data); 
+      // console.log("\n\n\n\n\nlistEmployees formattedData:", data); 
 
     return sendSuccessResponse(res, 200, "Employees fetched", {
       data,
