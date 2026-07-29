@@ -84,6 +84,15 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
 
         /* ── 3. Build reusable Prisma where fragments ── */
 
+        let accountTeamIds: string[] = [];
+        if (accountId) {
+            const memberships = await prisma.teamMember.findMany({
+                where: { accountId, isActive: true },
+                select: { teamId: true },
+            });
+            accountTeamIds = memberships.map((m) => m.teamId);
+        }
+
         // Base task filter (excludes soft-deleted)
         const taskWhere: Prisma.TaskWhereInput = {
             deletedAt: null,
@@ -101,7 +110,12 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
             ...(accountId
                 ? {
                     assignments: {
-                        some: { accountId },
+                        some: {
+                            OR: [
+                                { accountId },
+                                ...(accountTeamIds.length > 0 ? [{ teamId: { in: accountTeamIds } }] : []),
+                            ],
+                        },
                     },
                 }
                 : {}),
@@ -430,9 +444,18 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
                 avg_days_late: number | null;
             }[]
         >`
-WITH employee_tasks AS (
+WITH employee_assignments AS (
+  SELECT
+    ta."taskId",
+    COALESCE(ta."accountId", tm."accountId") AS account_id
+  FROM "TaskAssignment" ta
+  LEFT JOIN "TeamMember" tm
+    ON tm."teamId" = ta."teamId" AND tm."isActive" = TRUE
+  WHERE ta."accountId" IS NOT NULL OR tm."accountId" IS NOT NULL
+),
+employee_tasks AS (
   SELECT DISTINCT
-    ta."accountId"                                AS account_id,
+    ea.account_id,
     t.id                                          AS task_id,
     t.status,
     t."dueDate",
@@ -441,10 +464,10 @@ WITH employee_tasks AS (
     t."createdAt",
     t."loggedMinutes"
 
-  FROM "TaskAssignment" ta
+  FROM employee_assignments ea
 
   INNER JOIN "Task" t
-    ON t.id = ta."taskId"
+    ON t.id = ea."taskId"
 
     WHERE t."deletedAt" IS NULL
 
@@ -461,7 +484,7 @@ WITH employee_tasks AS (
                 : Prisma.empty}
 
     ${accountId
-                ? Prisma.sql`AND ta."accountId" = ${accountId}`
+                ? Prisma.sql`AND ea.account_id = ${accountId}`
                 : Prisma.empty}
 )
 

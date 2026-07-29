@@ -1441,10 +1441,22 @@ export async function listTasksAdmin(req: Request, res: Response) {
     }
 
     if (assignedToAccountId || assignedToTeamId) {
+      let targetTeamIds: string[] = [];
+      if (assignedToAccountId) {
+        const memberships = await prisma.teamMember.findMany({
+          where: { accountId: assignedToAccountId, isActive: true },
+          select: { teamId: true },
+        });
+        targetTeamIds = memberships.map((m) => m.teamId);
+      }
+
       where.assignments = {
         some: {
-          ...(assignedToAccountId ? { accountId: assignedToAccountId } : {}),
-          ...(assignedToTeamId ? { teamId: assignedToTeamId } : {}),
+          OR: [
+            ...(assignedToAccountId ? [{ accountId: assignedToAccountId }] : []),
+            ...(targetTeamIds.length > 0 ? [{ teamId: { in: targetTeamIds } }] : []),
+            ...(assignedToTeamId ? [{ teamId: assignedToTeamId }] : []),
+          ],
         },
       };
     }
@@ -1692,9 +1704,18 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
     }
 
     if (assignedToAccountId) {
+      const memberships = await prisma.teamMember.findMany({
+        where: { accountId: assignedToAccountId, isActive: true },
+        select: { teamId: true },
+      });
+      const targetTeamIds = memberships.map((m) => m.teamId);
+
       where.assignments = {
         some: {
-          accountId: assignedToAccountId,
+          OR: [
+            { accountId: assignedToAccountId },
+            ...(targetTeamIds.length > 0 ? [{ teamId: { in: targetTeamIds } }] : []),
+          ],
         },
       };
     }
