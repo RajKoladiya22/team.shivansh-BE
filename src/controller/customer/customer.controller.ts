@@ -347,6 +347,20 @@ export async function getCustomerDetails(req: Request, res: Response) {
             },
           },
         },
+        supports: {
+          orderBy: { createdAt: "desc" },
+          include: {
+            assignments: {
+              where: { isActive: true },
+              include: {
+                account: {
+                  select: { id: true, firstName: true, lastName: true },
+                },
+                team: { select: { id: true, name: true } },
+              },
+            },
+          },
+        },
       },
     });
 

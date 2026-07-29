@@ -30,6 +30,43 @@ async function emitSupportPatch(supportId, patchData) {
     }
 }
 
+const STATUS_ORDER_MAP: Record<string, number> = {
+    OPEN: 1,
+    IN_PROGRESS: 2,
+    ON_HOLD: 3,
+    WAITING_FOR_CUSTOMER: 4,
+    SUPPORT_DONE: 5,
+    NOT_DONE: 6,
+    CANCELLED: 7,
+};
+
+const PRIORITY_ORDER_MAP: Record<string, number> = {
+    URGENT: 1,
+    HIGH: 2,
+    MEDIUM: 3,
+    LOW: 4,
+};
+
+function sortSupportsArray(supports: any[]) {
+    return supports.sort((a, b) => {
+        const statusA = STATUS_ORDER_MAP[a.status] ?? 8;
+        const statusB = STATUS_ORDER_MAP[b.status] ?? 8;
+        if (statusA !== statusB) {
+            return statusA - statusB;
+        }
+
+        const priorityA = PRIORITY_ORDER_MAP[String(a.priority).toUpperCase()] ?? 5;
+        const priorityB = PRIORITY_ORDER_MAP[String(b.priority).toUpperCase()] ?? 5;
+        if (priorityA !== priorityB) {
+            return priorityA - priorityB;
+        }
+
+        const timeA = new Date(a.createdAt || 0).getTime();
+        const timeB = new Date(b.createdAt || 0).getTime();
+        return timeB - timeA;
+    });
+}
+
 export async function createSupportAdmin(req: Request, res: Response) {
     try {
         const {
@@ -222,18 +259,16 @@ export async function listSupportsAdmin(req: Request, res: Response) {
             ];
         }
 
-        const [supports, total] = await Promise.all([
-            prisma.support.findMany({
-                where,
-                skip,
-                take,
-                orderBy: { createdAt: "desc" },
-                include: { customer: true, assignments: { include: { account: true } } }
-            }),
-            prisma.support.count({ where })
-        ]);
+        let allSupports = await prisma.support.findMany({
+            where,
+            include: { customer: true, assignments: { include: { account: true, team: true } }, createdByAcc: true }
+        });
 
-        return sendSuccessResponse(res, 200, "Supports fetched successfully", { data: supports, meta: { total, page: Number(page), limit: Number(limit) } });
+        allSupports = sortSupportsArray(allSupports);
+        const total = allSupports.length;
+        const paginatedSupports = allSupports.slice(skip, skip + take);
+
+        return sendSuccessResponse(res, 200, "Supports fetched successfully", { data: paginatedSupports, meta: { total, page: Number(page), limit: Number(limit) } });
     } catch (error) {
         console.error(error);
         return sendErrorResponse(res, 500, "Error fetching supports");
@@ -397,18 +432,16 @@ export async function listSupportsUser(req: Request, res: Response) {
             ];
         }
 
-        const [supports, total] = await Promise.all([
-            prisma.support.findMany({
-                where,
-                skip,
-                take,
-                orderBy: { createdAt: "desc" },
-                include: { customer: true, assignments: { include: { account: true } } }
-            }),
-            prisma.support.count({ where })
-        ]);
+        let allSupports = await prisma.support.findMany({
+            where,
+            include: { customer: true, assignments: { include: { account: true, team: true } }, createdByAcc: true }
+        });
 
-        return sendSuccessResponse(res, 200, "Supports fetched successfully", { data: supports, meta: { total, page: Number(page), limit: Number(limit) } });
+        allSupports = sortSupportsArray(allSupports);
+        const total = allSupports.length;
+        const paginatedSupports = allSupports.slice(skip, skip + take);
+
+        return sendSuccessResponse(res, 200, "Supports fetched successfully", { data: paginatedSupports, meta: { total, page: Number(page), limit: Number(limit) } });
     } catch (error) {
         console.error(error);
         return sendErrorResponse(res, 500, "Error fetching supports");
@@ -528,37 +561,58 @@ export async function updateSupportUser(req: Request, res: Response) {
 export async function assignSupportAdmin(req: Request, res: Response) {
     try {
         const { id } = req.params;
-        const { accountId } = req.body;
+        const { accountId, teamId, remark } = req.body;
         const assignedBy = req.user?.accountId;
 
-        await prisma.supportAssignment.updateMany({
-            where: { supportId: id, isActive: true },
-            data: { isActive: false, unassignedAt: new Date() }
+        if (!accountId && !teamId) {
+            return sendErrorResponse(res, 400, "Provide accountId or teamId for assignment");
+        }
+
+        await prisma.$transaction(async (tx) => {
+            await tx.supportAssignment.deleteMany({
+                where: { supportId: id }
+            });
+
+            await tx.supportAssignment.create({
+                data: {
+                    supportId: id,
+                    type: teamId ? "TEAM" : "ACCOUNT",
+                    accountId: accountId || undefined,
+                    teamId: teamId || undefined,
+                    assignedBy,
+                    isActive: true,
+                }
+            });
+
+            await tx.supportActivityLog.create({
+                data: {
+                    supportId: id,
+                    action: "ASSIGNED",
+                    performedBy: assignedBy || null,
+                    meta: { assignedTo: accountId || teamId, remark: remark || null }
+                }
+            });
         });
 
-        const assignment = await prisma.supportAssignment.create({
-            data: {
-                supportId: id,
-                accountId,
-                assignedBy
+        const updatedSupport = await prisma.support.findUnique({
+            where: { id },
+            include: {
+                customer: true,
+                assignments: { include: { account: true, team: true } },
+                activityLogs: { include: { performedByAccount: true }, orderBy: { createdAt: 'desc' } },
+                timeLogs: { include: { loggedByAccount: true }, orderBy: { loggedAt: 'desc' } },
+                createdByAcc: true
             }
         });
 
-        await prisma.supportActivityLog.create({
-            data: {
-                supportId: id,
-                action: "ASSIGNED",
-                performedBy: assignedBy || null,
-                meta: { assignedTo: accountId }
-            }
-        });
+        if (updatedSupport) {
+            await emitSupportPatch(id, updatedSupport);
+        }
 
-        await emitSupportPatch(id, { id });
-
-        return sendSuccessResponse(res, 200, "Support assigned successfully", assignment);
+        return sendSuccessResponse(res, 200, "Support reassigned successfully", updatedSupport);
     } catch (error) {
-        console.error(error);
-        return sendErrorResponse(res, 500, "Error assigning support");
+        console.error("Error reassigning support:", error);
+        return sendErrorResponse(res, 500, "Error reassigning support");
     }
 }
 
@@ -845,3 +899,32 @@ export async function stopSupportWorkAdmin(req: Request, res: Response) {
 
 export const startSupportWorkUser = startSupportWorkAdmin;
 export const stopSupportWorkUser = stopSupportWorkAdmin;
+
+export async function deleteSupportAdmin(req: Request, res: Response) {
+    try {
+        const { id } = req.params;
+        const support = await prisma.support.findUnique({ where: { id } });
+        if (!support) return sendErrorResponse(res, 404, "Support not found");
+
+        await prisma.$transaction(async (tx) => {
+            await tx.supportAssignment.deleteMany({ where: { supportId: id } });
+            await tx.supportActivityLog.deleteMany({ where: { supportId: id } });
+            await tx.supportTimeLog.deleteMany({ where: { supportId: id } });
+            await tx.supportHelper.deleteMany({ where: { supportId: id } });
+            await tx.support.delete({ where: { id } });
+        });
+
+        try {
+            const io = getIo();
+            io.to("supports:admin").emit("support:deleted", { id });
+        } catch (e) {
+            console.warn("Socket emit skipped", e);
+        }
+
+        return sendSuccessResponse(res, 200, "Support deleted successfully");
+    } catch (error) {
+        console.error("Error deleting support:", error);
+        return sendErrorResponse(res, 500, "Error deleting support");
+    }
+}
+
