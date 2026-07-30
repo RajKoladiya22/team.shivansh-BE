@@ -1492,6 +1492,9 @@ model Customer {
   cloudServices CloudService[]
   supports      Support[]
 
+  portalTokens    CustomerPortalToken[]
+  portalAuditLogs CustomerPortalAuditLog[]
+
   @@index([normalizedMobile])
   @@index([customerCompanyName])
   @@index([tallySerial])
@@ -1533,6 +1536,48 @@ model CustomerProduct {
 
   @@index([customerId])
   @@index([productCatalogId])
+}
+
+// ------------------------------------------------------------------
+// Customer Self-Service Portal Store
+// ------------------------------------------------------------------
+
+model CustomerPortalToken {
+  id             String    @id @default(uuid())
+  customerId     String
+  customer       Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  tokenHash      String    @unique // SHA-256 hash of the raw token
+  label          String?   @default("Primary Access Link")
+
+  isActive       Boolean   @default(true)
+  expiresAt      DateTime? // optional expiration timestamp
+  lastAccessedAt DateTime?
+  accessCount    Int       @default(0)
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([customerId])
+  @@index([tokenHash])
+  @@index([isActive])
+}
+
+model CustomerPortalAuditLog {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  action     String   // e.g. "SESSION_START", "VIEW_PROFILE", "CREATE_SUPPORT", "SUBMIT_INQUIRY", "ACCEPT_QUOTATION"
+  ipAddress  String?
+  userAgent  String?
+  meta       Json?
+
+  createdAt  DateTime @default(now())
+
+  @@index([customerId])
+  @@index([action])
+  @@index([createdAt])
 }
 
 // ------------------------------------------------------------------

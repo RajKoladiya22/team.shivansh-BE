@@ -22,19 +22,43 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use(
   cors({
-    origin: [
-      "https://team.shivanshinfosys.in",
-      "https://shivanshinfosys.in",
-      "https://www.shivanshinfosys.in",
-      "http://localhost:5173",
-      "http://localhost:3000",
-      "https://dothis.in",
-    ],
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const allowedOrigins = [
+        "https://team.shivanshinfosys.in",
+        "https://shivanshinfosys.in",
+        "https://www.shivanshinfosys.in",
+        "https://customer.shivanshinfosys.in",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
+        "http://localhost:3000",
+        "https://dothis.in",
+      ];
+      if (
+        allowedOrigins.includes(origin) ||
+        origin.endsWith(".shivanshinfosys.in") ||
+        origin.startsWith("http://localhost:")
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, true);
+    },
     credentials: true,
-    optionsSuccessStatus: 204,
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Customer-Token",
+      "x-customer-token",
+      "X-API-Key",
+      "x-api-key",
+      "Accept",
+      "X-Requested-With",
+    ],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    optionsSuccessStatus: 200,
   }),
 );
-app.use(helmet());
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -48,7 +72,15 @@ app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "..", "views"));
 app.use("/storage", express.static(path.join(__dirname, "storage")));
 
-const whitelist = ["/api/v1/auth/reset-password", "/api/v1/public/leads", "/api/v1/public/quotations", "/api/v1/public/analytics", "/api/v1/public/tnc"];
+const whitelist = [
+  "/api/v1/auth/reset-password",
+  "/api/v1/public",
+  "/api/v1/public/leads",
+  "/api/v1/public/quotations",
+  "/api/v1/public/analytics",
+  "/api/v1/public/tnc",
+  "/api/v1/public/portal",
+];
 
 app.use(requestLogger);
 app.use(checkStaticToken(whitelist));

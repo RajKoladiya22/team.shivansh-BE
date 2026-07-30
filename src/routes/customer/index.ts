@@ -60,11 +60,15 @@ router.post("/bulk/verify", requireAuth, upload.single("file"), verifyBulkCustom
 router.post("/bulk/import", requireAuth, bulkImportCustomers);
 
 
-// ─── Terms & Conditions ───────────────────────────────────────────────────────
-// Admin: generate token + send email to customer
-router.post("/:id/send-tnc", requireAuth, sendTncEmail);
+// ─── Customer Self-Service Portal Tokens ──────────────────────────────────────────
+import {
+  generateCustomerPortalToken,
+  listCustomerPortalTokens,
+  revokeCustomerPortalToken,
+} from "../../controller/customer/portalToken.controller";
 
-router.post("/bulk-send-tnc", requireAuth, bulkSendTncEmail);
-
+router.post("/:id/portal-token", requireAuth, generateCustomerPortalToken);
+router.get("/:id/portal-tokens", requireAuth, listCustomerPortalTokens);
+router.patch("/:id/portal-tokens/:tokenId/revoke", requireAuth, revokeCustomerPortalToken);
 
 export default router;
