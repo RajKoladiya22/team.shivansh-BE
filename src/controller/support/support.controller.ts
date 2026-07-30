@@ -9,12 +9,12 @@ async function emitSupportPatch(supportId, patchData) {
     try {
         const io = getIo();
         io.to("supports:admin").emit("support:patch", { id: supportId, patch: patchData });
-        
+
         const support = await prisma.support.findUnique({
             where: { id: supportId },
             select: { createdBy: true, assignments: { select: { accountId: true, isActive: true } } }
         });
-        
+
         if (support) {
             if (support.createdBy) {
                 io.to(`supports:user:${support.createdBy}`).emit("support:patch", { id: supportId, patch: patchData });
@@ -170,7 +170,7 @@ export async function createSupportUser(req: Request, res: Response) {
 
         const normalizedMobile = mobileNumber.replace(/\D/g, "").slice(-10);
         let customer = await prisma.customer.findFirst({
-            where: { mobile : normalizedMobile },
+            where: { mobile: normalizedMobile },
         });
 
         if (!customer) {
@@ -254,7 +254,7 @@ export async function listSupportsAdmin(req: Request, res: Response) {
         if (type) where.type = type;
         if (isWorking === "true") where.isWorking = true;
         if (isWorking === "false") where.isWorking = false;
-        
+
         if (customerId) where.customerId = customerId;
         if (assignedTo) where.assignments = { some: { accountId: assignedTo, isActive: true } };
 
@@ -427,7 +427,7 @@ export async function listSupportsUser(req: Request, res: Response) {
                 { supportHelpers: { some: { accountId, isActive: true } } }
             ]
         };
-        
+
         if (status) where.status = status;
         if (priority) where.priority = priority;
         if (type) where.type = type;
@@ -515,7 +515,7 @@ export async function getSupportDetailsUser(req: Request, res: Response) {
             }
         });
         if (!support) return sendErrorResponse(res, 404, "Support not found");
-        
+
         const isAuthorized =
             support.createdBy === accountId ||
             support.assignments.some(a => a.accountId === accountId && a.isActive) ||
@@ -532,38 +532,89 @@ export async function getSupportDetailsUser(req: Request, res: Response) {
 export async function updateSupportAdmin(req: Request, res: Response) {
     try {
         const { id } = req.params;
-        const data = req.body;
+        const { subject, description, type, status, priority, productCatalogId } = req.body;
         const performedBy = req.user?.accountId;
-        
-        if (data.productCatalogId !== undefined) {
-            data.productCatalog = data.productCatalogId ? { connect: { id: data.productCatalogId } } : { set: [] };
-        }
 
         const oldSupport = await prisma.support.findUnique({ where: { id } });
         if (!oldSupport) return sendErrorResponse(res, 404, "Support not found");
 
+        // Build a sanitized update payload — only allow known editable fields
+        const updateData: Record<string, any> = {};
+        if (subject !== undefined) updateData.subject = subject;
+        if (description !== undefined) updateData.description = description;
+        if (type !== undefined) updateData.type = type;
+        if (priority !== undefined) updateData.priority = priority;
+        if (status !== undefined) {
+            updateData.status = status;
+            updateData.closedAt = status === "SUPPORT_DONE" ? new Date() : null;
+        }
+        // ProductCatalog: many-to-many — connect new or clear
+        if (productCatalogId !== undefined) {
+            updateData.productCatalogId = productCatalogId || null;
+            updateData.productCatalog = productCatalogId
+                ? { set: [{ id: productCatalogId }] }
+                : { set: [] };
+        }
+
+        if (Object.keys(updateData).length === 0) {
+            return sendErrorResponse(res, 400, "No valid fields provided for update");
+        }
+
         const support = await prisma.support.update({
             where: { id },
-            data,
+            data: updateData,
+            include: {
+                customer: true,
+                assignments: { include: { account: true, team: true } },
+                supportHelpers: { where: { isActive: true }, include: { account: true, addedByAcc: true } },
+                activityLogs: { include: { performedByAccount: true }, orderBy: { createdAt: 'desc' }, take: 20 },
+                timeLogs: { include: { loggedByAccount: true }, orderBy: { loggedAt: 'desc' }, take: 10 },
+                createdByAcc: true,
+                productCatalog: true,
+            },
         });
 
-        const isStatusChange = data.status && data.status !== oldSupport.status;
+        // Build meaningful change summary for activity log
+        const changedFields: string[] = [];
+        if (subject !== undefined && subject !== oldSupport.subject) changedFields.push(`Subject updated`);
+        if (description !== undefined && description !== oldSupport.description) changedFields.push(`Description updated`);
+        if (type !== undefined && type !== oldSupport.type) changedFields.push(`Type changed: ${oldSupport.type} → ${type}`);
+        if (priority !== undefined && priority !== oldSupport.priority) changedFields.push(`Priority changed: ${oldSupport.priority} → ${priority}`);
+        if (productCatalogId !== undefined) changedFields.push(`Product catalog updated`);
+        const isStatusChange = status !== undefined && status !== oldSupport.status;
+        if (isStatusChange) changedFields.push(`Status changed: ${oldSupport.status} → ${status}`);
+
         await prisma.supportActivityLog.create({
             data: {
                 supportId: id,
-                action: "STATUS_CHANGED",
+                action: isStatusChange ? "STATUS_CHANGED" : "REMARK_ADDED",
                 performedBy: performedBy || null,
                 meta: {
                     event: isStatusChange ? "STATUS_UPDATED" : "SUPPORT_UPDATED",
                     oldStatus: oldSupport.status,
-                    newStatus: data.status || oldSupport.status,
-                    status: data.status || oldSupport.status,
-                    updatedFields: Object.keys(data)
+                    newStatus: support.status,
+                    updatedFields: Object.keys(updateData).filter(k => !['closedAt', 'productCatalog'].includes(k)),
+                    changes: changedFields,
                 }
             }
         });
 
-        await emitSupportPatch(support.id, support);
+        // Emit full patched support object to all relevant sockets
+        try {
+            const { getIo } = require("../../core/utils/socket");
+            const io = getIo();
+            io.to("supports:admin").emit("support:patch", { id: support.id, patch: support });
+            if (support.createdBy) {
+                io.to(`supports:user:${support.createdBy}`).emit("support:patch", { id: support.id, patch: support });
+            }
+            for (const a of support.assignments) {
+                if (a.isActive && a.accountId && a.accountId !== support.createdBy) {
+                    io.to(`supports:user:${a.accountId}`).emit("support:patch", { id: support.id, patch: support });
+                }
+            }
+        } catch (e) {
+            console.warn("Socket emit skipped", e);
+        }
 
         return sendSuccessResponse(res, 200, "Support updated successfully", support);
     } catch (error) {
@@ -575,37 +626,107 @@ export async function updateSupportAdmin(req: Request, res: Response) {
 export async function updateSupportUser(req: Request, res: Response) {
     try {
         const { id } = req.params;
-        const { status } = req.body; // Users mostly only update status
+        const { subject, description, type, status, priority, productCatalogId } = req.body;
         const performedBy = req.user?.accountId;
 
         const oldSupport = await prisma.support.findUnique({ where: { id } });
         if (!oldSupport) return sendErrorResponse(res, 404, "Support not found");
 
+        // Verify user is authorized to edit this support
+        const accountId = req.user?.accountId;
+        const assignmentCheck = await prisma.supportAssignment.findFirst({
+            where: { supportId: id, accountId, isActive: true }
+        });
+        const helperCheck = await prisma.supportHelper.findFirst({
+            where: { supportId: id, accountId, isActive: true }
+        });
+        const isOwner = oldSupport.createdBy === accountId;
+        if (!isOwner && !assignmentCheck && !helperCheck) {
+            return sendErrorResponse(res, 403, "Unauthorized: You are not assigned to this support ticket");
+        }
+
+        // Build sanitized payload
+        const updateData: Record<string, any> = {};
+        if (subject !== undefined) updateData.subject = subject;
+        if (description !== undefined) updateData.description = description;
+        if (type !== undefined) updateData.type = type;
+        if (priority !== undefined) updateData.priority = priority;
+        if (status !== undefined) {
+            updateData.status = status;
+            updateData.closedAt = status === "SUPPORT_DONE" ? new Date() : null;
+        }
+        // ProductCatalog — users can also link/update
+        if (productCatalogId !== undefined) {
+            updateData.productCatalogId = productCatalogId || null;
+            updateData.productCatalog = productCatalogId
+                ? { set: [{ id: productCatalogId }] }
+                : { set: [] };
+        }
+
+        if (Object.keys(updateData).length === 0) {
+            return sendErrorResponse(res, 400, "No valid fields provided for update");
+        }
+
         const support = await prisma.support.update({
             where: { id },
-            data: { status, closedAt: status === "SUPPORT_DONE" ? new Date() : null },
+            data: updateData,
+            include: {
+                customer: true,
+                assignments: { include: { account: true, team: true } },
+                supportHelpers: { where: { isActive: true }, include: { account: true, addedByAcc: true } },
+                activityLogs: { include: { performedByAccount: true }, orderBy: { createdAt: 'desc' }, take: 20 },
+                timeLogs: { include: { loggedByAccount: true }, orderBy: { loggedAt: 'desc' }, take: 10 },
+                createdByAcc: true,
+                productCatalog: true,
+            },
         });
+
+        // Build change summary
+        const changedFields: string[] = [];
+        if (subject !== undefined && subject !== oldSupport.subject) changedFields.push(`Subject updated`);
+        if (description !== undefined && description !== oldSupport.description) changedFields.push(`Description updated`);
+        if (type !== undefined && type !== oldSupport.type) changedFields.push(`Type: ${oldSupport.type} → ${type}`);
+        if (priority !== undefined && priority !== oldSupport.priority) changedFields.push(`Priority: ${oldSupport.priority} → ${priority}`);
+        if (productCatalogId !== undefined) changedFields.push(`Product catalog updated`);
+        const isStatusChange = status !== undefined && status !== oldSupport.status;
+        if (isStatusChange) changedFields.push(`Status: ${oldSupport.status} → ${status}`);
 
         await prisma.supportActivityLog.create({
             data: {
                 supportId: id,
-                action: "STATUS_CHANGED",
+                action: isStatusChange ? "STATUS_CHANGED" : "REMARK_ADDED",
                 performedBy: performedBy || null,
                 meta: {
-                    event: "STATUS_UPDATED",
+                    event: isStatusChange ? "STATUS_UPDATED" : "SUPPORT_UPDATED",
                     oldStatus: oldSupport.status,
-                    newStatus: status,
-                    status
+                    newStatus: support.status,
+                    updatedFields: Object.keys(updateData).filter(k => !['closedAt', 'productCatalog'].includes(k)),
+                    changes: changedFields,
                 }
             }
         });
 
-        await emitSupportPatch(support.id, support);
+        // Emit full patch to all relevant clients
+        try {
+            const { getIo } = require("../../core/utils/socket");
+            const io = getIo();
+            io.to("supports:admin").emit("support:patch", { id: support.id, patch: support });
+            if (support.createdBy) {
+                io.to(`supports:user:${support.createdBy}`).emit("support:patch", { id: support.id, patch: support });
+            }
+            for (const a of support.assignments) {
+                if (a.isActive && a.accountId && a.accountId !== support.createdBy) {
+                    io.to(`supports:user:${a.accountId}`).emit("support:patch", { id: support.id, patch: support });
+                }
+            }
+        } catch (e) {
+            console.warn("Socket emit skipped", e);
+        }
 
-        return sendSuccessResponse(res, 200, "Support status updated successfully", support);
+        return sendSuccessResponse(res, 200, "Support updated successfully", support);
     } catch (error) {
         console.error(error);
-        return sendErrorResponse(res, 500, "Error updating support status");
+        return sendErrorResponse(res, 500, "Error updating support");
     }
 }
 
@@ -722,7 +843,7 @@ export async function addSupportRemarkAdmin(req: Request, res: Response) {
         const { id } = req.params;
         const { remark } = req.body; // Actually this could be 'text' or the whole object. Let's assume req.body contains text.
         const performedBy = req.user?.accountId;
-        
+
         const text = req.body.text || remark;
         if (!text) return sendErrorResponse(res, 400, "Remark text is required");
 
@@ -779,7 +900,7 @@ export async function editSupportRemarkAdmin(req: Request, res: Response) {
         const { id, remarkId } = req.params;
         const { text } = req.body;
         const performedBy = req.user?.accountId;
-        
+
         if (!text) return sendErrorResponse(res, 400, "Remark text is required");
 
         const support = await prisma.support.findUnique({ where: { id } });
@@ -787,9 +908,9 @@ export async function editSupportRemarkAdmin(req: Request, res: Response) {
 
         const currentRemarks: any[] = Array.isArray(support.remarks) ? support.remarks : [];
         const remarkIndex = currentRemarks.findIndex(r => r.id === remarkId);
-        
+
         if (remarkIndex === -1) return sendErrorResponse(res, 404, "Remark not found");
-        
+
         // Ensure user can only edit their own remarks (unless Admin bypassing, but requirement says "only if they created that remark")
         if (currentRemarks[remarkIndex].by?.accountId !== performedBy) {
             return sendErrorResponse(res, 403, "You can only edit your own remarks");
@@ -830,9 +951,9 @@ export async function deleteSupportRemarkAdmin(req: Request, res: Response) {
 
         const currentRemarks: any[] = Array.isArray(support.remarks) ? support.remarks : [];
         const remarkIndex = currentRemarks.findIndex(r => r.id === remarkId);
-        
+
         if (remarkIndex === -1) return sendErrorResponse(res, 404, "Remark not found");
-        
+
         if (currentRemarks[remarkIndex].by?.accountId !== performedBy) {
             return sendErrorResponse(res, 403, "You can only delete your own remarks");
         }

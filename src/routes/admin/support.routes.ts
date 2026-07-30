@@ -18,7 +18,7 @@ import {
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireRole("ADMIN"));
+router.use(requireRole("SALES", "ADMIN"));
 
 router.post("/supports", createSupportAdmin);
 router.get("/supports/stats/status", getSupportCountByStatusAdmin);

@@ -22,7 +22,8 @@ router.get("/supports/my/stats/status", getSupportCountByStatusUser);
 router.post("/supports/my", createSupportUser);
 router.get("/supports/my", listSupportsUser);
 router.get("/supports/:id", getSupportDetailsUser);
-router.patch("/supports/:id/status", updateSupportUser);
+router.patch("/supports/:id", updateSupportUser);     // Full update: subject, description, type, priority, status, productCatalogId
+router.patch("/supports/:id/status", updateSupportUser); // Kept for backward compatibility
 router.post("/supports/:id/helpers", addSupportHelper);
 router.delete("/supports/:id/helpers/:helperId", removeSupportHelper);
 router.post("/supports/:id/time", logSupportTimeUser);
