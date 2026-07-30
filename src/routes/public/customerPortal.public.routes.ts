@@ -19,6 +19,8 @@ import {
   getPortalLeads,
   createPortalLead,
   getPortalNotifications,
+  portalLogin,
+  updatePortalPin,
 } from "../../controller/public/customerPortal.controller";
 
 const router = Router();
@@ -36,8 +38,14 @@ const portalWriteLimiter = rateLimit({
   message: { success: false, message: "Action rate limit exceeded. Please wait a few minutes." },
 });
 
-// All routes require valid Customer Portal Token
+// Login endpoint is public
+router.post("/login", portalWriteLimiter, portalLogin);
+
+// All routes below require valid Customer Portal Token
 router.use(verifyCustomerPortalToken);
+
+// Update PIN (Authenticated)
+router.patch("/update-pin", portalWriteLimiter, updatePortalPin);
 
 // Session & Profile
 router.get("/session", portalReadLimiter, getPortalSession);

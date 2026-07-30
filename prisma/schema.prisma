@@ -1548,6 +1548,9 @@ model CustomerPortalToken {
   customer       Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   tokenHash      String    @unique // SHA-256 hash of the raw token
+  rawToken       String?            // Raw token to return on ID/PIN login
+  portalId       String?   @unique  // 5-digit unique ID
+  pin            String?            // 4-digit PIN
   label          String?   @default("Primary Access Link")
 
   isActive       Boolean   @default(true)
@@ -1560,6 +1563,7 @@ model CustomerPortalToken {
 
   @@index([customerId])
   @@index([tokenHash])
+  @@index([portalId])
   @@index([isActive])
 }
 

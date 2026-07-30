@@ -23,6 +23,25 @@ export async function generateCustomerPortalToken(req: Request, res: Response) {
     const rawToken = crypto.randomBytes(32).toString("hex");
     const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
 
+    // Generate 5-digit unique ID
+    let portalId = "";
+    let attempts = 0;
+    while (attempts < 10) {
+      const candidate = Math.floor(10000 + Math.random() * 90000).toString();
+      const existing = await prisma.customerPortalToken.findUnique({ where: { portalId: candidate } });
+      if (!existing) {
+        portalId = candidate;
+        break;
+      }
+      attempts++;
+    }
+    if (!portalId) {
+      return res.status(500).json({ success: false, message: "Failed to generate unique portal ID" });
+    }
+
+    // Generate 4-digit PIN
+    const pin = Math.floor(1000 + Math.random() * 9000).toString();
+
     let expiresAt: Date | undefined = undefined;
     if (expiresInDays && typeof expiresInDays === "number") {
       expiresAt = new Date();
@@ -33,6 +52,9 @@ export async function generateCustomerPortalToken(req: Request, res: Response) {
       data: {
         customerId: id,
         tokenHash,
+        rawToken,
+        portalId,
+        pin,
         label: label?.trim() || "Portal Direct Access Link",
         expiresAt,
       },
@@ -49,6 +71,8 @@ export async function generateCustomerPortalToken(req: Request, res: Response) {
         label: portalToken.label,
         portalUrl,
         rawToken,
+        portalId,
+        pin,
         createdAt: portalToken.createdAt,
         expiresAt: portalToken.expiresAt,
       },
@@ -78,6 +102,9 @@ export async function listCustomerPortalTokens(req: Request, res: Response) {
         lastAccessedAt: true,
         expiresAt: true,
         createdAt: true,
+        portalId: true,
+        pin: true,
+        rawToken: true,
       },
     });
 

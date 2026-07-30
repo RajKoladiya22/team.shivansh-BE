@@ -681,3 +681,97 @@ export async function getPortalNotifications(req: Request, res: Response) {
     return res.status(500).json({ success: false, message: "Failed to fetch notifications" });
   }
 }
+
+/**
+ * POST /api/v1/public/portal/login
+ * Log in using 5-digit portalId and 4-digit pin.
+ * Returns the raw token.
+ */
+export async function portalLogin(req: Request, res: Response) {
+  try {
+    const { portalId, pin } = req.body;
+
+    if (!portalId || !pin) {
+      return res.status(400).json({ success: false, message: "Portal ID and PIN are required" });
+    }
+
+    const portalToken = await prisma.customerPortalToken.findUnique({
+      where: { portalId },
+      include: { customer: true }
+    });
+
+    if (!portalToken || !portalToken.isActive || !portalToken.customer.isActive) {
+      return res.status(401).json({ success: false, message: "Invalid Portal ID or Inactive account" });
+    }
+
+    if (portalToken.pin !== pin) {
+      return res.status(401).json({ success: false, message: "Incorrect PIN" });
+    }
+
+    // Check expiration if set
+    if (portalToken.expiresAt && new Date(portalToken.expiresAt) < new Date()) {
+      return res.status(401).json({ success: false, message: "Access expired. Please contact support." });
+    }
+
+    // Update lastAccessedAt and accessCount
+    await prisma.customerPortalToken.update({
+      where: { id: portalToken.id },
+      data: {
+        lastAccessedAt: new Date(),
+        accessCount: { increment: 1 },
+      },
+    });
+
+    await logCustomerPortalAudit(portalToken.customerId, "SESSION_START", req, { loginMethod: "ID_PIN" });
+
+    return res.json({
+      success: true,
+      message: "Authentication successful",
+      data: {
+        token: portalToken.rawToken || "",
+      }
+    });
+  } catch (error) {
+    console.error("[portalLogin] Error:", error);
+    return res.status(500).json({ success: false, message: "Authentication failed" });
+  }
+}
+
+/**
+ * PATCH /api/v1/public/portal/update-pin
+ * Update the 4-digit PIN using old PIN and new PIN.
+ */
+export async function updatePortalPin(req: Request, res: Response) {
+  try {
+    const { oldPin, newPin } = req.body;
+    const portalToken = req.customerToken; // Attached by verifyCustomerPortalToken middleware
+
+    if (!oldPin || !newPin) {
+      return res.status(400).json({ success: false, message: "Old PIN and New PIN are required" });
+    }
+
+    if (newPin.length !== 4 || isNaN(Number(newPin))) {
+      return res.status(400).json({ success: false, message: "New PIN must be exactly 4 digits" });
+    }
+
+    if (portalToken.pin !== oldPin) {
+      return res.status(400).json({ success: false, message: "Incorrect Old PIN" });
+    }
+
+    await prisma.customerPortalToken.update({
+      where: { id: portalToken.id },
+      data: { pin: newPin },
+    });
+
+    await logCustomerPortalAudit(portalToken.customerId, "UPDATE_PIN", req);
+
+    return res.json({
+      success: true,
+      message: "PIN updated successfully"
+    });
+  } catch (error) {
+    console.error("[updatePortalPin] Error:", error);
+    return res.status(500).json({ success: false, message: "Failed to update PIN" });
+  }
+}
+
