@@ -1494,6 +1494,7 @@ model Customer {
 
   portalTokens    CustomerPortalToken[]
   portalAuditLogs CustomerPortalAuditLog[]
+  notifications   Notification[]
 
   @@index([normalizedMobile])
   @@index([customerCompanyName])
@@ -1628,6 +1629,10 @@ model Notification {
   dismissedAt DateTime?
   remindAt    DateTime? // snooze/reschedule timestamp
 
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id])
+  forCustomer Boolean   @default(false)
+
   // audit
   createdBy String? // admin/account id who created
   createdAt DateTime  @default(now())
@@ -1635,6 +1640,7 @@ model Notification {
   expiresAt DateTime? // optional TTL
 
   @@index([accountId])
+  @@index([customerId])
   @@index([category])
   @@index([createdAt])
   @@index([isRead])

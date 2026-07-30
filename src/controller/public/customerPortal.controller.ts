@@ -655,7 +655,6 @@ export async function createPortalLead(req: Request, res: Response) {
     return res.status(500).json({ success: false, message: "Failed to submit inquiry" });
   }
 }
-
 /**
  * GET /api/v1/public/portal/notifications
  */
@@ -664,8 +663,11 @@ export async function getPortalNotifications(req: Request, res: Response) {
     const notifications = await prisma.notification.findMany({
       where: {
         OR: [
-          { category: "SYSTEM" },
-          { category: "CUSTOM" },
+          { customerId: req.customer.id },
+          {
+            customerId: null,
+            forCustomer: true,
+          },
         ],
       },
       take: 20,
@@ -681,7 +683,6 @@ export async function getPortalNotifications(req: Request, res: Response) {
     return res.status(500).json({ success: false, message: "Failed to fetch notifications" });
   }
 }
-
 /**
  * POST /api/v1/public/portal/login
  * Log in using 5-digit portalId and 4-digit pin.
