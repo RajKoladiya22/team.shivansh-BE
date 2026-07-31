@@ -154,7 +154,7 @@ export async function createQuotationAdmin(req: Request, res: Response) {
           customerId,
           customerSnapshot,
           createdBy: performerAccountId,
-          preparedBy: preparedBy ?? null,
+          preparedBy: preparedBy ?? performerAccountId,
           leadId: leadId ?? null,
           // lineItems: computed as any,
           subtotal: financials.subtotal,

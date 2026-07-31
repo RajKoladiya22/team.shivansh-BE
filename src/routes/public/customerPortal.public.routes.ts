@@ -21,6 +21,9 @@ import {
   getPortalNotifications,
   portalLogin,
   updatePortalPin,
+  subscribePortalNotifications,
+  unsubscribePortalNotifications,
+  getPortalNotificationSubscriptionStatus,
 } from "../../controller/public/customerPortal.controller";
 
 const router = Router();
@@ -73,5 +76,8 @@ router.post("/leads", portalWriteLimiter, createPortalLead);
 
 // Notifications & Updates
 router.get("/notifications", portalReadLimiter, getPortalNotifications);
+router.post("/notifications/subscribe", portalWriteLimiter, subscribePortalNotifications);
+router.post("/notifications/unsubscribe", portalWriteLimiter, unsubscribePortalNotifications);
+router.get("/notifications/subscription-status", portalReadLimiter, getPortalNotificationSubscriptionStatus);
 
 export default router;

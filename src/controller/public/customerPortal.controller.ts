@@ -3,6 +3,7 @@
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import { logCustomerPortalAudit } from "../../core/middleware/auth/customerPortalAuth";
+import { env } from "../../config/database.config";
 
 /**
  * GET /api/v1/public/portal/session
@@ -53,6 +54,7 @@ export async function getPortalSession(req: Request, res: Response) {
           pendingQuotations: pendingQuotationsCount,
           inquiries: leadsCount,
         },
+        vapidPublicKey: env.VAPID_PUBLIC_KEY || null,
       },
     });
   } catch (error) {
@@ -152,6 +154,10 @@ export async function getPortalProducts(req: Request, res: Response) {
             slug: true,
             pricingModel: true,
             shortDesc: true,
+            basePrice: true,
+            finalPrice: true,
+            introVideoId: true,
+            detailedVideoId: true,
           },
         },
       },
@@ -188,6 +194,20 @@ export async function getPortalQuotations(req: Request, res: Response) {
       },
       include: {
         lineItems: true,
+        createdByAcc: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+        preparedByAcc: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -592,6 +612,29 @@ export async function getPortalLeads(req: Request, res: Response) {
 
     const leads = await prisma.lead.findMany({
       where: { customerId },
+      select: {
+        id: true,
+        status: true,
+        product: true,
+        productTitle: true,
+        cost: true,
+        remark: true,
+        states: true,
+        createdAt: true,
+        assignments: {
+          where: { isActive: true },
+          select: {
+            id: true,
+            account: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
     });
 
@@ -775,4 +818,103 @@ export async function updatePortalPin(req: Request, res: Response) {
     return res.status(500).json({ success: false, message: "Failed to update PIN" });
   }
 }
+
+/**
+ * POST /api/v1/public/portal/notifications/subscribe
+ */
+export async function subscribePortalNotifications(req: Request, res: Response) {
+  try {
+    const customerId = req.customer.id;
+    const { subscription, platform } = req.body;
+
+    if (
+      !subscription?.endpoint ||
+      !subscription?.keys?.p256dh ||
+      !subscription?.keys?.auth
+    ) {
+      return res.status(400).json({ success: false, message: "Invalid push subscription" });
+    }
+
+    await prisma.notificationSubscription.upsert({
+      where: { endpoint: subscription.endpoint },
+      create: {
+        customerId,
+        endpoint: subscription.endpoint,
+        p256dh: subscription.keys.p256dh,
+        auth: subscription.keys.auth,
+        platform: platform ?? "web",
+        userAgent: req.headers["user-agent"],
+        isActive: true,
+      },
+      update: {
+        customerId,
+        p256dh: subscription.keys.p256dh,
+        auth: subscription.keys.auth,
+        platform: platform ?? "web",
+        isActive: true,
+        updatedAt: new Date(),
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Notification subscription saved",
+    });
+  } catch (err: any) {
+    console.error("subscribePortalNotifications error:", err);
+    return res.status(500).json({ success: false, message: err.message || "Failed to subscribe notifications" });
+  }
+}
+
+/**
+ * POST /api/v1/public/portal/notifications/unsubscribe
+ */
+export async function unsubscribePortalNotifications(req: Request, res: Response) {
+  try {
+    const { endpoint } = req.body;
+    if (!endpoint) {
+      return res.status(400).json({ success: false, message: "Endpoint required" });
+    }
+
+    await prisma.notificationSubscription.updateMany({
+      where: { endpoint, customerId: req.customer.id },
+      data: { isActive: false },
+    });
+
+    return res.json({ success: true, message: "Unsubscribed successfully" });
+  } catch (err: any) {
+    console.error("unsubscribePortalNotifications error:", err);
+    return res.status(500).json({ success: false, message: "Failed to unsubscribe" });
+  }
+}
+
+/**
+ * GET /api/v1/public/portal/notifications/subscription-status
+ */
+export async function getPortalNotificationSubscriptionStatus(req: Request, res: Response) {
+  try {
+    const { endpoint } = req.query;
+    if (!endpoint) {
+      return res.status(400).json({ success: false, message: "Endpoint required" });
+    }
+
+    const sub = await prisma.notificationSubscription.findFirst({
+      where: {
+        endpoint: String(endpoint),
+        customerId: req.customer.id,
+      },
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        isSubscribed: sub ? sub.isActive : false,
+      },
+    });
+  } catch (err: any) {
+    console.error("getPortalNotificationSubscriptionStatus error:", err);
+    return res.status(500).json({ success: false, message: "Failed to get subscription status" });
+  }
+}
+
 

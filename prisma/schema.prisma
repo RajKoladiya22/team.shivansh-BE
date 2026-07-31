@@ -1492,9 +1492,10 @@ model Customer {
   cloudServices CloudService[]
   supports      Support[]
 
-  portalTokens    CustomerPortalToken[]
-  portalAuditLogs CustomerPortalAuditLog[]
-  notifications   Notification[]
+  portalTokens        CustomerPortalToken[]
+  portalAuditLogs     CustomerPortalAuditLog[]
+  notifications       Notification[]
+  portalSubscriptions NotificationSubscription[]
 
   @@index([normalizedMobile])
   @@index([customerCompanyName])
@@ -1648,9 +1649,12 @@ model Notification {
 }
 
 model NotificationSubscription {
-  id        String  @id @default(uuid())
-  accountId String
-  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  id        String   @id @default(uuid())
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   // WebPush fields
   endpoint String @unique
@@ -1665,6 +1669,7 @@ model NotificationSubscription {
   updatedAt DateTime @updatedAt
 
   @@index([accountId])
+  @@index([customerId])
 }
 
 // ------------------------------------------------------------------
