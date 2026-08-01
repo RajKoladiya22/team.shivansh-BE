@@ -114,8 +114,10 @@ export async function createDiscovery(req: Request, res: Response) {
       slug = `${baseSlug}-${Date.now().toString().slice(-4)}`;
     }
 
-    const isPub = status === "PUBLISHED" || (status === "SCHEDULED" && publishAt && new Date(publishAt) <= new Date());
-    const finalPublishAt = isPub && !publishAt ? new Date() : publishAt ? new Date(publishAt) : null;
+    const reqPublishAt = publishAt ? new Date(publishAt) : null;
+    const isPub = status === "PUBLISHED" || (status === "SCHEDULED" && (!reqPublishAt || reqPublishAt <= new Date()));
+    const finalPublishAt = isPub && !reqPublishAt ? new Date() : reqPublishAt;
+    const finalStatus = isPub ? "PUBLISHED" : (status || "DRAFT");
 
     const discovery = await prisma.discovery.create({
       data: {
@@ -128,7 +130,7 @@ export async function createDiscovery(req: Request, res: Response) {
         youtubeUrl: youtubeUrl?.trim() || null,
         externalUrl: externalUrl?.trim() || null,
         tags: Array.isArray(tags) ? tags : [],
-        status: status || "DRAFT",
+        status: finalStatus,
         publishAt: finalPublishAt,
         expireAt: expireAt ? new Date(expireAt) : null,
         isPublished: Boolean(isPub),
@@ -153,6 +155,21 @@ export async function createDiscovery(req: Request, res: Response) {
  */
 export async function getAdminDiscoveries(req: Request, res: Response) {
   try {
+    // Auto-promote any SCHEDULED posts whose publishAt date has arrived
+    await prisma.discovery.updateMany({
+      where: {
+        status: "SCHEDULED",
+        OR: [
+          { publishAt: null },
+          { publishAt: { lte: new Date() } },
+        ],
+      },
+      data: {
+        status: "PUBLISHED",
+        isPublished: true,
+      },
+    }).catch(() => {});
+
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.max(1, parseInt(req.query.limit as string) || 20);
     const skip = (page - 1) * limit;
@@ -291,7 +308,10 @@ export async function updateDiscovery(req: Request, res: Response) {
     }
 
     const wasPublished = existing.isPublished;
-    const isPub = status === "PUBLISHED" || (status ? (status === "PUBLISHED") : existing.isPublished);
+    const targetStatus = status !== undefined ? status : existing.status;
+    const targetPublishAt = publishAt !== undefined ? (publishAt ? new Date(publishAt) : null) : existing.publishAt;
+    const isPub = targetStatus === "PUBLISHED" || (targetStatus === "SCHEDULED" && (!targetPublishAt || targetPublishAt <= new Date()));
+    const finalStatus = isPub ? "PUBLISHED" : targetStatus;
 
     const updated = await prisma.discovery.update({
       where: { id },
@@ -304,7 +324,7 @@ export async function updateDiscovery(req: Request, res: Response) {
         ...(youtubeUrl !== undefined ? { youtubeUrl: youtubeUrl?.trim() || null } : {}),
         ...(externalUrl !== undefined ? { externalUrl: externalUrl?.trim() || null } : {}),
         ...(Array.isArray(tags) ? { tags } : {}),
-        ...(status ? { status } : {}),
+        status: finalStatus,
         isPublished: isPub,
         ...(isPinned !== undefined ? { isPinned: Boolean(isPinned) } : {}),
         ...(publishAt !== undefined ? { publishAt: publishAt ? new Date(publishAt) : null } : {}),

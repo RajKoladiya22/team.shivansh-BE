@@ -10,6 +10,23 @@ import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpRes
  */
 export async function getCustomerDiscoveries(req: Request, res: Response) {
   try {
+    const now = new Date();
+
+    // Auto-promote any SCHEDULED posts whose publishAt date has arrived
+    await prisma.discovery.updateMany({
+      where: {
+        status: "SCHEDULED",
+        OR: [
+          { publishAt: null },
+          { publishAt: { lte: now } },
+        ],
+      },
+      data: {
+        status: "PUBLISHED",
+        isPublished: true,
+      },
+    }).catch(() => {});
+
     const customerId = req.customer?.id;
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.max(1, parseInt(req.query.limit as string) || 20);
@@ -17,7 +34,6 @@ export async function getCustomerDiscoveries(req: Request, res: Response) {
 
     const { type, search } = req.query;
 
-    const now = new Date();
     const where: any = {
       status: "PUBLISHED",
       isPublished: true,
