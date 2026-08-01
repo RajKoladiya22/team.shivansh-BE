@@ -15,6 +15,7 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { isQuotationExpired, formatQuotationResponse } from "../../services/quotation";
+import { triggerPortalQuotationNotification } from "../../services/notifications";
 
 /* ─────────────────────────────────────────────
    Public select — strips internal-only fields
@@ -244,6 +245,9 @@ export async function acceptPublicQuotation(req: Request, res: Response) {
       return q;
     });
 
+    // Notify users
+    triggerPortalQuotationNotification({ quotationId: token, action: "ACCEPTED" }).catch((e) => console.error("Notify err:", e));
+
     return sendSuccessResponse(res, 200, "Quotation accepted successfully! Our team will be in touch shortly.", updated);
   } catch (err: any) {
     console.error("Public accept quotation error:", err);
@@ -319,6 +323,9 @@ export async function rejectPublicQuotation(req: Request, res: Response) {
       return q;
     });
 
+    // Notify users
+    triggerPortalQuotationNotification({ quotationId: token, action: "REJECTED" }).catch((e) => console.error("Notify err:", e));
+
     return sendSuccessResponse(res, 200, "Response recorded. Thank you for letting us know.", updated);
   } catch (err: any) {
     console.error("Public reject quotation error:", err);
@@ -365,6 +372,9 @@ export async function queryPublicQuotation(req: Request, res: Response) {
         },
       },
     });
+
+    // Notify users
+    triggerPortalQuotationNotification({ quotationId: token, action: "QUERY" }).catch((e) => console.error("Notify err:", e));
 
     return sendSuccessResponse(
       res,

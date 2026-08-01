@@ -3,6 +3,12 @@
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import { logCustomerPortalAudit } from "../../core/middleware/auth/customerPortalAuth";
+import {
+  triggerPortalSupportNotification,
+  triggerPortalLeadNotification,
+  triggerPortalQuotationNotification,
+  triggerPortalSupportRemarkNotification,
+} from "../../services/notifications";
 import { env } from "../../config/database.config";
 
 /**
@@ -270,6 +276,7 @@ export async function acceptPortalQuotation(req: Request, res: Response) {
     const { id } = req.params;
     const customerId = req.customer.id;
     const { acceptedBy, acceptanceNote } = req.body;
+    // console.log(`\n\n\n\n\n\n\n\n\n\n\n\nacceptPortalQuotation called with id: ${id}, customerId: ${customerId}, acceptedBy: ${acceptedBy}, acceptanceNote: ${acceptanceNote}`);
 
     const quotation = await prisma.quotation.findFirst({
       where: { id, customerId },
@@ -304,6 +311,10 @@ export async function acceptPortalQuotation(req: Request, res: Response) {
     });
 
     await logCustomerPortalAudit(customerId, "ACCEPT_QUOTATION", req, { quotationId: id });
+    
+    // Trigger notification
+    // console.log(`\n\nTriggering portal quotation notification for quotation ID: ${id} with action: ACCEPTED`);
+    triggerPortalQuotationNotification({ quotationId: id, action: "ACCEPTED" });
 
     return res.json({
       success: true,
@@ -353,6 +364,9 @@ export async function rejectPortalQuotation(req: Request, res: Response) {
     });
 
     await logCustomerPortalAudit(customerId, "REJECT_QUOTATION", req, { quotationId: id, rejectionReason });
+    
+    // Trigger notification
+    triggerPortalQuotationNotification({ quotationId: id, action: "REJECTED" });
 
     return res.json({
       success: true,
@@ -529,6 +543,11 @@ export async function createPortalSupport(req: Request, res: Response) {
 
     await logCustomerPortalAudit(customerId, "CREATE_SUPPORT", req, { supportId: support.id });
 
+    // Send notification to admin
+    await triggerPortalSupportNotification({ supportId: support.id }).catch(err => 
+      console.error("Failed to trigger portal support notification:", err)
+    );
+
     return res.status(201).json({
       success: true,
       message: "Support ticket created successfully",
@@ -588,6 +607,9 @@ export async function addPortalSupportRemark(req: Request, res: Response) {
         meta: { text: text.trim(), byCustomer: true },
       },
     });
+
+    // Trigger notification
+    triggerPortalSupportRemarkNotification({ supportId: id });
 
     await logCustomerPortalAudit(customerId, "ADD_SUPPORT_REMARK", req, { supportId: id });
 
@@ -687,6 +709,11 @@ export async function createPortalLead(req: Request, res: Response) {
     });
 
     await logCustomerPortalAudit(customerId, "SUBMIT_INQUIRY", req, { leadId: lead.id });
+
+    // Send notification to admin
+    await triggerPortalLeadNotification({ leadId: lead.id }).catch(err => 
+      console.error("Failed to trigger portal lead notification:", err)
+    );
 
     return res.status(201).json({
       success: true,

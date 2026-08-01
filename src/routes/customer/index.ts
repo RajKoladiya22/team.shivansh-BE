@@ -65,10 +65,14 @@ import {
   generateCustomerPortalToken,
   listCustomerPortalTokens,
   revokeCustomerPortalToken,
+  getCustomerPortalAuditLogs,
+  deleteCustomerPortalToken,
 } from "../../controller/customer/portalToken.controller";
 
 router.post("/:id/portal-token", requireAuth, generateCustomerPortalToken);
 router.get("/:id/portal-tokens", requireAuth, listCustomerPortalTokens);
 router.patch("/:id/portal-tokens/:tokenId/revoke", requireAuth, revokeCustomerPortalToken);
+router.delete("/:id/portal-tokens/:tokenId", requireAuth, deleteCustomerPortalToken);
+router.get("/:id/portal-audit-logs", requireAuth, getCustomerPortalAuditLogs);
 
 export default router;

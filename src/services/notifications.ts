@@ -1119,3 +1119,440 @@ export async function triggerLeaveDecidedNotification({
     console.error("triggerLeaveDecidedNotification failed:", err);
   }
 }
+
+export async function triggerPortalSupportNotification({ supportId }: { supportId: string }) {
+  try {
+    const support = await prisma.support.findUnique({
+      where: { id: supportId },
+      include: { customer: true },
+    });
+    if (!support) return;
+
+    const roleAccounts = await prisma.userRole.findMany({
+      where: {
+        role: { name: "ADMIN" },
+        user: { account: { isActive: true } },
+      },
+      select: { user: { select: { accountId: true } } },
+    });
+
+    const recipientAccountIds = [
+      ...new Set(roleAccounts.map((r) => r.user.accountId).filter(Boolean) as string[]),
+    ];
+    if (recipientAccountIds.length === 0) return;
+
+    const title = `New Support Ticket (Portal)`;
+    const body = `${support.customer.customerCompanyName || support.customer.name} - ${support.subject}`;
+
+    let io: ReturnType<typeof getIo> | null = null;
+    try { io = getIo(); } catch {}
+
+    if (io) {
+      const supportCreatedPayload = {
+        id: support.id,
+        subject: support.subject,
+        status: support.status,
+        type: support.type,
+        priority: support.priority,
+        customerId: support.customerId,
+        customerName: support.customer.name,
+        companyName: support.customer.customerCompanyName,
+        createdAt: support.createdAt.toISOString(),
+      };
+      io.to("supports:admin").emit("support:created", supportCreatedPayload);
+    }
+
+    const notifications = await Promise.all(
+      recipientAccountIds.map(async (accountId) => {
+        const dedupeKey = `portal_support:${support.id}:${Date.now()}:${accountId}`;
+        const existing = await prisma.notification.findFirst({
+          where: { dedupeKey },
+          select: { id: true },
+        });
+        if (existing) return null;
+
+        const notif = await prisma.notification.create({
+          data: {
+            accountId,
+            title,
+            body,
+            category: "SYSTEM",
+            level: "INFO",
+            actionUrl: `/support`,
+            dedupeKey,
+          },
+        });
+        
+        if (io) {
+          io.to(`notif:${accountId}`).emit("notification", {
+            id: notif.id,
+            category: notif.category,
+            level: notif.level,
+            title: notif.title,
+            body: notif.body,
+            actionUrl: notif.actionUrl,
+            createdAt: notif.createdAt,
+            isRead: notif.isRead,
+          });
+        }
+        return notif;
+      })
+    );
+
+    for (const notification of notifications) {
+      if (!notification) continue;
+      const subs = await prisma.notificationSubscription.findMany({
+        where: { accountId: notification.accountId },
+      });
+      for (const sub of subs) {
+        try {
+          const pushSub = {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.p256dh, auth: sub.auth },
+          };
+          await webpush.sendNotification(
+            pushSub,
+            JSON.stringify({
+              title: notification.title,
+              body: notification.body,
+              actionUrl: notification.actionUrl,
+              data: { actionUrl: notification.actionUrl },
+            }),
+            { TTL: 3600, headers: { urgency: 'high' } }
+          );
+        } catch (err: any) {
+          if (err?.statusCode === 404 || err?.statusCode === 410) {
+            await prisma.notificationSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+          }
+        }
+      }
+      await prisma.notification.update({
+        where: { id: notification.id },
+        data: { sentAt: new Date() },
+      });
+    }
+  } catch (err) {
+    console.error("triggerPortalSupportNotification failed:", err);
+  }
+}
+
+export async function triggerPortalLeadNotification({ leadId }: { leadId: string }) {
+  try {
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+    });
+    if (!lead) return;
+
+    const roleAccounts = await prisma.userRole.findMany({
+      where: {
+        role: { name: "ADMIN" },
+        user: { account: { isActive: true } },
+      },
+      select: { user: { select: { accountId: true } } },
+    });
+
+    const recipientAccountIds = [
+      ...new Set(roleAccounts.map((r) => r.user.accountId).filter(Boolean) as string[]),
+    ];
+    if (recipientAccountIds.length === 0) return;
+
+    const title = `New Lead (Portal)`;
+    const body = `${lead.customerCompanyName || lead.customerName} - ${lead.mobileNumber}`;
+
+    let io: ReturnType<typeof getIo> | null = null;
+    try { io = getIo(); } catch {}
+
+    if (io) {
+      const leadCreatedPayload = {
+        id: lead.id,
+        customerName: lead.customerName,
+        mobileNumber: lead.mobileNumber,
+        productTitle: lead.productTitle ?? null,
+        source: lead.source,
+        status: "PENDING",
+        createdAt: lead.createdAt.toISOString(),
+      };
+      io.to("leads:admin").emit("lead:created", leadCreatedPayload);
+    }
+
+    const notifications = await Promise.all(
+      recipientAccountIds.map(async (accountId) => {
+        const dedupeKey = `portal_lead:${lead.id}:${Date.now()}:${accountId}`;
+        const existing = await prisma.notification.findFirst({
+          where: { dedupeKey },
+          select: { id: true },
+        });
+        if (existing) return null;
+
+        const notif = await prisma.notification.create({
+          data: {
+            accountId,
+            title,
+            body,
+            category: "LEAD",
+            level: "INFO",
+            actionUrl: `/leads`,
+            dedupeKey,
+          },
+        });
+
+        if (io) {
+          io.to(`notif:${accountId}`).emit("notification", {
+            id: notif.id,
+            category: notif.category,
+            level: notif.level,
+            title: notif.title,
+            body: notif.body,
+            actionUrl: notif.actionUrl,
+            createdAt: notif.createdAt,
+            isRead: notif.isRead,
+          });
+        }
+        return notif;
+      })
+    );
+
+    for (const notification of notifications) {
+      if (!notification) continue;
+      const subs = await prisma.notificationSubscription.findMany({
+        where: { accountId: notification.accountId },
+      });
+      for (const sub of subs) {
+        try {
+          const pushSub = {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.p256dh, auth: sub.auth },
+          };
+          await webpush.sendNotification(
+            pushSub,
+            JSON.stringify({
+              title: notification.title,
+              body: notification.body,
+              actionUrl: notification.actionUrl,
+              data: { actionUrl: notification.actionUrl },
+            }),
+            { TTL: 3600, headers: { urgency: 'high' } }
+          );
+        } catch (err: any) {
+          if (err?.statusCode === 404 || err?.statusCode === 410) {
+            await prisma.notificationSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+          }
+        }
+      }
+      await prisma.notification.update({
+        where: { id: notification.id },
+        data: { sentAt: new Date() },
+      });
+    }
+  } catch (err) {
+    console.error("triggerPortalLeadNotification failed:", err);
+  }
+}
+
+export async function triggerPortalQuotationNotification({ quotationId, action }: { quotationId: string; action: "ACCEPTED" | "REJECTED" | "QUERY" }) {
+  try {
+    const quotation = await prisma.quotation.findUnique({
+      where: { id: quotationId },
+      include: { customer: true },
+    });
+    //  console.log("\n\nquotation", quotation);
+    if (!quotation) return;
+
+    const recipientAccountIds = [
+      ...new Set([quotation.createdBy, quotation.preparedBy].filter(Boolean) as string[])
+    ];
+    if (recipientAccountIds.length === 0) return;
+
+    // console.log("\n\nrecipientAccountIds", recipientAccountIds);
+
+    const title = `Quotation ${action} (Portal)`;
+    const body = `${quotation.quotationNumber} - ${quotation.customer.customerCompanyName || quotation.customer.name}`;
+
+    let io: ReturnType<typeof getIo> | null = null;
+    try { io = getIo(); } catch {}
+    // console.log("\n\nio", io);
+    if (io) {
+      recipientAccountIds.forEach((accountId) => {
+        io!.to(`notif:${accountId}`).emit("quotation:patch", { 
+          id: quotation.id, 
+          patch: { status: quotation.status, respondedAt: quotation.respondedAt?.toISOString() } 
+        });
+      });
+    }
+
+    const notifications = await Promise.all(
+      recipientAccountIds.map(async (accountId) => {
+        const dedupeKey = `portal_quotation:${quotation.id}:${action}:${Date.now()}:${accountId}`;
+        const existing = await prisma.notification.findFirst({
+          where: { dedupeKey },
+          select: { id: true },
+        });
+        // console.log("\n\nexisting", existing);
+        if (existing) return null;
+
+        const notif = await prisma.notification.create({
+          data: {
+            accountId,
+            title,
+            body,
+            category: "SYSTEM",
+            level: "INFO",
+            actionUrl: `/quotations`,
+            dedupeKey,
+          },
+        });
+
+        if (io) {
+          io.to(`notif:${accountId}`).emit("notification", {
+            id: notif.id,
+            category: notif.category,
+            level: notif.level,
+            title: notif.title,
+            body: notif.body,
+            actionUrl: notif.actionUrl,
+            createdAt: notif.createdAt,
+            isRead: notif.isRead,
+          });
+        }
+        return notif;
+      })
+    );
+
+    for (const notification of notifications) {
+      if (!notification) continue;
+      const subs = await prisma.notificationSubscription.findMany({
+        where: { accountId: notification.accountId },
+      });
+      for (const sub of subs) {
+        try {
+          const pushSub = {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.p256dh, auth: sub.auth },
+          };
+          await webpush.sendNotification(
+            pushSub,
+            JSON.stringify({
+              title: notification.title,
+              body: notification.body,
+              actionUrl: notification.actionUrl,
+              data: { actionUrl: notification.actionUrl },
+            }),
+            { TTL: 3600, headers: { urgency: 'high' } }
+          );
+        } catch (err: any) {
+          if (err?.statusCode === 404 || err?.statusCode === 410) {
+            await prisma.notificationSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+          }
+        }
+      }
+      await prisma.notification.update({
+        where: { id: notification.id },
+        data: { sentAt: new Date() },
+      });
+    }
+  } catch (err) {
+    console.error("triggerPortalQuotationNotification failed:", err);
+  }
+}
+
+export async function triggerPortalSupportRemarkNotification({ supportId }: { supportId: string }) {
+  try {
+    const support = await prisma.support.findUnique({
+      where: { id: supportId },
+      include: { customer: true, assignments: { where: { isActive: true } } },
+    });
+    if (!support) return;
+
+    const recipientAccountIds = [
+      ...new Set(support.assignments.map((a: any) => a.accountId).filter(Boolean) as string[])
+    ];
+    if (recipientAccountIds.length === 0) return;
+
+    const title = `New Remark on Ticket (Portal)`;
+    const body = `${support.subject} - ${support.customer.customerCompanyName || support.customer.name}`;
+
+    let io: ReturnType<typeof getIo> | null = null;
+    try { io = getIo(); } catch {}
+
+    if (io) {
+      recipientAccountIds.forEach((accountId) => {
+        io!.to(`supports:user:${accountId}`).emit("support:patch", { 
+          id: support.id, 
+          patch: { remarks: support.remarks, status: support.status } 
+        });
+      });
+      io.to("supports:admin").emit("support:patch", { 
+        id: support.id, 
+        patch: { remarks: support.remarks, status: support.status } 
+      });
+    }
+
+    const notifications = await Promise.all(
+      recipientAccountIds.map(async (accountId) => {
+        // use Date.now() in dedupeKey to allow multiple remarks over time
+        const dedupeKey = `portal_support_remark:${support.id}:${Date.now()}:${accountId}`;
+        
+        const notif = await prisma.notification.create({
+          data: {
+            accountId,
+            title,
+            body,
+            category: "SYSTEM",
+            level: "INFO",
+            actionUrl: `/support`,
+            dedupeKey,
+          },
+        });
+
+        if (io) {
+          io.to(`notif:${accountId}`).emit("notification", {
+            id: notif.id,
+            category: notif.category,
+            level: notif.level,
+            title: notif.title,
+            body: notif.body,
+            actionUrl: notif.actionUrl,
+            createdAt: notif.createdAt,
+            isRead: notif.isRead,
+          });
+        }
+        return notif;
+      })
+    );
+
+    for (const notification of notifications) {
+      if (!notification) continue;
+      const subs = await prisma.notificationSubscription.findMany({
+        where: { accountId: notification.accountId },
+      });
+      for (const sub of subs) {
+        try {
+          const pushSub = {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.p256dh, auth: sub.auth },
+          };
+          await webpush.sendNotification(
+            pushSub,
+            JSON.stringify({
+              title: notification.title,
+              body: notification.body,
+              actionUrl: notification.actionUrl,
+              data: { actionUrl: notification.actionUrl },
+            }),
+            { TTL: 3600, headers: { urgency: 'high' } }
+          );
+        } catch (err: any) {
+          if (err?.statusCode === 404 || err?.statusCode === 410) {
+            await prisma.notificationSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+          }
+        }
+      }
+      await prisma.notification.update({
+        where: { id: notification.id },
+        data: { sentAt: new Date() },
+      });
+    }
+  } catch (err) {
+    console.error("triggerPortalSupportRemarkNotification failed:", err);
+  }
+}

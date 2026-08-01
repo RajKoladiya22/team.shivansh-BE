@@ -141,3 +141,92 @@ export async function revokeCustomerPortalToken(req: Request, res: Response) {
     return res.status(500).json({ success: false, message: "Failed to revoke token" });
   }
 }
+
+/**
+ * DELETE /api/v1/customers/:id/portal-tokens/:tokenId
+ * Hard delete a revoked customer portal token.
+ */
+export async function deleteCustomerPortalToken(req: Request, res: Response) {
+  try {
+    const { id, tokenId } = req.params;
+
+    const token = await prisma.customerPortalToken.findUnique({
+      where: { id: tokenId, customerId: id },
+    });
+
+    if (!token) {
+      return res.status(404).json({ success: false, message: "Portal token not found" });
+    }
+
+    if (token.isActive) {
+      return res.status(400).json({ success: false, message: "Cannot hard delete an active token. Revoke it first." });
+    }
+
+    await prisma.customerPortalToken.delete({
+      where: { id: tokenId },
+    });
+
+    return res.json({
+      success: true,
+      message: "Portal token permanently deleted",
+    });
+  } catch (error: any) {
+    console.error("[deleteCustomerPortalToken] Error:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete token" });
+  }
+}
+
+/**
+ * GET /api/v1/customers/:id/portal-audit-logs
+ * Internal CRM endpoint to list portal audit logs for a customer.
+ */
+export async function getCustomerPortalAuditLogs(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    
+    const logs = await prisma.customerPortalAuditLog.findMany({
+      where: { customerId: id },
+      orderBy: { createdAt: "desc" },
+      take: 100, // Limit to recent 100 logs
+    });
+
+    // Populate extra details for the UI instead of raw IDs
+    const enhancedLogs = await Promise.all(logs.map(async (log) => {
+      const meta = log.meta ? (typeof log.meta === 'string' ? JSON.parse(log.meta) : log.meta) : null;
+      if (!meta) return log;
+
+      let displayData: any = {};
+      
+      if (meta.supportId) {
+        const support = await prisma.support.findUnique({ where: { id: meta.supportId }, select: { subject: true } });
+        if (support) displayData.supportTicket = support.subject;
+      }
+      if (meta.quotationId) {
+        const quotation = await prisma.quotation.findUnique({ where: { id: meta.quotationId }, select: { quotationNumber: true } });
+        if (quotation) displayData.quotationRef = quotation.quotationNumber;
+      }
+      if (meta.leadId) {
+        displayData.inquiry = "Lead/Inquiry Request"; 
+      }
+      if (meta.loginMethod) {
+        displayData.loginMethod = meta.loginMethod;
+      }
+      if (meta.rejectionReason) {
+        displayData.reason = meta.rejectionReason;
+      }
+      
+      return {
+        ...log,
+        meta: Object.keys(displayData).length > 0 ? displayData : null
+      };
+    }));
+
+    return res.json({
+      success: true,
+      data: enhancedLogs,
+    });
+  } catch (error: any) {
+    console.error("[getCustomerPortalAuditLogs] Error:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch portal audit logs" });
+  }
+}
