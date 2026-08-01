@@ -25,6 +25,16 @@ import {
   unsubscribePortalNotifications,
   getPortalNotificationSubscriptionStatus,
 } from "../../controller/public/customerPortal.controller";
+import {
+  getCustomerDiscoveries,
+  getCustomerDiscoveryById,
+  likeDiscovery,
+  unlikeDiscovery,
+  getDiscoveryComments,
+  addDiscoveryComment,
+  editDiscoveryComment,
+  deleteDiscoveryComment,
+} from "../../controller/public/customerDiscovery.controller";
 
 const router = Router();
 
@@ -73,6 +83,16 @@ router.post("/supports/:id/remarks", portalWriteLimiter, addPortalSupportRemark)
 // Lead / Inquiry History & New Inquiries
 router.get("/leads", portalReadLimiter, getPortalLeads);
 router.post("/leads", portalWriteLimiter, createPortalLead);
+
+// Discovery Feed & Interactions
+router.get("/discoveries", portalReadLimiter, getCustomerDiscoveries);
+router.get("/discoveries/:id", portalReadLimiter, getCustomerDiscoveryById);
+router.post("/discoveries/:id/like", portalWriteLimiter, likeDiscovery);
+router.delete("/discoveries/:id/like", portalWriteLimiter, unlikeDiscovery);
+router.get("/discoveries/:id/comments", portalReadLimiter, getDiscoveryComments);
+router.post("/discoveries/:id/comment", portalWriteLimiter, addDiscoveryComment);
+router.patch("/discoveries/comments/:commentId", portalWriteLimiter, editDiscoveryComment);
+router.delete("/discoveries/comments/:commentId", portalWriteLimiter, deleteDiscoveryComment);
 
 // Notifications & Updates
 router.get("/notifications", portalReadLimiter, getPortalNotifications);

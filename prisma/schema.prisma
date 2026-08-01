@@ -113,6 +113,8 @@ model Account {
   quotationsCreated         Quotation[]                @relation("QuotationCreatedBy")
   quotationsPrepared        Quotation[]                @relation("QuotationPreparedBy")
   quotationActivities       QuotationActivity[]
+  discoveriesCreated        Discovery[]                @relation("DiscoveryCreatedBy")
+  discoveriesUpdated        Discovery[]                @relation("DiscoveryUpdatedBy")
   quotationTemplates        QuotationTemplate[]
 
   followUpsCreated LeadFollowUp[] @relation("FollowUpCreatedBy")
@@ -1496,6 +1498,8 @@ model Customer {
   portalAuditLogs     CustomerPortalAuditLog[]
   notifications       Notification[]
   portalSubscriptions NotificationSubscription[]
+  discoveryLikes      DiscoveryLike[]
+  discoveryComments   DiscoveryComment[]
 
   @@index([normalizedMobile])
   @@index([customerCompanyName])
@@ -3225,3 +3229,114 @@ model SupportHelper {
   @@index([supportId])
   @@index([accountId])
 }
+
+// ------------------------------------------------------------------
+// Discovery Module (Admin -> Customer Feed)
+// ------------------------------------------------------------------
+
+enum DiscoveryType {
+  NEW_PRODUCT
+  FEATURE_UPDATE
+  WEBINAR
+  NEWS
+  ANNOUNCEMENT
+  YOUTUBE_VIDEO
+  BLOG
+  TUTORIAL
+  CASE_STUDY
+  EVENT
+  MAINTENANCE
+  RELEASE_NOTE
+  TIP
+  PROMOTION
+  OTHER
+}
+
+enum DiscoveryStatus {
+  DRAFT
+  PUBLISHED
+  SCHEDULED
+  ARCHIVED
+}
+
+model Discovery {
+  id               String          @id @default(uuid())
+  slug             String          @unique
+  title            String
+  shortDescription String?
+  content          String?         // Rich text / Markdown
+  discoveryType    DiscoveryType   @default(ANNOUNCEMENT)
+  imageUrls        String[]        @default([])
+  youtubeUrl       String?
+  externalUrl      String?
+  tags             String[]        @default([])
+  status           DiscoveryStatus @default(DRAFT)
+  publishAt        DateTime?
+  expireAt         DateTime?
+  isPublished      Boolean         @default(false)
+  isPinned         Boolean         @default(false)
+  views            Int             @default(0)
+  likesCount       Int             @default(0)
+  commentsCount    Int             @default(0)
+
+  createdBy    String?
+  createdByAcc Account? @relation("DiscoveryCreatedBy", fields: [createdBy], references: [id])
+  updatedBy    String?
+  updatedByAcc Account? @relation("DiscoveryUpdatedBy", fields: [updatedBy], references: [id])
+
+  likes     DiscoveryLike[]
+  comments  DiscoveryComment[]
+  viewsLogs DiscoveryView[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, isPublished, publishAt])
+  @@index([slug])
+  @@index([discoveryType])
+}
+
+model DiscoveryLike {
+  id          String    @id @default(uuid())
+  customerId  String
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  discoveryId String
+  discovery   Discovery @relation(fields: [discoveryId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([customerId, discoveryId])
+  @@index([discoveryId])
+  @@index([customerId])
+}
+
+model DiscoveryComment {
+  id          String             @id @default(uuid())
+  discoveryId String
+  discovery   Discovery          @relation(fields: [discoveryId], references: [id], onDelete: Cascade)
+  customerId  String
+  customer    Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  comment     String
+  parentId    String?
+  parent      DiscoveryComment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies     DiscoveryComment[] @relation("CommentReplies")
+  isEdited    Boolean            @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([discoveryId])
+  @@index([customerId])
+}
+
+model DiscoveryView {
+  id          String    @id @default(uuid())
+  discoveryId String
+  discovery   Discovery @relation(fields: [discoveryId], references: [id], onDelete: Cascade)
+  customerId  String?
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([discoveryId])
+}
+

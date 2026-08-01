@@ -15,9 +15,11 @@ import leadAnalyticsRoutes from "./leadAnalytics.routes";
 import holidayRoutes from "./holiday.routes";
 import pipelineRouter from "./pipelineTemplate.routes"
 import supportRoutes from "./support.routes";
+import discoveryRoutes from "./discovery.routes";
 // import tasksRoutes from "./task.routes"
 
 // base path for each module
+router.use("/discoveries", discoveryRoutes);
 router.use("/quotations", quotationRoutes);
 router.use("/", leadRoutes);
 router.use("/", supportRoutes);
