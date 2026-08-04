@@ -153,7 +153,9 @@ export async function deleteProjectAttachment(req: Request, res: Response) {
       const relativePath = attachment.url.startsWith("/") ? attachment.url.slice(1) : attachment.url;
       const possiblePaths = [
         path.join(process.cwd(), "src", relativePath),
+        path.join(process.cwd(), "dist/src", relativePath),
         path.join(process.cwd(), relativePath),
+        path.join(__dirname, "../../", relativePath),
         path.join(__dirname, "../../../", relativePath),
       ];
       for (const absolutePath of possiblePaths) {

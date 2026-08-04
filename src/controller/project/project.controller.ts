@@ -17,7 +17,9 @@ function deletePhysicalFile(fileUrl?: string | null) {
   const relativePath = fileUrl.startsWith("/") ? fileUrl.slice(1) : fileUrl;
   const possiblePaths = [
     path.join(process.cwd(), "src", relativePath),
+    path.join(process.cwd(), "dist/src", relativePath),
     path.join(process.cwd(), relativePath),
+    path.join(__dirname, "../../", relativePath),
     path.join(__dirname, "../../../", relativePath),
   ];
   for (const absolutePath of possiblePaths) {
