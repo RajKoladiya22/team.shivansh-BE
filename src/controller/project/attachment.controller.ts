@@ -101,13 +101,20 @@ export async function deleteProjectAttachment(req: Request, res: Response) {
     // Unlink physical file from disk storage if available
     if (attachment.url) {
       const relativePath = attachment.url.startsWith("/") ? attachment.url.slice(1) : attachment.url;
-      const absolutePath = path.join(process.cwd(), "src", relativePath);
-      if (fs.existsSync(absolutePath)) {
-        try {
-          fs.unlinkSync(absolutePath);
-          console.log(`[deleteProjectAttachment] Physical file unlinked: ${absolutePath}`);
-        } catch (unlinkErr) {
-          console.warn(`[deleteProjectAttachment] Failed to unlink ${absolutePath}:`, unlinkErr);
+      const possiblePaths = [
+        path.join(process.cwd(), "src", relativePath),
+        path.join(process.cwd(), relativePath),
+        path.join(__dirname, "../../../", relativePath),
+      ];
+      for (const absolutePath of possiblePaths) {
+        if (fs.existsSync(absolutePath)) {
+          try {
+            fs.unlinkSync(absolutePath);
+            console.log(`[deleteProjectAttachment] Physical file unlinked: ${absolutePath}`);
+            break;
+          } catch (unlinkErr) {
+            console.warn(`[deleteProjectAttachment] Failed to unlink ${absolutePath}:`, unlinkErr);
+          }
         }
       }
     }
