@@ -61,9 +61,30 @@ export async function listProjects(req: Request, res: Response) {
     } = req.query;
 
     const skip = (Number(page) - 1) * Number(limit);
+    const user = (req as any).user;
+    const accountId = await getAccountIdFromReqUser(user);
+    const isAdmin = user?.role === "ADMIN" || user?.isSuperAdmin;
+
+    const accessWhere = isAdmin
+      ? {}
+      : {
+          OR: [
+            { visibility: "PUBLIC" },
+            { visibility: "TEAM" },
+            {
+              visibility: "PRIVATE",
+              OR: [
+                ...(accountId ? [{ createdBy: accountId }] : []),
+                ...(user?.id ? [{ createdBy: user.id }] : []),
+                ...(accountId ? [{ members: { some: { accountId } } }] : []),
+              ],
+            },
+          ],
+        };
 
     const where: Record<string, any> = {
       deletedAt: null,
+      ...accessWhere,
       ...(status && { status }),
       ...(visibility && { visibility }),
       ...(search && {
@@ -463,6 +484,18 @@ export async function getProjectById(req: Request, res: Response) {
 
     if (!project) {
       return sendErrorResponse(res, 404, "Project not found");
+    }
+
+    const user = (req as any).user;
+    const accountId = await getAccountIdFromReqUser(user);
+    const isAdmin = user?.role === "ADMIN" || user?.isSuperAdmin;
+
+    if (!isAdmin && project.visibility === "PRIVATE") {
+      const isMember = project.members.some((m) => m.accountId === accountId);
+      const isCreator = project.createdBy === accountId || project.createdBy === user?.id;
+      if (!isMember && !isCreator) {
+        return sendErrorResponse(res, 403, "Access denied: This is a private project accessible only to assigned members");
+      }
     }
 
     // Gather all tasks from both pipeline steps and direct tasks (no stepId) for progress
