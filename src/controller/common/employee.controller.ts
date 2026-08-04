@@ -230,7 +230,7 @@ export async function listEmployees(req: Request, res: Response) {
     //   };
     // }
 
-    const [total, accounts] = await prisma.$transaction([
+    const [total, accounts] = await Promise.all([
       prisma.account.count({ where }),
       prisma.account.findMany({
         where,

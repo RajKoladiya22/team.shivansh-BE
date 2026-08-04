@@ -85,6 +85,19 @@ export async function addProjectComment(req: Request, res: Response) {
       return sendErrorResponse(res, 404, "Project not found");
     }
 
+    const isAdmin = (req.user as any)?.roles?.includes("ADMIN") ?? false;
+    if (!isAdmin) {
+      const member = await prisma.projectMember.findFirst({
+        where: { projectId, accountId },
+      });
+      if (member?.role === "VIEWER") {
+        return sendErrorResponse(res, 403, "Viewers do not have permission to add comments");
+      }
+      if (!member && project.visibility === "PRIVATE") {
+        return sendErrorResponse(res, 403, "You are not a member of this project");
+      }
+    }
+
     const comment = await prisma.projectComment.create({
       data: {
         projectId,
