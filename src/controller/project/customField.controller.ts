@@ -2,13 +2,15 @@ import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpResponse";
 import { getCallerProjectRole } from "./project.controller";
+import { logProjectActivity } from "./projectActivity.helper";
 
 export async function createProjectCustomField(req: Request, res: Response) {
   try {
     const { id: projectId } = req.params;
     const { name, fieldType, options, order, required, isActive } = req.body;
+    const user = (req as any).user;
 
-    const { isFullAccess } = await getCallerProjectRole(projectId, (req as any).user);
+    const { isFullAccess, callerAccountId } = await getCallerProjectRole(projectId, user);
     if (!isFullAccess) {
       return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can create custom fields");
     }
@@ -33,6 +35,20 @@ export async function createProjectCustomField(req: Request, res: Response) {
         order: order !== undefined ? Number(order) : 0,
         required: required ?? false,
         isActive: isActive ?? true,
+      },
+    });
+
+    await logProjectActivity({
+      projectId,
+      entityType: "PROJECT",
+      entityId: field.id,
+      action: "CREATED",
+      performedBy: callerAccountId || user?.id,
+      meta: {
+        fieldId: field.id,
+        fieldName: field.name,
+        fieldType: field.fieldType,
+        message: `Created custom field "${field.name}" (${field.fieldType})`,
       },
     });
 
@@ -66,8 +82,9 @@ export async function updateProjectCustomField(req: Request, res: Response) {
   try {
     const { id: projectId, fieldId } = req.params;
     const { name, fieldType, options, order, required, isActive } = req.body;
+    const user = (req as any).user;
 
-    const { isFullAccess } = await getCallerProjectRole(projectId, (req as any).user);
+    const { isFullAccess, callerAccountId } = await getCallerProjectRole(projectId, user);
     if (!isFullAccess) {
       return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can update custom fields");
     }
@@ -91,6 +108,19 @@ export async function updateProjectCustomField(req: Request, res: Response) {
       },
     });
 
+    await logProjectActivity({
+      projectId,
+      entityType: "PROJECT",
+      entityId: fieldId,
+      action: "UPDATED",
+      performedBy: callerAccountId || user?.id,
+      meta: {
+        fieldId,
+        fieldName: updated.name,
+        message: `Updated custom field "${updated.name}"`,
+      },
+    });
+
     return sendSuccessResponse(res, 200, "Custom field updated", updated);
   } catch (err: any) {
     if (err.code === "P2002") {
@@ -104,8 +134,9 @@ export async function updateProjectCustomField(req: Request, res: Response) {
 export async function deleteProjectCustomField(req: Request, res: Response) {
   try {
     const { id: projectId, fieldId } = req.params;
+    const user = (req as any).user;
 
-    const { isFullAccess } = await getCallerProjectRole(projectId, (req as any).user);
+    const { isFullAccess, callerAccountId } = await getCallerProjectRole(projectId, user);
     if (!isFullAccess) {
       return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can delete custom fields");
     }
@@ -121,9 +152,23 @@ export async function deleteProjectCustomField(req: Request, res: Response) {
       where: { id: fieldId },
     });
 
+    await logProjectActivity({
+      projectId,
+      entityType: "PROJECT",
+      entityId: fieldId,
+      action: "DELETED",
+      performedBy: callerAccountId || user?.id,
+      meta: {
+        fieldId,
+        fieldName: existing.name,
+        message: `Deleted custom field "${existing.name}"`,
+      },
+    });
+
     return sendSuccessResponse(res, 200, "Custom field deleted");
   } catch (err: any) {
     console.error("[deleteProjectCustomField]", err);
     return sendErrorResponse(res, 500, err.message || "Failed to delete custom field");
   }
 }
+

@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpResponse";
 import { getIo } from "../../core/utils/socket/index";
+import { logProjectActivity } from "./projectActivity.helper";
 
 async function getAccountIdFromReqUser(user: any): Promise<string | null> {
   if (user?.accountId) return user.accountId;
@@ -119,6 +120,20 @@ export async function addProjectComment(req: Request, res: Response) {
 
     safeEmit("project:comment:added", comment, projectId);
 
+    const snippet = content.trim().length > 60 ? content.trim().slice(0, 60) + "..." : content.trim();
+    await logProjectActivity({
+      projectId,
+      entityType: "COMMENT",
+      entityId: comment.id,
+      action: "COMMENTED",
+      performedBy: accountId,
+      meta: {
+        commentId: comment.id,
+        preview: snippet,
+        message: `Added comment: "${snippet}"`,
+      },
+    });
+
     return sendSuccessResponse(res, 201, "Comment added successfully", comment);
   } catch (err: any) {
     console.error("[addProjectComment]", err);
@@ -172,6 +187,18 @@ export async function updateProjectComment(req: Request, res: Response) {
 
     safeEmit("project:comment:updated", updated, projectId);
 
+    await logProjectActivity({
+      projectId,
+      entityType: "COMMENT",
+      entityId: commentId,
+      action: "UPDATED",
+      performedBy: accountId,
+      meta: {
+        commentId,
+        message: "Edited a comment",
+      },
+    });
+
     return sendSuccessResponse(res, 200, "Comment updated successfully", updated);
   } catch (err: any) {
     console.error("[updateProjectComment]", err);
@@ -209,9 +236,22 @@ export async function deleteProjectComment(req: Request, res: Response) {
     const payload = { projectId, commentId };
     safeEmit("project:comment:deleted", payload, projectId);
 
+    await logProjectActivity({
+      projectId,
+      entityType: "COMMENT",
+      entityId: commentId,
+      action: "DELETED",
+      performedBy: accountId,
+      meta: {
+        commentId,
+        message: "Deleted a comment",
+      },
+    });
+
     return sendSuccessResponse(res, 200, "Comment deleted successfully", payload);
   } catch (err: any) {
     console.error("[deleteProjectComment]", err);
     return sendErrorResponse(res, 500, err.message || "Failed to delete comment");
   }
 }
+

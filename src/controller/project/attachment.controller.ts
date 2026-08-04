@@ -4,6 +4,7 @@ import fs from "fs";
 import { prisma } from "../../config/database.config";
 import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpResponse";
 import { getCallerProjectRole } from "./project.controller";
+import { logProjectActivity } from "./projectActivity.helper";
 
 /** Upload a project attachment file to src/storage/projectAttachment/<ext>/<filename> */
 export async function uploadProjectAttachmentFile(req: Request, res: Response) {
@@ -32,8 +33,9 @@ export async function uploadProjectAttachmentFile(req: Request, res: Response) {
 export async function addProjectAttachment(req: Request, res: Response) {
   try {
     const { id: projectId } = req.params;
+    const user = (req as any).user;
 
-    const { isFullAccess } = await getCallerProjectRole(projectId, (req as any).user);
+    const { isFullAccess, callerAccountId } = await getCallerProjectRole(projectId, user);
     if (!isFullAccess) {
       return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can add attachments");
     }
@@ -68,9 +70,25 @@ export async function addProjectAttachment(req: Request, res: Response) {
           mimeType: mimeType || null,
           sizeBytes: sizeBytes ? Number(sizeBytes) : null,
           meta: Object.keys(metaObj).length > 0 ? metaObj : null,
-          uploadedBy: req.user?.accountId ?? null,
+          uploadedBy: callerAccountId || user?.accountId || user?.id || null,
         },
       });
+
+      await logProjectActivity({
+        projectId,
+        entityType: "ATTACHMENT",
+        entityId: att.id,
+        action: "ATTACHMENT_ADDED",
+        performedBy: callerAccountId || user?.accountId || user?.id || null,
+        meta: {
+          attachmentId: att.id,
+          fileName: att.name,
+          mimeType: att.mimeType,
+          sizeBytes: att.sizeBytes,
+          message: `Added attachment "${att.name}"`,
+        },
+      });
+
       createdList.push(att);
     }
 
@@ -116,8 +134,9 @@ export async function listProjectAttachments(req: Request, res: Response) {
 export async function deleteProjectAttachment(req: Request, res: Response) {
   try {
     const { id: projectId, attachmentId } = req.params;
+    const user = (req as any).user;
 
-    const { isFullAccess } = await getCallerProjectRole(projectId, (req as any).user);
+    const { isFullAccess, callerAccountId } = await getCallerProjectRole(projectId, user);
     if (!isFullAccess) {
       return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can delete attachments");
     }
@@ -160,9 +179,58 @@ export async function deleteProjectAttachment(req: Request, res: Response) {
       });
     });
 
+    await logProjectActivity({
+      projectId,
+      entityType: "ATTACHMENT",
+      entityId: attachmentId,
+      action: "ATTACHMENT_REMOVED",
+      performedBy: callerAccountId || user?.accountId || user?.id || null,
+      meta: {
+        attachmentId,
+        fileName: attachment.name,
+        message: `Deleted attachment "${attachment.name}"`,
+      },
+    });
+
     return sendSuccessResponse(res, 200, "Attachment deleted successfully");
   } catch (err: any) {
     console.error("[deleteProjectAttachment]", err);
     return sendErrorResponse(res, 500, err.message || "Failed to delete attachment");
   }
 }
+
+/** Log download event for an attachment */
+export async function logAttachmentDownload(req: Request, res: Response) {
+  try {
+    const { id: projectId, attachmentId } = req.params;
+    const user = (req as any).user;
+    const { callerAccountId } = await getCallerProjectRole(projectId, user);
+
+    const attachment = await prisma.projectAttachment.findFirst({
+      where: { id: attachmentId, projectId, deletedAt: null },
+    });
+    if (!attachment) {
+      return sendErrorResponse(res, 404, "Attachment not found");
+    }
+
+    await logProjectActivity({
+      projectId,
+      entityType: "ATTACHMENT",
+      entityId: attachmentId,
+      action: "UPDATED",
+      performedBy: callerAccountId || user?.accountId || user?.id || null,
+      meta: {
+        event: "DOWNLOAD",
+        attachmentId,
+        fileName: attachment.name,
+        message: `Downloaded attachment "${attachment.name}"`,
+      },
+    });
+
+    return sendSuccessResponse(res, 200, "Download logged");
+  } catch (err: any) {
+    console.error("[logAttachmentDownload]", err);
+    return sendErrorResponse(res, 500, err.message || "Failed to log download");
+  }
+}
+

@@ -11,12 +11,14 @@ import {
   updateProjectMember,
   getProjectTasks,
   getProjectStats,
+  getProjectActivities,
 } from "../../controller/project/project.controller";
 import {
   uploadProjectAttachmentFile,
   addProjectAttachment,
   listProjectAttachments,
   deleteProjectAttachment,
+  logAttachmentDownload,
 } from "../../controller/project/attachment.controller";
 import { projectAttachmentUpload } from "../../core/middleware/multer/projectAttachment";
 import {
@@ -39,13 +41,14 @@ router.use(requireAuth);
 
 // ── Project CRUD ────────────────────────────────────────────
 router.get("/", listProjects);
-router.post("/", requireRole("ADMIN"), projectAttachmentUpload.array("attachmentFiles", 20), createProject);
+router.post("/", projectAttachmentUpload.array("attachmentFiles", 20), createProject);
 router.get("/:id", getProjectById);
 router.patch("/:id", projectAttachmentUpload.array("attachmentFiles", 20), updateProject);
 router.delete("/:id", deleteProject);
 
-// ── Stats ───────────────────────────────────────────────────
+// ── Stats & Activity ─────────────────────────────────────────
 router.get("/:id/stats", getProjectStats);
+router.get("/:id/activities", getProjectActivities);
 
 // ── Tasks (flat list) ───────────────────────────────────────
 router.get("/:id/tasks", getProjectTasks);
@@ -60,6 +63,7 @@ router.post("/attachments/upload", projectAttachmentUpload.single("file"), uploa
 router.post("/:id/attachments", addProjectAttachment);
 router.get("/:id/attachments", listProjectAttachments);
 router.delete("/:id/attachments/:attachmentId", deleteProjectAttachment);
+router.post("/:id/attachments/:attachmentId/download-log", logAttachmentDownload);
 
 // ── Custom Fields ───────────────────────────────────────────
 router.post("/:id/custom-fields", createProjectCustomField);

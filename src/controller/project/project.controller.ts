@@ -1,14 +1,37 @@
 import path from "path";
+import fs from "fs";
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import {
   sendErrorResponse,
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
+import { logProjectActivity } from "./projectActivity.helper";
 
 /* =========================================================
    HELPERS
 ========================================================= */
+
+function deletePhysicalFile(fileUrl?: string | null) {
+  if (!fileUrl) return;
+  const relativePath = fileUrl.startsWith("/") ? fileUrl.slice(1) : fileUrl;
+  const possiblePaths = [
+    path.join(process.cwd(), "src", relativePath),
+    path.join(process.cwd(), relativePath),
+    path.join(__dirname, "../../../", relativePath),
+  ];
+  for (const absolutePath of possiblePaths) {
+    if (fs.existsSync(absolutePath)) {
+      try {
+        fs.unlinkSync(absolutePath);
+        console.log(`[deletePhysicalFile] Unlinked: ${absolutePath}`);
+        break;
+      } catch (err) {
+        console.warn(`[deletePhysicalFile] Failed to unlink ${absolutePath}:`, err);
+      }
+    }
+  }
+}
 
 async function getAccountIdFromReqUser(user: any): Promise<string | null> {
   if (user?.accountId) return user.accountId;
@@ -378,6 +401,67 @@ export async function createProject(req: Request, res: Response) {
         }
       : project;
 
+    if (project) {
+      // 1. Log project creation
+      await logProjectActivity({
+        projectId: project.id,
+        entityType: "PROJECT",
+        entityId: project.id,
+        action: "CREATED",
+        performedBy: accountId,
+        toState: {
+          name: project.name,
+          status: project.status,
+          visibility: project.visibility,
+        },
+        meta: {
+          name: project.name,
+          visibility: project.visibility,
+          status: project.status,
+          message: `Created project "${project.name}"`,
+        },
+      });
+
+      // 2. Log initial members added
+      if (Array.isArray(project.members)) {
+        for (const m of project.members) {
+          const mName = [m.account?.firstName, m.account?.lastName].filter(Boolean).join(" ").trim();
+          await logProjectActivity({
+            projectId: project.id,
+            entityType: "PROJECT",
+            entityId: m.accountId,
+            action: "ASSIGNED",
+            performedBy: accountId,
+            meta: {
+              memberId: m.accountId,
+              memberName: mName || "Member",
+              role: m.role,
+              message: `Added ${mName || "member"} as ${m.role === "OWNER" ? "Creator" : m.role === "MANAGER" ? "Developer" : m.role}`,
+            },
+          });
+        }
+      }
+
+      // 3. Log initial attachments uploaded
+      if (Array.isArray(project.attachments)) {
+        for (const att of project.attachments) {
+          await logProjectActivity({
+            projectId: project.id,
+            entityType: "ATTACHMENT",
+            entityId: att.id,
+            action: "ATTACHMENT_ADDED",
+            performedBy: accountId,
+            meta: {
+              fileName: att.name,
+              sizeBytes: att.sizeBytes,
+              mimeType: att.mimeType,
+              message: `Added attachment "${att.name}"`,
+            },
+          });
+        }
+      }
+    }
+
     sendSuccessResponse(res, 201, "Project created successfully", responseData);
   } catch (error: any) {
     console.error("[project.controller] createProject:", error);
@@ -712,6 +796,107 @@ export async function updateProject(req: Request, res: Response) {
         }
       : updated;
 
+    if (updated) {
+      // 1. Status change
+      if (data.status && data.status !== existing.status) {
+        await logProjectActivity({
+          projectId: id,
+          entityType: "PROJECT",
+          action: "STATUS_CHANGED",
+          performedBy: accountId,
+          fromState: { status: existing.status },
+          toState: { status: data.status },
+          meta: {
+            from: existing.status,
+            to: data.status,
+            message: `Status changed from ${existing.status} to ${data.status}`,
+          },
+        });
+      }
+
+      // 2. Visibility change
+      if (data.visibility && data.visibility !== existing.visibility) {
+        await logProjectActivity({
+          projectId: id,
+          entityType: "PROJECT",
+          action: "UPDATED",
+          performedBy: accountId,
+          fromState: { visibility: existing.visibility },
+          toState: { visibility: data.visibility },
+          meta: {
+            field: "visibility",
+            from: existing.visibility,
+            to: data.visibility,
+            message: `Visibility changed from ${existing.visibility} to ${data.visibility}`,
+          },
+        });
+      }
+
+      // 3. Description update
+      if (data.description !== undefined && data.description !== existing.description) {
+        await logProjectActivity({
+          projectId: id,
+          entityType: "PROJECT",
+          action: "UPDATED",
+          performedBy: accountId,
+          meta: {
+            field: "description",
+            message: "Updated project description",
+          },
+        });
+      }
+
+      // 4. Other core fields (name, dates, color, icon)
+      const otherKeys = Object.keys(data).filter(
+        (k) => !["status", "visibility", "description", "startedAt", "completedAt", "cancelledAt"].includes(k) &&
+               data[k] !== (existing as any)[k]
+      );
+      if (otherKeys.length > 0) {
+        await logProjectActivity({
+          projectId: id,
+          entityType: "PROJECT",
+          action: "UPDATED",
+          performedBy: accountId,
+          meta: {
+            fields: otherKeys,
+            message: `Updated project properties (${otherKeys.join(", ")})`,
+          },
+        });
+      }
+
+      // 5. Custom fields update
+      if (Array.isArray(customFields)) {
+        await logProjectActivity({
+          projectId: id,
+          entityType: "PROJECT",
+          action: "UPDATED",
+          performedBy: accountId,
+          meta: {
+            message: `Updated custom fields (${customFields.length} field${customFields.length === 1 ? "" : "s"})`,
+          },
+        });
+      }
+
+      // 6. New attachments uploaded during update
+      if (req.files && Array.isArray(req.files) && req.files.length > 0) {
+        const filesArr = req.files as Express.Multer.File[];
+        for (const file of filesArr) {
+          await logProjectActivity({
+            projectId: id,
+            entityType: "ATTACHMENT",
+            action: "ATTACHMENT_ADDED",
+            performedBy: accountId,
+            meta: {
+              fileName: file.originalname,
+              sizeBytes: file.size,
+              mimeType: file.mimetype,
+              message: `Added attachment "${file.originalname}"`,
+            },
+          });
+        }
+      }
+    }
+
     sendSuccessResponse(res, 200, "Project updated successfully", responseData);
   } catch (error: any) {
     console.error("[project.controller] updateProject:", error);
@@ -721,7 +906,7 @@ export async function updateProject(req: Request, res: Response) {
 }
 
 /* =========================================================
-   DELETE /projects/:id  — soft delete
+   DELETE /projects/:id  — hard delete (only OWNER / Creator)
 ========================================================= */
 export async function deleteProject(req: Request, res: Response) {
   try {
@@ -729,29 +914,150 @@ export async function deleteProject(req: Request, res: Response) {
     const user = (req as any).user;
     const accountId = await getAccountIdFromReqUser(user);
 
-    const existing = await prisma.project.findFirst({
-      where: { id, deletedAt: null },
+    const isAdmin = Boolean(
+      user?.roles?.includes("ADMIN") ||
+      user?.role === "ADMIN" ||
+      (Array.isArray(user?.roles) && user.roles.some((r: string) => r.toUpperCase() === "ADMIN")) ||
+      user?.isSuperAdmin
+    );
+
+    const existing = await prisma.project.findUnique({
+      where: { id },
+      include: {
+        members: true,
+      },
     });
     if (!existing) return sendErrorResponse(res, 404, "Project not found");
 
-    const { isFullAccess } = await getCallerProjectRole(id, user);
-    if (!isFullAccess) {
-      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can delete this project");
+    const callerMember = existing.members.find(
+      (m) => m.accountId === accountId || (user?.id && m.accountId === user.id)
+    );
+    const isOwner = callerMember?.role === "OWNER";
+    const isCreator = Boolean(existing.createdBy && (existing.createdBy === accountId || existing.createdBy === user?.id));
+
+    if (!isAdmin && !isOwner && !isCreator) {
+      return sendErrorResponse(res, 403, "Only the project creator or OWNER can hard-delete this project");
     }
 
-    await prisma.project.update({
-      where: { id },
-      data: {
-        deletedAt: new Date(),
-        deletedBy: accountId || user?.id,
-        status: "ARCHIVED",
-      },
+    // 1. Collect and delete all physical attachment files from disk
+    const projectAttachments = await prisma.projectAttachment.findMany({
+      where: { projectId: id },
+      select: { url: true },
+    });
+    for (const att of projectAttachments) {
+      deletePhysicalFile(att.url);
+    }
+
+    const taskAttachments = await prisma.taskAttachment.findMany({
+      where: { task: { projectId: id } },
+      select: { url: true },
+    });
+    for (const att of taskAttachments) {
+      deletePhysicalFile(att.url);
+    }
+
+    // 2. Cascade delete all linked database records in a transaction
+    await prisma.$transaction(async (tx) => {
+      // Find all tasks in this project
+      const tasks = await tx.task.findMany({
+        where: { projectId: id },
+        select: { id: true },
+      });
+      const taskIds = tasks.map((t) => t.id);
+
+      if (taskIds.length > 0) {
+        // Clean up task dependencies
+        await tx.taskDependency.deleteMany({
+          where: {
+            OR: [
+              { dependentTaskId: { in: taskIds } },
+              { blockingTaskId: { in: taskIds } },
+            ],
+          },
+        });
+
+        // Task comments and comment mentions
+        const taskComments = await tx.taskComment.findMany({
+          where: { taskId: { in: taskIds } },
+          select: { id: true },
+        });
+        const taskCommentIds = taskComments.map((c) => c.id);
+        if (taskCommentIds.length > 0) {
+          await tx.commentMention.deleteMany({
+            where: { commentId: { in: taskCommentIds } },
+          });
+          await tx.taskComment.deleteMany({
+            where: { taskId: { in: taskIds } },
+          });
+        }
+
+        // Task attachments, assignments, checklists, watchers, time entries, custom field values, labels
+        await tx.taskAttachment.deleteMany({ where: { taskId: { in: taskIds } } });
+        await tx.taskAssignment.deleteMany({ where: { taskId: { in: taskIds } } });
+        await tx.checklistItem.deleteMany({ where: { taskId: { in: taskIds } } });
+        await tx.taskWatcher.deleteMany({ where: { taskId: { in: taskIds } } });
+        await tx.taskTimeEntry.deleteMany({ where: { taskId: { in: taskIds } } });
+        await tx.taskCustomFieldValue.deleteMany({ where: { taskId: { in: taskIds } } });
+        await tx.taskLabel.deleteMany({ where: { taskId: { in: taskIds } } });
+
+        // Activity logs for tasks
+        await tx.activityLog.deleteMany({ where: { taskId: { in: taskIds } } });
+
+        // Break parent/recurrence links before deleting tasks
+        await tx.task.updateMany({
+          where: { id: { in: taskIds } },
+          data: { parentTaskId: null, recurrenceParentId: null },
+        });
+
+        // Delete tasks
+        await tx.task.deleteMany({ where: { id: { in: taskIds } } });
+      }
+
+      // Delete custom field values associated with this project's custom fields
+      const customFields = await tx.projectCustomField.findMany({
+        where: { projectId: id },
+        select: { id: true },
+      });
+      const customFieldIds = customFields.map((cf) => cf.id);
+      if (customFieldIds.length > 0) {
+        await tx.taskCustomFieldValue.deleteMany({
+          where: { fieldId: { in: customFieldIds } },
+        });
+        await tx.projectCustomField.deleteMany({
+          where: { projectId: id },
+        });
+      }
+
+      // Delete project comments
+      await tx.projectComment.deleteMany({ where: { projectId: id } });
+
+      // Delete project attachments
+      await tx.projectAttachment.deleteMany({ where: { projectId: id } });
+
+      // Delete project members
+      await tx.projectMember.deleteMany({ where: { projectId: id } });
+
+      // Delete project pipeline & steps
+      const pipeline = await tx.projectPipeline.findUnique({
+        where: { projectId: id },
+        select: { id: true },
+      });
+      if (pipeline) {
+        await tx.pipelineStep.deleteMany({ where: { pipelineId: pipeline.id } });
+        await tx.projectPipeline.delete({ where: { id: pipeline.id } });
+      }
+
+      // Delete activity logs for project
+      await tx.activityLog.deleteMany({ where: { projectId: id } });
+
+      // Finally delete the project itself
+      await tx.project.delete({ where: { id } });
     });
 
-    sendSuccessResponse(res, 200, "Project deleted");
-  } catch (error) {
+    sendSuccessResponse(res, 200, "Project and all linked data permanently deleted");
+  } catch (error: any) {
     console.error("[project.controller] deleteProject:", error);
-    sendErrorResponse(res, 500, "Failed to delete project");
+    sendErrorResponse(res, 500, error.message || "Failed to delete project");
   }
 }
 
@@ -833,6 +1139,21 @@ export async function addProjectMember(req: Request, res: Response) {
       },
     });
 
+    const mName = [account.firstName, account.lastName].filter(Boolean).join(" ").trim();
+    await logProjectActivity({
+      projectId: id,
+      entityType: "PROJECT",
+      entityId: accountId,
+      action: "ASSIGNED",
+      performedBy: callerAccountId || user?.id,
+      meta: {
+        memberId: accountId,
+        memberName: mName || "Member",
+        role,
+        message: `Added ${mName || "member"} as ${role === "OWNER" ? "Creator" : role === "MANAGER" ? "Developer" : role}`,
+      },
+    });
+
     sendSuccessResponse(res, 201, "Member added", member);
   } catch (error) {
     console.error("[project.controller] addProjectMember:", error);
@@ -847,7 +1168,7 @@ export async function removeProjectMember(req: Request, res: Response) {
   try {
     const { id, accountId } = req.params;
     const user = (req as any).user;
-    const { isAdmin, role: callerRole } = await getCallerProjectRole(id, user);
+    const { isAdmin, callerAccountId, role: callerRole } = await getCallerProjectRole(id, user);
 
     if (!isAdmin && callerRole !== "OWNER" && callerRole !== "MANAGER") {
       return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can remove members");
@@ -855,6 +1176,11 @@ export async function removeProjectMember(req: Request, res: Response) {
 
     const member = await prisma.projectMember.findUnique({
       where: { projectId_accountId: { projectId: id, accountId } },
+      include: {
+        account: {
+          select: { id: true, firstName: true, lastName: true },
+        },
+      },
     });
     if (!member) return sendErrorResponse(res, 404, "Member not found");
 
@@ -875,6 +1201,21 @@ export async function removeProjectMember(req: Request, res: Response) {
       where: { projectId_accountId: { projectId: id, accountId } },
     });
 
+    const mName = [member.account?.firstName, member.account?.lastName].filter(Boolean).join(" ").trim();
+    await logProjectActivity({
+      projectId: id,
+      entityType: "PROJECT",
+      entityId: accountId,
+      action: "UNASSIGNED",
+      performedBy: callerAccountId || user?.id,
+      meta: {
+        memberId: accountId,
+        memberName: mName || "Member",
+        role: member.role,
+        message: `Removed ${mName || "member"} from project`,
+      },
+    });
+
     sendSuccessResponse(res, 200, "Member removed");
   } catch (error) {
     console.error("[project.controller] removeProjectMember:", error);
@@ -890,7 +1231,7 @@ export async function updateProjectMember(req: Request, res: Response) {
     const { id, accountId } = req.params;
     const { role } = req.body;
     const user = (req as any).user;
-    const { isAdmin, role: callerRole } = await getCallerProjectRole(id, user);
+    const { isAdmin, callerAccountId, role: callerRole } = await getCallerProjectRole(id, user);
 
     if (!isAdmin && callerRole !== "OWNER" && callerRole !== "MANAGER") {
       return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can edit member roles");
@@ -933,6 +1274,22 @@ export async function updateProjectMember(req: Request, res: Response) {
         account: {
           select: { id: true, firstName: true, lastName: true, avatar: true, designation: true },
         },
+      },
+    });
+
+    const mName = [updated.account?.firstName, updated.account?.lastName].filter(Boolean).join(" ").trim();
+    await logProjectActivity({
+      projectId: id,
+      entityType: "PROJECT",
+      entityId: accountId,
+      action: "UPDATED",
+      performedBy: callerAccountId || user?.id,
+      meta: {
+        memberId: accountId,
+        memberName: mName || "Member",
+        fromRole: member.role,
+        toRole: role,
+        message: `Changed ${mName || "member"}'s role from ${member.role === "OWNER" ? "Creator" : member.role === "MANAGER" ? "Developer" : member.role} to ${role === "OWNER" ? "Creator" : role === "MANAGER" ? "Developer" : role}`,
       },
     });
 
@@ -1058,3 +1415,81 @@ export async function getProjectStats(req: Request, res: Response) {
     sendErrorResponse(res, 500, "Failed to fetch project stats");
   }
 }
+
+/* =========================================================
+   GET /projects/:id/activities  — list project activity logs
+========================================================= */
+export async function getProjectActivities(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 30));
+    const action = req.query.action as string | undefined;
+    const entityType = req.query.entityType as string | undefined;
+
+    const project = await prisma.project.findFirst({
+      where: { id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!project) return sendErrorResponse(res, 404, "Project not found");
+
+    const where: any = { projectId: id };
+    if (action) where.action = action;
+    if (entityType) where.entityType = entityType;
+
+    const [total, activities] = await Promise.all([
+      prisma.activityLog.count({ where }),
+      prisma.activityLog.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          projectId: true,
+          taskId: true,
+          entityType: true,
+          entityId: true,
+          action: true,
+          meta: true,
+          fromState: true,
+          toState: true,
+          performedBy: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+
+    const actorIds = [...new Set(activities.map((a) => a.performedBy).filter(Boolean) as string[])];
+    const actors = await prisma.account.findMany({
+      where: { id: { in: actorIds } },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        designation: true,
+        avatar: true,
+      },
+    });
+    const actorMap = Object.fromEntries(actors.map((a) => [a.id, a]));
+
+    const enriched = activities.map((a) => ({
+      ...a,
+      performer: a.performedBy ? (actorMap[a.performedBy] ?? null) : null,
+    }));
+
+    sendSuccessResponse(res, 200, "Project activities fetched", {
+      data: enriched,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (error: any) {
+    console.error("[project.controller] getProjectActivities:", error);
+    sendErrorResponse(res, 500, error.message || "Failed to fetch project activities");
+  }
+}
+
