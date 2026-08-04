@@ -13,16 +13,24 @@ import {
   getProjectStats,
 } from "../../controller/project/project.controller";
 import {
+  uploadProjectAttachmentFile,
   addProjectAttachment,
   listProjectAttachments,
   deleteProjectAttachment,
 } from "../../controller/project/attachment.controller";
+import { projectAttachmentUpload } from "../../core/middleware/multer/projectAttachment";
 import {
   createProjectCustomField,
   listProjectCustomFields,
   updateProjectCustomField,
   deleteProjectCustomField,
 } from "../../controller/project/customField.controller";
+import {
+  listProjectComments,
+  addProjectComment,
+  updateProjectComment,
+  deleteProjectComment,
+} from "../../controller/project/comment.controller";
 import { requireAuth, requireRole } from "../../core/middleware/auth";
 
 const router = Router();
@@ -31,9 +39,9 @@ router.use(requireAuth);
 
 // ── Project CRUD ────────────────────────────────────────────
 router.get("/", listProjects);
-router.post("/", requireRole("ADMIN"), createProject);
+router.post("/", requireRole("ADMIN"), projectAttachmentUpload.array("attachmentFiles", 20), createProject);
 router.get("/:id", getProjectById);
-router.patch("/:id", requireRole("ADMIN"), updateProject);
+router.patch("/:id", requireRole("ADMIN"), projectAttachmentUpload.array("attachmentFiles", 20), updateProject);
 router.delete("/:id", requireRole("ADMIN"), deleteProject);
 
 // ── Stats ───────────────────────────────────────────────────
@@ -48,6 +56,7 @@ router.patch("/:id/members/:accountId", requireRole("ADMIN"), updateProjectMembe
 router.delete("/:id/members/:accountId", requireRole("ADMIN"), removeProjectMember);
 
 // ── Attachments ─────────────────────────────────────────────
+router.post("/attachments/upload", projectAttachmentUpload.single("file"), uploadProjectAttachmentFile);
 router.post("/:id/attachments", addProjectAttachment);
 router.get("/:id/attachments", listProjectAttachments);
 router.delete("/:id/attachments/:attachmentId", deleteProjectAttachment);
@@ -57,5 +66,11 @@ router.post("/:id/custom-fields", requireRole("ADMIN"), createProjectCustomField
 router.get("/:id/custom-fields", listProjectCustomFields);
 router.patch("/:id/custom-fields/:fieldId", requireRole("ADMIN"), updateProjectCustomField);
 router.delete("/:id/custom-fields/:fieldId", requireRole("ADMIN"), deleteProjectCustomField);
+
+// ── Comments ────────────────────────────────────────────────
+router.get("/:id/comments", listProjectComments);
+router.post("/:id/comments", addProjectComment);
+router.patch("/:id/comments/:commentId", updateProjectComment);
+router.delete("/:id/comments/:commentId", deleteProjectComment);
 
 export default router;

@@ -1,4 +1,4 @@
-// src/controllers/project/project.controller.ts
+import path from "path";
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import {
@@ -10,12 +10,42 @@ import {
    HELPERS
 ========================================================= */
 
+async function getAccountIdFromReqUser(user: any): Promise<string | null> {
+  if (user?.accountId) return user.accountId;
+  if (user?.id) {
+    const u = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { accountId: true },
+    });
+    return u?.accountId || null;
+  }
+  return null;
+}
+
+function formatCustomFields(fields: any[]) {
+  if (!Array.isArray(fields)) return [];
+  return fields.map((cf) => {
+    let opts = cf.options;
+    let val = cf.value ?? null;
+    if (opts && typeof opts === "object" && !Array.isArray(opts)) {
+      val = opts.value ?? val;
+      opts = opts.options ?? opts.list ?? null;
+    }
+    return {
+      ...cf,
+      options: opts,
+      value: val,
+    };
+  });
+}
+
 /** Compute % tasks completed for a project */
 function computeProgress(tasks: { status: string }[]): number {
   if (!tasks.length) return 0;
   const done = tasks.filter((t) => t.status === "COMPLETED").length;
   return Math.round((done / tasks.length) * 100);
 }
+
 
 /* =========================================================
    GET /projects  — list with pagination + filters
@@ -99,6 +129,12 @@ export async function listProjects(req: Request, res: Response) {
 export async function createProject(req: Request, res: Response) {
   try {
     const user = (req as any).user;
+    const accountId = await getAccountIdFromReqUser(user);
+
+    if (!accountId) {
+      return sendErrorResponse(res, 401, "Account not found for authenticated user");
+    }
+
     const {
       name,
       description,
@@ -109,6 +145,21 @@ export async function createProject(req: Request, res: Response) {
       color,
       icon,
     } = req.body;
+
+    let members = req.body.members || [];
+    if (typeof members === "string") {
+      try { members = JSON.parse(members); } catch { members = []; }
+    }
+
+    let customFields = req.body.customFields || [];
+    if (typeof customFields === "string") {
+      try { customFields = JSON.parse(customFields); } catch { customFields = []; }
+    }
+
+    let attachments = req.body.attachments || [];
+    if (typeof attachments === "string") {
+      try { attachments = JSON.parse(attachments); } catch { attachments = []; }
+    }
 
     if (!name?.trim()) {
       return sendErrorResponse(res, 400, "Project name is required");
@@ -125,7 +176,7 @@ export async function createProject(req: Request, res: Response) {
           endDate: endDate ? new Date(endDate) : undefined,
           color,
           icon,
-          createdBy: user.id,
+          createdBy: accountId,
         },
       });
 
@@ -133,11 +184,30 @@ export async function createProject(req: Request, res: Response) {
       await tx.projectMember.create({
         data: {
           projectId: created.id,
-          accountId: user.id,
+          accountId,
           role: "OWNER",
-          addedBy: user.id,
+          addedBy: accountId,
         },
-      }).catch(() => { /* ignore if already member */ });
+      }).catch((err) => {
+        console.warn("[project.controller] Failed to auto-add creator as member:", err);
+      });
+
+      // Add additional members provided in request body (skip creator if present)
+      if (Array.isArray(members) && members.length > 0) {
+        for (const m of members) {
+          if (!m?.accountId || m.accountId === accountId) continue;
+          await tx.projectMember.create({
+            data: {
+              projectId: created.id,
+              accountId: m.accountId,
+              role: m.role || "MEMBER",
+              addedBy: accountId,
+            },
+          }).catch((err) => {
+            console.warn(`[project.controller] Skip duplicate member ${m.accountId}:`, err);
+          });
+        }
+      }
 
       // Auto-create a default pipeline with 3 stages
       const pipeline = await tx.projectPipeline.create({
@@ -155,10 +225,113 @@ export async function createProject(req: Request, res: Response) {
         ],
       });
 
-      return created;
+      // Add custom fields if provided
+      if (Array.isArray(customFields) && customFields.length > 0) {
+        for (let idx = 0; idx < customFields.length; idx++) {
+          const cf = customFields[idx];
+          if (!cf.name || !cf.fieldType) continue;
+          let optionsData = cf.options || null;
+          if (cf.value !== undefined) {
+            optionsData = {
+              options: Array.isArray(cf.options) ? cf.options : null,
+              value: cf.value,
+            };
+          }
+          await tx.projectCustomField.create({
+            data: {
+              projectId: created.id,
+              name: cf.name.trim(),
+              fieldType: cf.fieldType,
+              options: optionsData,
+              order: idx,
+              required: cf.required ?? false,
+              isActive: cf.isActive ?? true,
+            },
+          }).catch((err) => {
+            console.warn(`[project.controller] Skip duplicate custom field ${cf.name}:`, err);
+          });
+        }
+      }
+
+      // Add attachments passed as JSON objects if provided
+      if (Array.isArray(attachments) && attachments.length > 0) {
+        for (const att of attachments) {
+          if (!att?.name || !att?.url) continue;
+          await tx.projectAttachment.create({
+            data: {
+              projectId: created.id,
+              name: att.name,
+              source: "UPLOAD",
+              url: att.url,
+              mimeType: att.mimeType || null,
+              sizeBytes: att.sizeBytes ? Number(att.sizeBytes) : null,
+              uploadedBy: accountId,
+            },
+          }).catch((err) => {
+            console.warn(`[project.controller] Skip attachment error ${att.name}:`, err);
+          });
+        }
+      }
+
+      // Handle files uploaded via FormData (req.files) during project creation
+      if (req.files && Array.isArray(req.files) && req.files.length > 0) {
+        for (const file of req.files as Express.Multer.File[]) {
+          const ext = path.extname(file.originalname).replace(".", "").toLowerCase() || "other";
+          const relativeUrl = `/storage/projectAttachment/${ext}/${file.filename}`;
+          await tx.projectAttachment.create({
+            data: {
+              projectId: created.id,
+              name: file.originalname,
+              source: "UPLOAD",
+              url: relativeUrl,
+              mimeType: file.mimetype || null,
+              sizeBytes: file.size ? Number(file.size) : null,
+              uploadedBy: accountId,
+            },
+          }).catch((err) => {
+            console.warn(`[project.controller] Skip file upload error ${file.originalname}:`, err);
+          });
+        }
+      }
+
+      // Return complete created project with relations
+      return tx.project.findUnique({
+        where: { id: created.id },
+        include: {
+          members: {
+            include: {
+              account: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  avatar: true,
+                  designation: true,
+                },
+              },
+            },
+          },
+          customFields: true,
+          attachments: { where: { deletedAt: null } },
+          pipeline: {
+            include: {
+              steps: {
+                orderBy: { order: "asc" },
+              },
+            },
+          },
+        },
+      });
     });
 
-    sendSuccessResponse(res, 201, "Project created successfully", project);
+    const responseData = project
+      ? {
+          ...project,
+          customFields: formatCustomFields(project.customFields),
+        }
+      : project;
+
+    sendSuccessResponse(res, 201, "Project created successfully", responseData);
   } catch (error: any) {
     console.error("[project.controller] createProject:", error);
     sendErrorResponse(res, 500, error.message || "Failed to create project");
@@ -254,6 +427,8 @@ export async function getProjectById(req: Request, res: Response) {
             },
           },
         },
+        customFields: true,
+        attachments: { where: { deletedAt: null } },
         _count: {
           select: { tasks: true, members: true },
         },
@@ -270,6 +445,7 @@ export async function getProjectById(req: Request, res: Response) {
 
     sendSuccessResponse(res, 200, "Project fetched", {
       ...project,
+      customFields: formatCustomFields(project.customFields),
       progress: computeProgress(allTasksForProgress),
     });
   } catch (error) {
@@ -283,7 +459,13 @@ export async function getProjectById(req: Request, res: Response) {
 ========================================================= */
 export async function updateProject(req: Request, res: Response) {
   try {
+    const user = (req as any).user;
+    const accountId = await getAccountIdFromReqUser(user);
+
     const { id } = req.params;
+    const existing = await prisma.project.findFirst({ where: { id, deletedAt: null } });
+    if (!existing) return sendErrorResponse(res, 404, "Project not found");
+
     const allowedFields = [
       "name", "description", "status", "visibility",
       "startDate", "endDate", "color", "icon", "coverUrl",
@@ -300,14 +482,7 @@ export async function updateProject(req: Request, res: Response) {
       }
     }
 
-    // Status transition timestamps — check existing record to avoid overwriting
-    const existingForStatus = await prisma.project.findFirst({
-      where: { id, deletedAt: null },
-      select: { startedAt: true },
-    });
-    if (!existingForStatus) return sendErrorResponse(res, 404, "Project not found");
-
-    if (data.status === "ACTIVE" && !existingForStatus.startedAt) {
+    if (data.status === "ACTIVE" && !existing.startedAt) {
       data.startedAt = new Date();
     } else if (data.status === "COMPLETED") {
       data.completedAt = new Date();
@@ -315,19 +490,148 @@ export async function updateProject(req: Request, res: Response) {
       data.cancelledAt = new Date();
     }
 
-    const existing = await prisma.project.findFirst({ where: { id, deletedAt: null } });
-    if (!existing) return sendErrorResponse(res, 404, "Project not found");
+    let members = req.body.members;
+    if (typeof members === "string") {
+      try { members = JSON.parse(members); } catch { members = undefined; }
+    }
 
-    const updated = await prisma.project.update({
-      where: { id },
-      data,
+    let customFields = req.body.customFields;
+    if (typeof customFields === "string") {
+      try { customFields = JSON.parse(customFields); } catch { customFields = undefined; }
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const proj = await tx.project.update({
+        where: { id },
+        data,
+      });
+
+      // Update members if provided
+      if (Array.isArray(members)) {
+        const existingMembers = await tx.projectMember.findMany({ where: { projectId: id } });
+        const existingMap = new Map(existingMembers.map((m) => [m.accountId, m]));
+        const targetAccountIds = new Set(members.map((m: any) => m.accountId).filter(Boolean));
+
+        // Delete members not in target list (except OWNER)
+        for (const em of existingMembers) {
+          if (!targetAccountIds.has(em.accountId) && em.role !== "OWNER") {
+            await tx.projectMember.delete({ where: { id: em.id } }).catch(() => {});
+          }
+        }
+
+        // Upsert target members
+        for (const m of members) {
+          if (!m.accountId) continue;
+          const em = existingMap.get(m.accountId);
+          if (em) {
+            if (em.role !== "OWNER" && m.role && em.role !== m.role) {
+              await tx.projectMember.update({
+                where: { id: em.id },
+                data: { role: m.role },
+              }).catch(() => {});
+            }
+          } else {
+            await tx.projectMember.create({
+              data: {
+                projectId: id,
+                accountId: m.accountId,
+                role: m.role || "MEMBER",
+                addedBy: accountId || existing.createdBy,
+              },
+            }).catch(() => {});
+          }
+        }
+      }
+
+      // Update custom fields if provided
+      if (Array.isArray(customFields)) {
+        await tx.projectCustomField.deleteMany({ where: { projectId: id } }).catch(() => {});
+        for (let idx = 0; idx < customFields.length; idx++) {
+          const cf = customFields[idx];
+          if (!cf.name || !cf.fieldType) continue;
+          let optionsData = cf.options || null;
+          if (cf.value !== undefined) {
+            optionsData = {
+              options: Array.isArray(cf.options) ? cf.options : null,
+              value: cf.value,
+            };
+          }
+          await tx.projectCustomField.create({
+            data: {
+              projectId: id,
+              name: cf.name.trim(),
+              fieldType: cf.fieldType,
+              options: optionsData,
+              order: idx,
+              required: cf.required ?? false,
+              isActive: cf.isActive ?? true,
+            },
+          }).catch(() => {});
+        }
+      }
+
+      // Upload new attachment files if provided via req.files
+      if (req.files && Array.isArray(req.files) && req.files.length > 0) {
+        for (const file of req.files as Express.Multer.File[]) {
+          const ext = path.extname(file.originalname).replace(".", "").toLowerCase() || "other";
+          const relativeUrl = `/storage/projectAttachment/${ext}/${file.filename}`;
+          await tx.projectAttachment.create({
+            data: {
+              projectId: id,
+              name: file.originalname,
+              source: "UPLOAD",
+              url: relativeUrl,
+              mimeType: file.mimetype || null,
+              sizeBytes: file.size ? Number(file.size) : null,
+              uploadedBy: accountId || existing.createdBy,
+            },
+          }).catch((err) => {
+            console.warn(`[project.controller] Skip edit attachment file error ${file.originalname}:`, err);
+          });
+        }
+      }
+
+      return tx.project.findUnique({
+        where: { id },
+        include: {
+          members: {
+            include: {
+              account: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  avatar: true,
+                  designation: true,
+                },
+              },
+            },
+          },
+          customFields: true,
+          attachments: { where: { deletedAt: null } },
+          pipeline: {
+            include: {
+              steps: {
+                orderBy: { order: "asc" },
+              },
+            },
+          },
+        },
+      });
     });
 
-    sendSuccessResponse(res, 200, "Project updated", updated);
+    const responseData = updated
+      ? {
+          ...updated,
+          customFields: formatCustomFields(updated.customFields),
+        }
+      : updated;
+
+    sendSuccessResponse(res, 200, "Project updated successfully", responseData);
   } catch (error: any) {
     console.error("[project.controller] updateProject:", error);
     if (error.code === "P2025") return sendErrorResponse(res, 404, "Project not found");
-    sendErrorResponse(res, 500, "Failed to update project");
+    sendErrorResponse(res, 500, error.message || "Failed to update project");
   }
 }
 
@@ -338,6 +642,7 @@ export async function deleteProject(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const user = (req as any).user;
+    const accountId = await getAccountIdFromReqUser(user);
 
     const existing = await prisma.project.findFirst({
       where: { id, deletedAt: null },
@@ -348,7 +653,7 @@ export async function deleteProject(req: Request, res: Response) {
       where: { id },
       data: {
         deletedAt: new Date(),
-        deletedBy: user.id,
+        deletedBy: accountId || user?.id,
         status: "ARCHIVED",
       },
     });
@@ -367,6 +672,7 @@ export async function addProjectMember(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const user = (req as any).user;
+    const addedByAccountId = await getAccountIdFromReqUser(user);
     const { accountId, role = "MEMBER" } = req.body;
 
     if (!accountId) return sendErrorResponse(res, 400, "accountId is required");
@@ -385,7 +691,7 @@ export async function addProjectMember(req: Request, res: Response) {
         projectId: id,
         accountId,
         role,
-        addedBy: user.id,
+        addedBy: addedByAccountId || user?.id,
       },
       update: { role },
       include: {

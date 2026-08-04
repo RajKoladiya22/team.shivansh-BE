@@ -117,6 +117,19 @@ export function initIo(server: http.Server) {
       socket.leave(`task:${taskId}`);
     });
 
+    /* ── PROJECT ROOM (project detail page) ───────────────────── */
+    socket.on("project:join", (projectId: string) => {
+      if (!projectId) return;
+      socket.join(`project:${projectId}`);
+      console.log(`📡 ${socket.id} joined project:${projectId}`);
+    });
+
+    socket.on("project:leave", (projectId: string) => {
+      if (!projectId) return;
+      socket.leave(`project:${projectId}`);
+      console.log(`📡 ${socket.id} left project:${projectId}`);
+    });
+
     socket.on("disconnect", (reason) => {
       console.log("❌ socket disconnected:", socket.id, reason);
     });

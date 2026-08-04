@@ -107,6 +107,7 @@ model Account {
   checkLogs                 CheckLog[]
   projectMembers            ProjectMember[]
   taskComments              TaskComment[]
+  projectComments           ProjectComment[]
   commentMentions           CommentMention[]
   taskWatchers              TaskWatcher[]
   taskTimeEntries           TaskTimeEntry[]
@@ -661,6 +662,7 @@ model Project {
   activity     ActivityLog[]
   attachments  ProjectAttachment[]
   customFields ProjectCustomField[]
+  comments     ProjectComment[]
 
   @@index([status])
   @@index([deletedAt])
@@ -706,6 +708,26 @@ model ProjectAttachment {
   deletedAt  DateTime?
 
   @@index([projectId])
+  @@index([deletedAt])
+}
+
+model ProjectComment {
+  id String @id @default(uuid())
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+
+  author   Account @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  authorId String
+
+  content String
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([projectId])
+  @@index([authorId])
   @@index([deletedAt])
 }
 
