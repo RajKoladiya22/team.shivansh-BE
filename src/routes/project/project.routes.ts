@@ -41,8 +41,8 @@ router.use(requireAuth);
 router.get("/", listProjects);
 router.post("/", requireRole("ADMIN"), projectAttachmentUpload.array("attachmentFiles", 20), createProject);
 router.get("/:id", getProjectById);
-router.patch("/:id", requireRole("ADMIN"), projectAttachmentUpload.array("attachmentFiles", 20), updateProject);
-router.delete("/:id", requireRole("ADMIN"), deleteProject);
+router.patch("/:id", projectAttachmentUpload.array("attachmentFiles", 20), updateProject);
+router.delete("/:id", deleteProject);
 
 // ── Stats ───────────────────────────────────────────────────
 router.get("/:id/stats", getProjectStats);
@@ -62,10 +62,10 @@ router.get("/:id/attachments", listProjectAttachments);
 router.delete("/:id/attachments/:attachmentId", deleteProjectAttachment);
 
 // ── Custom Fields ───────────────────────────────────────────
-router.post("/:id/custom-fields", requireRole("ADMIN"), createProjectCustomField);
+router.post("/:id/custom-fields", createProjectCustomField);
 router.get("/:id/custom-fields", listProjectCustomFields);
-router.patch("/:id/custom-fields/:fieldId", requireRole("ADMIN"), updateProjectCustomField);
-router.delete("/:id/custom-fields/:fieldId", requireRole("ADMIN"), deleteProjectCustomField);
+router.patch("/:id/custom-fields/:fieldId", updateProjectCustomField);
+router.delete("/:id/custom-fields/:fieldId", deleteProjectCustomField);
 
 // ── Comments ────────────────────────────────────────────────
 router.get("/:id/comments", listProjectComments);

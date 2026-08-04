@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { prisma } from "../../config/database.config";
 import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpResponse";
+import { getCallerProjectRole } from "./project.controller";
 
 /** Upload a project attachment file to src/storage/projectAttachment/<ext>/<filename> */
 export async function uploadProjectAttachmentFile(req: Request, res: Response) {
@@ -31,6 +32,11 @@ export async function uploadProjectAttachmentFile(req: Request, res: Response) {
 export async function addProjectAttachment(req: Request, res: Response) {
   try {
     const { id: projectId } = req.params;
+
+    const { isFullAccess } = await getCallerProjectRole(projectId, (req as any).user);
+    if (!isFullAccess) {
+      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can add attachments");
+    }
 
     const project = await prisma.project.findUnique({
       where: { id: projectId, deletedAt: null },
@@ -110,6 +116,11 @@ export async function listProjectAttachments(req: Request, res: Response) {
 export async function deleteProjectAttachment(req: Request, res: Response) {
   try {
     const { id: projectId, attachmentId } = req.params;
+
+    const { isFullAccess } = await getCallerProjectRole(projectId, (req as any).user);
+    if (!isFullAccess) {
+      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can delete attachments");
+    }
 
     const attachment = await prisma.projectAttachment.findFirst({
       where: { id: attachmentId, projectId },

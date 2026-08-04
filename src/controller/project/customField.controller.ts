@@ -1,11 +1,17 @@
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpResponse";
+import { getCallerProjectRole } from "./project.controller";
 
 export async function createProjectCustomField(req: Request, res: Response) {
   try {
     const { id: projectId } = req.params;
     const { name, fieldType, options, order, required, isActive } = req.body;
+
+    const { isFullAccess } = await getCallerProjectRole(projectId, (req as any).user);
+    if (!isFullAccess) {
+      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can create custom fields");
+    }
 
     if (!name || !fieldType) {
       return sendErrorResponse(res, 400, "Name and fieldType are required");
@@ -61,6 +67,11 @@ export async function updateProjectCustomField(req: Request, res: Response) {
     const { id: projectId, fieldId } = req.params;
     const { name, fieldType, options, order, required, isActive } = req.body;
 
+    const { isFullAccess } = await getCallerProjectRole(projectId, (req as any).user);
+    if (!isFullAccess) {
+      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can update custom fields");
+    }
+
     const existing = await prisma.projectCustomField.findFirst({
       where: { id: fieldId, projectId },
     });
@@ -93,6 +104,11 @@ export async function updateProjectCustomField(req: Request, res: Response) {
 export async function deleteProjectCustomField(req: Request, res: Response) {
   try {
     const { id: projectId, fieldId } = req.params;
+
+    const { isFullAccess } = await getCallerProjectRole(projectId, (req as any).user);
+    if (!isFullAccess) {
+      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can delete custom fields");
+    }
 
     const existing = await prisma.projectCustomField.findFirst({
       where: { id: fieldId, projectId },

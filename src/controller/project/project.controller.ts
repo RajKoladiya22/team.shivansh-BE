@@ -492,6 +492,11 @@ export async function updateProject(req: Request, res: Response) {
     const existing = await prisma.project.findFirst({ where: { id, deletedAt: null } });
     if (!existing) return sendErrorResponse(res, 404, "Project not found");
 
+    const { isFullAccess } = await getCallerProjectRole(id, user);
+    if (!isFullAccess) {
+      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can update this project");
+    }
+
     const allowedFields = [
       "name", "description", "status", "visibility",
       "startDate", "endDate", "color", "icon", "coverUrl",
@@ -696,6 +701,11 @@ export async function deleteProject(req: Request, res: Response) {
     });
     if (!existing) return sendErrorResponse(res, 404, "Project not found");
 
+    const { isFullAccess } = await getCallerProjectRole(id, user);
+    if (!isFullAccess) {
+      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can delete this project");
+    }
+
     await prisma.project.update({
       where: { id },
       data: {
@@ -715,21 +725,24 @@ export async function deleteProject(req: Request, res: Response) {
 /* =========================================================
    HELPER: Get Caller's Project Membership & Role
 ========================================================= */
-async function getCallerProjectRole(projectId: string, user: any): Promise<{ isAdmin: boolean; callerAccountId: string | null; role: string | null }> {
+export async function getCallerProjectRole(projectId: string, user: any): Promise<{ isAdmin: boolean; callerAccountId: string | null; role: string | null; isFullAccess: boolean }> {
   const isAdmin = Boolean(
     user?.roles?.includes("ADMIN") ||
     user?.role === "ADMIN" ||
     (Array.isArray(user?.roles) && user.roles.some((r: string) => r.toUpperCase() === "ADMIN"))
   );
   const callerAccountId = await getAccountIdFromReqUser(user);
-  if (!callerAccountId) return { isAdmin, callerAccountId: null, role: null };
+  if (!callerAccountId) return { isAdmin, callerAccountId: null, role: null, isFullAccess: isAdmin };
 
   const member = await prisma.projectMember.findUnique({
     where: { projectId_accountId: { projectId, accountId: callerAccountId } },
     select: { role: true },
   });
 
-  return { isAdmin, callerAccountId, role: member?.role || null };
+  const role = member?.role || null;
+  const isFullAccess = isAdmin || role === "OWNER" || role === "MANAGER";
+
+  return { isAdmin, callerAccountId, role, isFullAccess };
 }
 
 /* =========================================================
@@ -739,9 +752,9 @@ export async function addProjectMember(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const user = (req as any).user;
-    const { isAdmin, callerAccountId, role: callerRole } = await getCallerProjectRole(id, user);
+    const { isAdmin, callerAccountId, role: callerRole, isFullAccess } = await getCallerProjectRole(id, user);
 
-    if (!isAdmin && callerRole !== "OWNER" && callerRole !== "MANAGER") {
+    if (!isFullAccess) {
       return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can add members");
     }
 
