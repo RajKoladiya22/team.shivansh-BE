@@ -31,11 +31,6 @@ export async function uploadProjectAttachmentFile(req: Request, res: Response) {
 export async function addProjectAttachment(req: Request, res: Response) {
   try {
     const { id: projectId } = req.params;
-    const { name, source, url, mimeType, sizeBytes, meta } = req.body;
-
-    if (!name || !url) {
-      return sendErrorResponse(res, 400, "Name and URL are required");
-    }
 
     const project = await prisma.project.findUnique({
       where: { id: projectId, deletedAt: null },
@@ -44,20 +39,45 @@ export async function addProjectAttachment(req: Request, res: Response) {
       return sendErrorResponse(res, 404, "Project not found");
     }
 
-    const attachment = await prisma.projectAttachment.create({
-      data: {
-        projectId,
-        name,
-        source: source || "UPLOAD",
-        url,
-        mimeType: mimeType || null,
-        sizeBytes: sizeBytes ? Number(sizeBytes) : null,
-        meta: meta || null,
-        uploadedBy: req.user?.accountId ?? null,
-      },
-    });
+    const items = Array.isArray(req.body.attachments)
+      ? req.body.attachments
+      : [req.body];
 
-    return sendSuccessResponse(res, 201, "Attachment added to project", attachment);
+    const createdList: any[] = [];
+    for (const item of items) {
+      const { name, source, url, mimeType, sizeBytes, meta, description } = item;
+      if (!name || !url) continue;
+
+      const metaObj = (typeof meta === "object" && meta !== null) ? { ...meta } : {};
+      if (description) {
+        metaObj.description = String(description).trim();
+      }
+
+      const att = await prisma.projectAttachment.create({
+        data: {
+          projectId,
+          name,
+          source: source || "UPLOAD",
+          url,
+          mimeType: mimeType || null,
+          sizeBytes: sizeBytes ? Number(sizeBytes) : null,
+          meta: Object.keys(metaObj).length > 0 ? metaObj : null,
+          uploadedBy: req.user?.accountId ?? null,
+        },
+      });
+      createdList.push(att);
+    }
+
+    if (createdList.length === 0) {
+      return sendErrorResponse(res, 400, "Valid name and URL are required");
+    }
+
+    return sendSuccessResponse(
+      res,
+      201,
+      createdList.length === 1 ? "Attachment added to project" : "Attachments added to project",
+      createdList.length === 1 ? createdList[0] : createdList
+    );
   } catch (err: any) {
     console.error("[addProjectAttachment]", err);
     return sendErrorResponse(res, 500, err.message || "Failed to add attachment");

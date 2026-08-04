@@ -51,9 +51,9 @@ router.get("/:id/stats", getProjectStats);
 router.get("/:id/tasks", getProjectTasks);
 
 // ── Members ─────────────────────────────────────────────────
-router.post("/:id/members", requireRole("ADMIN"), addProjectMember);
-router.patch("/:id/members/:accountId", requireRole("ADMIN"), updateProjectMember);
-router.delete("/:id/members/:accountId", requireRole("ADMIN"), removeProjectMember);
+router.post("/:id/members", addProjectMember);
+router.patch("/:id/members/:accountId", updateProjectMember);
+router.delete("/:id/members/:accountId", removeProjectMember);
 
 // ── Attachments ─────────────────────────────────────────────
 router.post("/attachments/upload", projectAttachmentUpload.single("file"), uploadProjectAttachmentFile);

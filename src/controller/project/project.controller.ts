@@ -257,6 +257,10 @@ export async function createProject(req: Request, res: Response) {
       if (Array.isArray(attachments) && attachments.length > 0) {
         for (const att of attachments) {
           if (!att?.name || !att?.url) continue;
+          const metaObj = (typeof att.meta === "object" && att.meta !== null) ? { ...att.meta } : {};
+          if (att.description) {
+            metaObj.description = String(att.description).trim();
+          }
           await tx.projectAttachment.create({
             data: {
               projectId: created.id,
@@ -265,6 +269,7 @@ export async function createProject(req: Request, res: Response) {
               url: att.url,
               mimeType: att.mimeType || null,
               sizeBytes: att.sizeBytes ? Number(att.sizeBytes) : null,
+              meta: Object.keys(metaObj).length > 0 ? metaObj : null,
               uploadedBy: accountId,
             },
           }).catch((err) => {
@@ -275,9 +280,29 @@ export async function createProject(req: Request, res: Response) {
 
       // Handle files uploaded via FormData (req.files) during project creation
       if (req.files && Array.isArray(req.files) && req.files.length > 0) {
-        for (const file of req.files as Express.Multer.File[]) {
+        let attachmentDescriptions: any[] = [];
+        if (req.body.attachmentDescriptions) {
+          try {
+            attachmentDescriptions = typeof req.body.attachmentDescriptions === "string"
+              ? JSON.parse(req.body.attachmentDescriptions)
+              : req.body.attachmentDescriptions;
+          } catch {
+            attachmentDescriptions = [];
+          }
+        }
+
+        const filesArr = req.files as Express.Multer.File[];
+        for (let i = 0; i < filesArr.length; i++) {
+          const file = filesArr[i];
           const ext = path.extname(file.originalname).replace(".", "").toLowerCase() || "other";
           const relativeUrl = `/storage/projectAttachment/${ext}/${file.filename}`;
+
+          const descItem = Array.isArray(attachmentDescriptions)
+            ? attachmentDescriptions.find((d: any) => d?.name === file.originalname) || attachmentDescriptions[i]
+            : null;
+          const descText = typeof descItem === "string" ? descItem : descItem?.description;
+          const metaObj = descText ? { description: String(descText).trim() } : null;
+
           await tx.projectAttachment.create({
             data: {
               projectId: created.id,
@@ -286,6 +311,7 @@ export async function createProject(req: Request, res: Response) {
               url: relativeUrl,
               mimeType: file.mimetype || null,
               sizeBytes: file.size ? Number(file.size) : null,
+              meta: metaObj || undefined,
               uploadedBy: accountId,
             },
           }).catch((err) => {
@@ -572,9 +598,29 @@ export async function updateProject(req: Request, res: Response) {
 
       // Upload new attachment files if provided via req.files
       if (req.files && Array.isArray(req.files) && req.files.length > 0) {
-        for (const file of req.files as Express.Multer.File[]) {
+        let attachmentDescriptions: any[] = [];
+        if (req.body.attachmentDescriptions) {
+          try {
+            attachmentDescriptions = typeof req.body.attachmentDescriptions === "string"
+              ? JSON.parse(req.body.attachmentDescriptions)
+              : req.body.attachmentDescriptions;
+          } catch {
+            attachmentDescriptions = [];
+          }
+        }
+
+        const filesArr = req.files as Express.Multer.File[];
+        for (let i = 0; i < filesArr.length; i++) {
+          const file = filesArr[i];
           const ext = path.extname(file.originalname).replace(".", "").toLowerCase() || "other";
           const relativeUrl = `/storage/projectAttachment/${ext}/${file.filename}`;
+
+          const descItem = Array.isArray(attachmentDescriptions)
+            ? attachmentDescriptions.find((d: any) => d?.name === file.originalname) || attachmentDescriptions[i]
+            : null;
+          const descText = typeof descItem === "string" ? descItem : descItem?.description;
+          const metaObj = descText ? { description: String(descText).trim() } : null;
+
           await tx.projectAttachment.create({
             data: {
               projectId: id,
@@ -583,6 +629,7 @@ export async function updateProject(req: Request, res: Response) {
               url: relativeUrl,
               mimeType: file.mimetype || null,
               sizeBytes: file.size ? Number(file.size) : null,
+              meta: metaObj || undefined,
               uploadedBy: accountId || existing.createdBy,
             },
           }).catch((err) => {
@@ -666,14 +713,47 @@ export async function deleteProject(req: Request, res: Response) {
 }
 
 /* =========================================================
+   HELPER: Get Caller's Project Membership & Role
+========================================================= */
+async function getCallerProjectRole(projectId: string, user: any): Promise<{ isAdmin: boolean; callerAccountId: string | null; role: string | null }> {
+  const isAdmin = Boolean(
+    user?.roles?.includes("ADMIN") ||
+    user?.role === "ADMIN" ||
+    (Array.isArray(user?.roles) && user.roles.some((r: string) => r.toUpperCase() === "ADMIN"))
+  );
+  const callerAccountId = await getAccountIdFromReqUser(user);
+  if (!callerAccountId) return { isAdmin, callerAccountId: null, role: null };
+
+  const member = await prisma.projectMember.findUnique({
+    where: { projectId_accountId: { projectId, accountId: callerAccountId } },
+    select: { role: true },
+  });
+
+  return { isAdmin, callerAccountId, role: member?.role || null };
+}
+
+/* =========================================================
    POST /projects/:id/members  — add member
 ========================================================= */
 export async function addProjectMember(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const user = (req as any).user;
-    const addedByAccountId = await getAccountIdFromReqUser(user);
+    const { isAdmin, callerAccountId, role: callerRole } = await getCallerProjectRole(id, user);
+
+    if (!isAdmin && callerRole !== "OWNER" && callerRole !== "MANAGER") {
+      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can add members");
+    }
+
     const { accountId, role = "MEMBER" } = req.body;
+    const VALID_ROLES = ["OWNER", "MANAGER", "MEMBER", "VIEWER", "REVIEWER"];
+    if (!role || !VALID_ROLES.includes(role)) {
+      return sendErrorResponse(res, 400, `role must be one of: ${VALID_ROLES.join(", ")}`);
+    }
+
+    if (!isAdmin && callerRole === "MANAGER" && role === "OWNER") {
+      return sendErrorResponse(res, 403, "Managers cannot assign Owner role");
+    }
 
     if (!accountId) return sendErrorResponse(res, 400, "accountId is required");
 
@@ -691,7 +771,7 @@ export async function addProjectMember(req: Request, res: Response) {
         projectId: id,
         accountId,
         role,
-        addedBy: addedByAccountId || user?.id,
+        addedBy: callerAccountId || user?.id,
       },
       update: { role },
       include: {
@@ -720,13 +800,29 @@ export async function addProjectMember(req: Request, res: Response) {
 export async function removeProjectMember(req: Request, res: Response) {
   try {
     const { id, accountId } = req.params;
+    const user = (req as any).user;
+    const { isAdmin, role: callerRole } = await getCallerProjectRole(id, user);
+
+    if (!isAdmin && callerRole !== "OWNER" && callerRole !== "MANAGER") {
+      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can remove members");
+    }
 
     const member = await prisma.projectMember.findUnique({
       where: { projectId_accountId: { projectId: id, accountId } },
     });
     if (!member) return sendErrorResponse(res, 404, "Member not found");
+
+    // Enforce role rule: MANAGER cannot remove OWNER
     if (member.role === "OWNER") {
-      return sendErrorResponse(res, 400, "Cannot remove the project owner");
+      if (!isAdmin && callerRole === "MANAGER") {
+        return sendErrorResponse(res, 403, "Managers cannot remove the Project Owner");
+      }
+      const ownerCount = await prisma.projectMember.count({
+        where: { projectId: id, role: "OWNER" },
+      });
+      if (ownerCount <= 1) {
+        return sendErrorResponse(res, 400, "Cannot remove the last project owner");
+      }
     }
 
     await prisma.projectMember.delete({
@@ -747,8 +843,14 @@ export async function updateProjectMember(req: Request, res: Response) {
   try {
     const { id, accountId } = req.params;
     const { role } = req.body;
+    const user = (req as any).user;
+    const { isAdmin, role: callerRole } = await getCallerProjectRole(id, user);
 
-    const VALID_ROLES = ["OWNER", "MANAGER", "MEMBER", "VIEWER"];
+    if (!isAdmin && callerRole !== "OWNER" && callerRole !== "MANAGER") {
+      return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can edit member roles");
+    }
+
+    const VALID_ROLES = ["OWNER", "MANAGER", "MEMBER", "VIEWER", "REVIEWER"];
     if (!role || !VALID_ROLES.includes(role)) {
       return sendErrorResponse(res, 400, `role must be one of: ${VALID_ROLES.join(", ")}`);
     }
@@ -757,13 +859,24 @@ export async function updateProjectMember(req: Request, res: Response) {
       where: { projectId_accountId: { projectId: id, accountId } },
     });
     if (!member) return sendErrorResponse(res, 404, "Member not found");
+
+    // Enforce role rule: MANAGER cannot change OWNER's role
+    if (member.role === "OWNER" && !isAdmin && callerRole === "MANAGER") {
+      return sendErrorResponse(res, 403, "Managers cannot modify the Project Owner's role");
+    }
+
+    // Enforce role rule: MANAGER cannot assign OWNER role
+    if (role === "OWNER" && !isAdmin && callerRole === "MANAGER") {
+      return sendErrorResponse(res, 403, "Managers cannot promote members to Owner");
+    }
+
     if (member.role === "OWNER" && role !== "OWNER") {
       // Count remaining owners before demoting
       const ownerCount = await prisma.projectMember.count({
         where: { projectId: id, role: "OWNER" },
       });
       if (ownerCount <= 1) {
-        return sendErrorResponse(res, 400, "Cannot remove the last project owner");
+        return sendErrorResponse(res, 400, "Cannot remove or demote the last project owner");
       }
     }
 
