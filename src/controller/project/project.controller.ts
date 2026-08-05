@@ -162,7 +162,7 @@ export async function listProjects(req: Request, res: Response) {
             select: { id: true, status: true },
           },
           _count: {
-            select: { tasks: true, members: true },
+            select: { tasks: true, members: true, comments: true },
           },
         },
       }),
