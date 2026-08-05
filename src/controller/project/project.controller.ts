@@ -528,6 +528,7 @@ export async function getProjectById(req: Request, res: Response) {
             remark: true,
             status: true,
             createdAt: true,
+            states: true,
           },
         },
         customer: {
