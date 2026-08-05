@@ -1229,6 +1229,15 @@ export async function getMyLeadById(req: Request, res: Response) {
             customerCategory: true,
           },
         },
+        projects: {
+          select: {
+            id: true,
+            name: true,
+            icon: true,
+            status: true,
+            _count: { select: { tasks: true, members: true } },
+          },
+        },
       },
     });
 
