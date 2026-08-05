@@ -664,10 +664,18 @@ model Project {
   customFields ProjectCustomField[]
   comments     ProjectComment[]
 
+  // Link to Lead & Customer
+  leadId     String?
+  lead       Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
   @@index([status])
   @@index([deletedAt])
   @@index([createdBy])
   @@index([visibility])
+  @@index([leadId])
+  @@index([customerId])
 }
 
 model ProjectMember {
@@ -1324,6 +1332,7 @@ model Lead {
   quotations       Quotation[]
   customerProducts CustomerProduct[]
   cloudServices    CloudService[]
+  projects         Project[]
 
   @@index([isWorking])
   @@index([createdAt, status])
@@ -1515,6 +1524,7 @@ model Customer {
   quotations    Quotation[]
   cloudServices CloudService[]
   supports      Support[]
+  projects      Project[]
 
   portalTokens        CustomerPortalToken[]
   portalAuditLogs     CustomerPortalAuditLog[]

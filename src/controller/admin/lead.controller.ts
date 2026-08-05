@@ -2021,6 +2021,28 @@ export async function getLeadByIdAdmin(req: Request, res: Response) {
             customerProducts: true,
           },
         },
+        projects: {
+          where: { deletedAt: null },
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            name: true,
+            status: true,
+            visibility: true,
+            startDate: true,
+            endDate: true,
+            color: true,
+            icon: true,
+            createdAt: true,
+            tasks: {
+              where: { deletedAt: null },
+              select: { id: true, status: true },
+            },
+            _count: {
+              select: { tasks: true, members: true },
+            },
+          },
+        },
       },
     });
 

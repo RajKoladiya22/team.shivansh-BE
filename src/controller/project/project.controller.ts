@@ -124,6 +124,26 @@ export async function listProjects(req: Request, res: Response) {
         take: Number(limit),
         orderBy: { createdAt: "desc" },
         include: {
+          lead: {
+            select: {
+              id: true,
+              customerName: true,
+              mobileNumber: true,
+              customerCompanyName: true,
+              productTitle: true,
+              cost: true,
+              status: true,
+            },
+          },
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              customerCompanyName: true,
+              mobile: true,
+              email: true,
+            },
+          },
           members: {
             include: {
               account: {
@@ -190,7 +210,20 @@ export async function createProject(req: Request, res: Response) {
       endDate,
       color,
       icon,
+      leadId,
+      customerId: inputCustomerId,
     } = req.body;
+
+    let finalCustomerId = inputCustomerId;
+    if (leadId && !finalCustomerId) {
+      const linkedLead = await prisma.lead.findUnique({
+        where: { id: leadId },
+        select: { customerId: true },
+      });
+      if (linkedLead?.customerId) {
+        finalCustomerId = linkedLead.customerId;
+      }
+    }
 
     let members = req.body.members || [];
     if (typeof members === "string") {
@@ -223,6 +256,8 @@ export async function createProject(req: Request, res: Response) {
           color,
           icon,
           createdBy: accountId,
+          leadId: leadId || undefined,
+          customerId: finalCustomerId || undefined,
         },
       });
 
@@ -481,6 +516,32 @@ export async function getProjectById(req: Request, res: Response) {
     const project = await prisma.project.findFirst({
       where: { id, deletedAt: null },
       include: {
+        lead: {
+          select: {
+            id: true,
+            customerName: true,
+            mobileNumber: true,
+            customerCompanyName: true,
+            productTitle: true,
+            product: true,
+            cost: true,
+            remark: true,
+            status: true,
+            createdAt: true,
+          },
+        },
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            customerCompanyName: true,
+            contactPerson: true,
+            mobile: true,
+            email: true,
+            city: true,
+            state: true,
+          },
+        },
         pipeline: {
           include: {
             steps: {
@@ -619,6 +680,7 @@ export async function updateProject(req: Request, res: Response) {
     const allowedFields = [
       "name", "description", "status", "visibility",
       "startDate", "endDate", "color", "icon", "coverUrl",
+      "leadId", "customerId",
     ];
 
     const data: Record<string, any> = {};
@@ -629,6 +691,16 @@ export async function updateProject(req: Request, res: Response) {
         } else {
           data[f] = req.body[f];
         }
+      }
+    }
+
+    if (data.leadId && !data.customerId && !existing.customerId) {
+      const linkedLead = await prisma.lead.findUnique({
+        where: { id: data.leadId },
+        select: { customerId: true },
+      });
+      if (linkedLead?.customerId) {
+        data.customerId = linkedLead.customerId;
       }
     }
 
