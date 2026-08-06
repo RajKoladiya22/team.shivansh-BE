@@ -203,10 +203,38 @@ export async function listProjects(req: Request, res: Response) {
       prisma.project.count({ where }),
     ]);
 
-    const data = projects.map((p) => ({
-      ...p,
-      progress: computeProgress(p.tasks),
-    }));
+    const createdByIds = Array.from(
+      new Set(projects.map((p) => p.createdBy).filter(Boolean))
+    ) as string[];
+    const creatorAccounts =
+      createdByIds.length > 0
+        ? await prisma.account.findMany({
+            where: { id: { in: createdByIds } },
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              avatar: true,
+              designation: true,
+            },
+          })
+        : [];
+    const creatorMap = new Map(creatorAccounts.map((a) => [a.id, a]));
+
+    const data = projects.map((p) => {
+      const creatorAcc = p.createdBy ? creatorMap.get(p.createdBy) : null;
+      const memberCreator =
+        !creatorAcc && p.createdBy
+          ? p.members?.find((m) => m.accountId === p.createdBy)?.account
+          : null;
+      const creator = creatorAcc || memberCreator || null;
+
+      return {
+        ...p,
+        creator,
+        progress: computeProgress(p.tasks),
+      };
+    });
 
     sendSuccessResponse(res, 200, "Projects fetched", {
       data,
