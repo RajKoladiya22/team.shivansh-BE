@@ -83,6 +83,11 @@ export async function listProjects(req: Request, res: Response) {
       status,
       search,
       visibility,
+      createdBy,
+      createdFrom,
+      createdTo,
+      completedFrom,
+      completedTo,
     } = req.query;
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -112,10 +117,39 @@ export async function listProjects(req: Request, res: Response) {
       ...accessWhere,
       ...(status && { status }),
       ...(visibility && { visibility }),
+      ...(createdBy && { createdBy: String(createdBy) }),
       ...(search && {
         name: { contains: String(search), mode: "insensitive" },
       }),
     };
+
+    if (createdFrom || createdTo) {
+      where.createdAt = {};
+      if (createdFrom) {
+        const d = new Date(createdFrom as string);
+        d.setHours(0, 0, 0, 0);
+        where.createdAt.gte = d;
+      }
+      if (createdTo) {
+        const d = new Date(createdTo as string);
+        d.setHours(23, 59, 59, 999);
+        where.createdAt.lte = d;
+      }
+    }
+
+    if (completedFrom || completedTo) {
+      where.completedAt = {};
+      if (completedFrom) {
+        const d = new Date(completedFrom as string);
+        d.setHours(0, 0, 0, 0);
+        where.completedAt.gte = d;
+      }
+      if (completedTo) {
+        const d = new Date(completedTo as string);
+        d.setHours(23, 59, 59, 999);
+        where.completedAt.lte = d;
+      }
+    }
 
     const [projects, total] = await Promise.all([
       prisma.project.findMany({
