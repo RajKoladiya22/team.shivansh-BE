@@ -93,7 +93,12 @@ export async function listProjects(req: Request, res: Response) {
     const skip = (Number(page) - 1) * Number(limit);
     const user = (req as any).user;
     const accountId = await getAccountIdFromReqUser(user);
-    const isAdmin = user?.role === "ADMIN" || user?.isSuperAdmin;
+    const isAdmin = Boolean(
+      user?.role === "ADMIN" ||
+      user?.roles?.includes("ADMIN") ||
+      user?.roles?.includes("SUPER_ADMIN") ||
+      user?.isSuperAdmin
+    );
 
     const accessWhere = isAdmin
       ? {}
@@ -698,7 +703,12 @@ export async function getProjectById(req: Request, res: Response) {
 
     const user = (req as any).user;
     const accountId = await getAccountIdFromReqUser(user);
-    const isAdmin = user?.role === "ADMIN" || user?.isSuperAdmin;
+    const isAdmin = Boolean(
+      user?.role === "ADMIN" ||
+      user?.roles?.includes("ADMIN") ||
+      user?.roles?.includes("SUPER_ADMIN") ||
+      user?.isSuperAdmin
+    );
 
     if (!isAdmin && project.visibility === "PRIVATE") {
       const isMember = project.members.some((m) => m.accountId === accountId);
