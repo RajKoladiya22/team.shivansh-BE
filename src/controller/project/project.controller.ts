@@ -156,57 +156,84 @@ export async function listProjects(req: Request, res: Response) {
       }
     }
 
-    const [projects, total] = await Promise.all([
-      prisma.project.findMany({
-        where,
-        skip,
-        take: Number(limit),
-        orderBy: { createdAt: "desc" },
-        include: {
-          lead: {
-            select: {
-              id: true,
-              customerName: true,
-              mobileNumber: true,
-              customerCompanyName: true,
-              productTitle: true,
-              cost: true,
-              status: true,
-            },
-          },
-          customer: {
-            select: {
-              id: true,
-              name: true,
-              customerCompanyName: true,
-              mobile: true,
-              email: true,
-            },
-          },
-          members: {
+    const STATUS_PRIORITY: Record<string, number> = {
+      ACTIVE: 1,
+      ON_HOLD: 2,
+      DRAFT: 3,
+      COMPLETED: 4,
+      CANCELLED: 5,
+      ARCHIVED: 6,
+    };
+
+    const allMatchingProjects = await prisma.project.findMany({
+      where,
+      select: { id: true, status: true, createdAt: true },
+    });
+
+    allMatchingProjects.sort((a, b) => {
+      const pA = STATUS_PRIORITY[a.status] ?? 99;
+      const pB = STATUS_PRIORITY[b.status] ?? 99;
+      if (pA !== pB) return pA - pB;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    const total = allMatchingProjects.length;
+    const pageIds = allMatchingProjects
+      .slice(skip, skip + Number(limit))
+      .map((p) => p.id);
+
+    const projectsUnordered =
+      pageIds.length > 0
+        ? await prisma.project.findMany({
+            where: { id: { in: pageIds } },
             include: {
-              account: {
+              lead: {
                 select: {
                   id: true,
-                  firstName: true,
-                  lastName: true,
-                  avatar: true,
-                  designation: true,
+                  customerName: true,
+                  mobileNumber: true,
+                  customerCompanyName: true,
+                  productTitle: true,
+                  cost: true,
+                  status: true,
                 },
               },
+              customer: {
+                select: {
+                  id: true,
+                  name: true,
+                  customerCompanyName: true,
+                  mobile: true,
+                  email: true,
+                },
+              },
+              members: {
+                include: {
+                  account: {
+                    select: {
+                      id: true,
+                      firstName: true,
+                      lastName: true,
+                      avatar: true,
+                      designation: true,
+                    },
+                  },
+                },
+              },
+              tasks: {
+                where: { deletedAt: null },
+                select: { id: true, status: true },
+              },
+              _count: {
+                select: { tasks: true, members: true, comments: true },
+              },
             },
-          },
-          tasks: {
-            where: { deletedAt: null },
-            select: { id: true, status: true },
-          },
-          _count: {
-            select: { tasks: true, members: true, comments: true },
-          },
-        },
-      }),
-      prisma.project.count({ where }),
-    ]);
+          })
+        : [];
+
+    const projects = pageIds
+      .map((id) => projectsUnordered.find((p) => p.id === id))
+      .filter(Boolean) as typeof projectsUnordered;
 
     const createdByIds = Array.from(
       new Set(projects.map((p) => p.createdBy).filter(Boolean))
