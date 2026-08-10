@@ -167,13 +167,28 @@ export async function listProjects(req: Request, res: Response) {
 
     const allMatchingProjects = await prisma.project.findMany({
       where,
-      select: { id: true, status: true, createdAt: true },
+      select: { id: true, status: true, createdAt: true, endDate: true, completedAt: true },
     });
 
     allMatchingProjects.sort((a, b) => {
       const pA = STATUS_PRIORITY[a.status] ?? 99;
       const pB = STATUS_PRIORITY[b.status] ?? 99;
       if (pA !== pB) return pA - pB;
+
+      if (a.status === "COMPLETED") {
+        if (a.completedAt && b.completedAt) {
+          return new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime();
+        }
+        if (a.completedAt) return -1;
+        if (b.completedAt) return 1;
+      } else {
+        if (a.endDate && b.endDate) {
+          return new Date(a.endDate).getTime() - new Date(b.endDate).getTime();
+        }
+        if (a.endDate) return -1;
+        if (b.endDate) return 1;
+      }
+
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
 
