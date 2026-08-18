@@ -910,9 +910,26 @@ export async function createProject(req: Request, res: Response) {
         }
       }
 
+      // CreatedBy / Ownership transfer permission check: Only the current Project Creator can change createdBy
+      if (req.body.createdBy !== undefined) {
+        const newCreatedBy = req.body.createdBy ? String(req.body.createdBy).trim() : null;
+        if (newCreatedBy && newCreatedBy !== existing.createdBy) {
+          if (!isCreator) {
+            return sendErrorResponse(res, 403, "Only the current Project Creator can change the project owner");
+          }
+          const targetAccount = await prisma.account.findUnique({
+            where: { id: newCreatedBy },
+            select: { id: true, firstName: true, lastName: true },
+          });
+          if (!targetAccount) {
+            return sendErrorResponse(res, 400, "Selected user for project owner was not found");
+          }
+        }
+      }
+
       // General updates permission check: Only Owners, Managers, or Admins
       const reqKeys = Object.keys(req.body);
-      const isOnlyToggle = reqKeys.every((k) => k === "priority" || k === "onWork");
+      const isOnlyToggle = reqKeys.every((k) => k === "priority" || k === "onWork" || k === "createdBy");
       if (!isOnlyToggle && !isFullAccess) {
         return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can update this project");
       }
@@ -920,7 +937,7 @@ export async function createProject(req: Request, res: Response) {
       const allowedFields = [
         "name", "description", "status", "visibility",
         "startDate", "endDate", "color", "icon", "coverUrl",
-        "leadId", "customerId", "priority", "projectType", "onWork",
+        "leadId", "customerId", "priority", "projectType", "onWork", "createdBy",
       ];
 
       const data: Record<string, any> = {};
@@ -932,6 +949,8 @@ export async function createProject(req: Request, res: Response) {
             data[f] = req.body[f] === true || req.body[f] === "true";
           } else if (f === "projectType") {
             data[f] = req.body[f] === "NEW_PROJECT" ? "NEW_PROJECT" : "UPDATES";
+          } else if (f === "createdBy") {
+            data[f] = req.body[f] ? String(req.body[f]).trim() : null;
           } else {
             data[f] = req.body[f];
           }
@@ -1043,6 +1062,31 @@ export async function createProject(req: Request, res: Response) {
           }
         }
 
+        // If ownership changed, ensure new owner has OWNER role and former owner is updated
+        if (data.createdBy && data.createdBy !== existing.createdBy) {
+          // Promote new owner to OWNER
+          await tx.projectMember.upsert({
+            where: { projectId_accountId: { projectId: id, accountId: data.createdBy } },
+            create: {
+              projectId: id,
+              accountId: data.createdBy,
+              role: "OWNER",
+              addedBy: accountId || existing.createdBy,
+            },
+            update: {
+              role: "OWNER",
+            },
+          });
+
+          // Demote former owner to MANAGER if they had OWNER role
+          if (existing.createdBy && existing.createdBy !== data.createdBy) {
+            await tx.projectMember.updateMany({
+              where: { projectId: id, accountId: existing.createdBy, role: "OWNER" },
+              data: { role: "MANAGER" },
+            });
+          }
+        }
+
         // Update custom fields only if provided and changed
         if (customFieldsChanged && Array.isArray(customFields)) {
           await tx.projectCustomField.deleteMany({ where: { projectId: id } }).catch(() => { });
@@ -1141,9 +1185,25 @@ export async function createProject(req: Request, res: Response) {
         });
       });
 
+      let creator: any = null;
+      if (updated?.createdBy) {
+        const creatorAcc = await prisma.account.findUnique({
+          where: { id: updated.createdBy },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            avatar: true,
+            designation: true,
+          },
+        });
+        creator = creatorAcc || updated.members?.find((m: any) => m.accountId === updated.createdBy || m.role === "OWNER")?.account || null;
+      }
+
       const responseData = updated
         ? {
           ...updated,
+          creator,
           customFields: formatCustomFields(updated.customFields),
         }
         : updated;
@@ -1184,7 +1244,28 @@ export async function createProject(req: Request, res: Response) {
           });
         }
 
-        // 3. Description update
+        // 3. Ownership / CreatedBy change
+        if (data.createdBy && data.createdBy !== existing.createdBy) {
+          const newOwnerAcc = await prisma.account.findUnique({
+            where: { id: data.createdBy },
+            select: { firstName: true, lastName: true },
+          });
+          const newOwnerName = `${newOwnerAcc?.firstName || ""} ${newOwnerAcc?.lastName || ""}`.trim() || "User";
+          await logProjectActivity({
+            projectId: id,
+            entityType: "PROJECT",
+            action: "UPDATED",
+            performedBy: accountId,
+            meta: {
+              field: "createdBy",
+              oldValue: existing.createdBy,
+              newValue: data.createdBy,
+              message: `Transferred project ownership to ${newOwnerName}`,
+            },
+          });
+        }
+
+        // 4. Description update
         if (data.description !== undefined && data.description !== existing.description) {
           await logProjectActivity({
             projectId: id,
@@ -1198,7 +1279,7 @@ export async function createProject(req: Request, res: Response) {
           });
         }
 
-        // 4. Other core fields (name, dates, color, icon)
+        // 5. Other core fields (name, dates, color, icon)
         const ignoredKeys = [
           "status",
           "visibility",
@@ -1206,6 +1287,7 @@ export async function createProject(req: Request, res: Response) {
           "startedAt",
           "completedAt",
           "cancelledAt",
+          "createdBy",
         ];
 
         const otherKeys = Object.keys(data).filter((k) => {
