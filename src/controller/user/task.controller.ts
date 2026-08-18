@@ -1404,11 +1404,17 @@ export async function listTasksAdmin(req: Request, res: Response) {
     if (req.query.isLearning === "true") where.isLearning = true;
     if (req.query.isLearning === "false") where.isLearning = false;
 
-    if (status) where.status = status as TaskStatus;
+    const isOverdue = req.query.isOverdue === "true" || req.query.overdue === "true";
+    if (isOverdue) {
+      const now = new Date();
+      where.dueDate = { lt: now };
+      where.status = { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] };
+    } else if (status) {
+      where.status = status as TaskStatus;
+    }
     if (priority) where.priority = priority as TaskPriority;
     if (projectId) where.projectId = projectId;
     if (stepId) where.stepId = stepId;
-
 
     if (isSelfTask === "true") where.isSelfTask = true;
     if (isSelfTask === "false") where.isSelfTask = false;
@@ -1724,13 +1730,12 @@ export async function getTaskStatsAdmin(req: Request, res: Response) {
     const statusCountWhere = { ...where };
     delete statusCountWhere.status;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const now = new Date();
 
     const overdueWhere: any = {
       ...statusCountWhere,
       dueDate: {
-        lt: today,
+        lt: now,
       },
       status: {
         notIn: [
@@ -2219,7 +2224,20 @@ export async function getMyTasksUser(req: Request, res: Response) {
       AND: [],
     };
 
-    if (status) {
+    const isOverdue = req.query.isOverdue === "true" || req.query.overdue === "true";
+    if (isOverdue) {
+      const now = new Date();
+      where.dueDate = { lt: now };
+      where.status = { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] };
+      where.assignments = {
+        some: {
+          OR: [
+            { accountId, status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] } },
+            ...(teamIds.length > 0 ? [{ teamId: { in: teamIds }, status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] } }] : []),
+          ],
+        },
+      };
+    } else if (status) {
       where.assignments = {
         some: {
           accountId,
@@ -4304,14 +4322,13 @@ export async function getMyTaskStatsUser(req: Request, res: Response) {
        Overdue filter
     ───────────────────────────── */
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const now = new Date();
 
     const overdueWhere: any = {
       ...baseWhere,
 
       dueDate: {
-        lt: today,
+        lt: now,
       },
 
       status: {
