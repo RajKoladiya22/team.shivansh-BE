@@ -7,10 +7,24 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { logProjectActivity } from "./projectActivity.helper";
+import { getIo } from "../../core/utils/socket";
 
 /* =========================================================
    HELPERS
 ========================================================= */
+
+function safeEmitProject(event: string, payload: any, projectId?: string) {
+  try {
+    const io = getIo();
+    if (!io) return;
+    if (projectId) {
+      io.to(`project:${projectId}`).emit(event, payload);
+    }
+    io.emit(event, payload);
+  } catch (err) {
+    // Socket not initialized in tests or background tasks
+  }
+}
 
 function deletePhysicalFile(fileUrl?: string | null) {
   if (!fileUrl) return;
@@ -440,7 +454,7 @@ export async function createProject(req: Request, res: Response) {
             visibility,
             priority: priority === true || priority === "true",
             projectType: projectType === "NEW_PROJECT" ? "NEW_PROJECT" : "UPDATES",
-            onWork: onWork === true || onWork === "true",
+            onWork: status === "COMPLETED" ? false : (onWork === true || onWork === "true"),
             startDate: startDate ? new Date(startDate) : undefined,
             endDate: endDate ? new Date(endDate) : undefined,
             color,
@@ -689,6 +703,7 @@ export async function createProject(req: Request, res: Response) {
         }
       }
 
+      safeEmitProject("project:created", responseData);
       sendSuccessResponse(res, 201, "Project created successfully", responseData);
     } catch (error: any) {
       console.error("[project.controller] createProject:", error);
@@ -872,25 +887,34 @@ export async function createProject(req: Request, res: Response) {
       if (!existing) return sendErrorResponse(res, 404, "Project not found");
 
       const { isAdmin, isFullAccess, role } = await getCallerProjectRole(id, user);
-      const isCreator = Boolean((accountId && existing.createdBy === accountId) || (user?.id && existing.createdBy === user.id));
-      const isMemberOrDeveloper = isCreator || isAdmin || Boolean(role);
+      const isCreator = Boolean(
+        (accountId && existing.createdBy === accountId) ||
+        (user?.id && existing.createdBy === user.id) ||
+        role === "OWNER"
+      );
+      const isDeveloper = role === "MANAGER" || (user?.designation && /developer/i.test(user.designation)) || (user?.role && /developer/i.test(user.role));
 
-      const reqKeys = Object.keys(req.body);
-      const isOnlyOnWork = req.body.onWork !== undefined && reqKeys.filter((k) => k !== "onWork").length === 0;
-
-      if (isOnlyOnWork) {
-        if (!isMemberOrDeveloper) {
-          return sendErrorResponse(res, 403, "Only project creator or assigned developers/members can change On Work status");
-        }
-      } else if (!isFullAccess) {
-        return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can update this project");
-      }
-
+      // Priority permission check: Only Admin users can update priority
       if (req.body.priority !== undefined) {
         const newPriority = req.body.priority === true || req.body.priority === "true";
         if (newPriority !== existing.priority && !isAdmin) {
-          return sendErrorResponse(res, 403, "Only Admin users can change project Priority");
+          return sendErrorResponse(res, 403, "Only Admin users can update priority");
         }
+      }
+
+      // On Work permission check: Only Project Creator and Developer can update onWork
+      if (req.body.onWork !== undefined) {
+        const newOnWork = req.body.onWork === true || req.body.onWork === "true";
+        if (newOnWork !== existing.onWork && !isCreator && !isDeveloper) {
+          return sendErrorResponse(res, 403, "Only the Project Creator and Developer can update onWork");
+        }
+      }
+
+      // General updates permission check: Only Owners, Managers, or Admins
+      const reqKeys = Object.keys(req.body);
+      const isOnlyToggle = reqKeys.every((k) => k === "priority" || k === "onWork");
+      if (!isOnlyToggle && !isFullAccess) {
+        return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can update this project");
       }
 
       const allowedFields = [
@@ -930,6 +954,7 @@ export async function createProject(req: Request, res: Response) {
         if (!existing.completedAt || existing.status !== "COMPLETED") {
           data.completedAt = new Date();
         }
+        data.onWork = false;
       } else if (data.status === "CANCELLED") {
         if (!existing.cancelledAt || existing.status !== "CANCELLED") {
           data.cancelledAt = new Date();
@@ -1246,6 +1271,8 @@ export async function createProject(req: Request, res: Response) {
         }
       }
 
+      safeEmitProject("project:patch", { id, patch: responseData }, id);
+      safeEmitProject("project:updated", responseData, id);
       sendSuccessResponse(res, 200, "Project updated successfully", responseData);
     } catch (error: any) {
       console.error("[project.controller] updateProject:", error);
@@ -1403,6 +1430,7 @@ export async function createProject(req: Request, res: Response) {
         await tx.project.delete({ where: { id } });
       });
 
+      safeEmitProject("project:deleted", { id }, id);
       sendSuccessResponse(res, 200, "Project and all linked data permanently deleted");
     } catch (error: any) {
       console.error("[project.controller] deleteProject:", error);
