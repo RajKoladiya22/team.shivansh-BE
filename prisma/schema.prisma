@@ -492,6 +492,11 @@ enum ProjectVisibility {
   PUBLIC // All workspace users
 }
 
+enum ProjectType {
+  NEW_PROJECT
+  UPDATES
+}
+
 enum PipelineSource {
   BLANK // Built from scratch
   TEMPLATE // Cloned from a PipelineTemplate
@@ -634,6 +639,9 @@ model Project {
   description String?
   status      ProjectStatus     @default(DRAFT)
   visibility  ProjectVisibility @default(TEAM)
+  priority    Boolean           @default(false)
+  projectType ProjectType       @default(UPDATES)
+  onWork      Boolean           @default(false)
 
   // Dates
   startDate   DateTime?
@@ -674,6 +682,9 @@ model Project {
   @@index([deletedAt])
   @@index([createdBy])
   @@index([visibility])
+  @@index([priority])
+  @@index([projectType])
+  @@index([onWork])
   @@index([leadId])
   @@index([customerId])
 }

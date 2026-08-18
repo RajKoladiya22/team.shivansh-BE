@@ -88,6 +88,9 @@ export async function listProjects(req: Request, res: Response) {
       createdTo,
       completedFrom,
       completedTo,
+      priority,
+      projectType,
+      onWork,
     } = req.query;
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -123,6 +126,9 @@ export async function listProjects(req: Request, res: Response) {
       ...(status && { status }),
       ...(visibility && { visibility }),
       ...(createdBy && { createdBy: String(createdBy) }),
+      ...(String(priority) === "true" ? { priority: true } : String(priority) === "false" ? { priority: false } : {}),
+      ...(projectType ? { projectType: projectType as any } : {}),
+      ...(String(onWork) === "true" ? { onWork: true } : String(onWork) === "false" ? { onWork: false } : {}),
       ...(search && {
         name: { contains: String(search), mode: "insensitive" },
       }),
@@ -161,6 +167,9 @@ export async function listProjects(req: Request, res: Response) {
         ...accessWhere,
         ...(visibility && { visibility }),
         ...(createdBy && { createdBy: String(createdBy) }),
+        ...(String(priority) === "true" ? { priority: true } : String(priority) === "false" ? { priority: false } : {}),
+        ...(projectType ? { projectType: projectType as any } : {}),
+        ...(String(onWork) === "true" ? { onWork: true } : String(onWork) === "false" ? { onWork: false } : {}),
         ...(search && {
           name: { contains: String(search), mode: "insensitive" },
         }),
@@ -206,7 +215,7 @@ export async function listProjects(req: Request, res: Response) {
       const [allMatchingProjects, statusCountsRaw] = await Promise.all([
         prisma.project.findMany({
           where,
-          select: { id: true, status: true, createdAt: true, endDate: true, completedAt: true },
+          select: { id: true, status: true, createdAt: true, endDate: true, completedAt: true, priority: true, onWork: true },
         }),
         prisma.project.groupBy({
           by: ["status"],
@@ -231,6 +240,14 @@ export async function listProjects(req: Request, res: Response) {
         const pA = STATUS_PRIORITY[a.status] ?? 99;
         const pB = STATUS_PRIORITY[b.status] ?? 99;
         if (pA !== pB) return pA - pB;
+
+        // Show Priority projects first, then On Work projects first
+        if (a.priority !== b.priority) {
+          return (b.priority ? 1 : 0) - (a.priority ? 1 : 0);
+        }
+        if (a.onWork !== b.onWork) {
+          return (b.onWork ? 1 : 0) - (a.onWork ? 1 : 0);
+        }
 
         if (a.status === "COMPLETED") {
           if (a.completedAt && b.completedAt) {
@@ -373,6 +390,9 @@ export async function createProject(req: Request, res: Response) {
         description,
         status = "DRAFT",
         visibility = "TEAM",
+        priority = false,
+        projectType = "UPDATES",
+        onWork = false,
         startDate,
         endDate,
         color,
@@ -418,6 +438,9 @@ export async function createProject(req: Request, res: Response) {
             description,
             status,
             visibility,
+            priority: priority === true || priority === "true",
+            projectType: projectType === "NEW_PROJECT" ? "NEW_PROJECT" : "UPDATES",
+            onWork: onWork === true || onWork === "true",
             startDate: startDate ? new Date(startDate) : undefined,
             endDate: endDate ? new Date(endDate) : undefined,
             color,
@@ -848,15 +871,32 @@ export async function createProject(req: Request, res: Response) {
       });
       if (!existing) return sendErrorResponse(res, 404, "Project not found");
 
-      const { isFullAccess } = await getCallerProjectRole(id, user);
-      if (!isFullAccess) {
+      const { isAdmin, isFullAccess, role } = await getCallerProjectRole(id, user);
+      const isCreator = Boolean((accountId && existing.createdBy === accountId) || (user?.id && existing.createdBy === user.id));
+      const isMemberOrDeveloper = isCreator || isAdmin || Boolean(role);
+
+      const reqKeys = Object.keys(req.body);
+      const isOnlyOnWork = req.body.onWork !== undefined && reqKeys.filter((k) => k !== "onWork").length === 0;
+
+      if (isOnlyOnWork) {
+        if (!isMemberOrDeveloper) {
+          return sendErrorResponse(res, 403, "Only project creator or assigned developers/members can change On Work status");
+        }
+      } else if (!isFullAccess) {
         return sendErrorResponse(res, 403, "Only project Owners, Managers, or Admins can update this project");
+      }
+
+      if (req.body.priority !== undefined) {
+        const newPriority = req.body.priority === true || req.body.priority === "true";
+        if (newPriority !== existing.priority && !isAdmin) {
+          return sendErrorResponse(res, 403, "Only Admin users can change project Priority");
+        }
       }
 
       const allowedFields = [
         "name", "description", "status", "visibility",
         "startDate", "endDate", "color", "icon", "coverUrl",
-        "leadId", "customerId",
+        "leadId", "customerId", "priority", "projectType", "onWork",
       ];
 
       const data: Record<string, any> = {};
@@ -864,6 +904,10 @@ export async function createProject(req: Request, res: Response) {
         if (req.body[f] !== undefined) {
           if (f === "startDate" || f === "endDate") {
             data[f] = req.body[f] ? new Date(req.body[f]) : null;
+          } else if (f === "priority" || f === "onWork") {
+            data[f] = req.body[f] === true || req.body[f] === "true";
+          } else if (f === "projectType") {
+            data[f] = req.body[f] === "NEW_PROJECT" ? "NEW_PROJECT" : "UPDATES";
           } else {
             data[f] = req.body[f];
           }
