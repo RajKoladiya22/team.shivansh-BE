@@ -842,7 +842,10 @@ export async function createProject(req: Request, res: Response) {
       const accountId = await getAccountIdFromReqUser(user);
 
       const { id } = req.params;
-      const existing = await prisma.project.findFirst({ where: { id, deletedAt: null } });
+      const existing = await prisma.project.findFirst({
+        where: { id, deletedAt: null },
+        include: { customFields: true },
+      });
       if (!existing) return sendErrorResponse(res, 404, "Project not found");
 
       const { isFullAccess } = await getCallerProjectRole(id, user);
@@ -901,6 +904,33 @@ export async function createProject(req: Request, res: Response) {
         try { customFields = JSON.parse(customFields); } catch { customFields = undefined; }
       }
 
+      let customFieldsChanged = false;
+      if (Array.isArray(customFields)) {
+        const oldFields = existing.customFields || [];
+        if (customFields.length !== oldFields.length) {
+          customFieldsChanged = true;
+        } else {
+          for (let i = 0; i < customFields.length; i++) {
+            const cf = customFields[i];
+            const old = oldFields.find((o) => o.name === cf.name);
+            if (!old) {
+              customFieldsChanged = true;
+              break;
+            }
+            const oldVal = (old.options as any)?.value ?? "";
+            const newVal = cf.value ?? "";
+            if (
+              old.fieldType !== cf.fieldType ||
+              Boolean(old.required) !== Boolean(cf.required) ||
+              String(oldVal) !== String(newVal)
+            ) {
+              customFieldsChanged = true;
+              break;
+            }
+          }
+        }
+      }
+
       const updated = await prisma.$transaction(async (tx) => {
         const proj = await tx.project.update({
           where: { id },
@@ -944,8 +974,8 @@ export async function createProject(req: Request, res: Response) {
           }
         }
 
-        // Update custom fields if provided
-        if (Array.isArray(customFields)) {
+        // Update custom fields only if provided and changed
+        if (customFieldsChanged && Array.isArray(customFields)) {
           await tx.projectCustomField.deleteMany({ where: { projectId: id } }).catch(() => { });
           for (let idx = 0; idx < customFields.length; idx++) {
             const cf = customFields[idx];
@@ -1100,10 +1130,32 @@ export async function createProject(req: Request, res: Response) {
         }
 
         // 4. Other core fields (name, dates, color, icon)
-        const otherKeys = Object.keys(data).filter(
-          (k) => !["status", "visibility", "description", "startedAt", "completedAt", "cancelledAt"].includes(k) &&
-            data[k] !== (existing as any)[k]
-        );
+        const ignoredKeys = [
+          "status",
+          "visibility",
+          "description",
+          "startedAt",
+          "completedAt",
+          "cancelledAt",
+        ];
+
+        const otherKeys = Object.keys(data).filter((k) => {
+          if (ignoredKeys.includes(k)) return false;
+          const newVal = data[k];
+          const oldVal = (existing as any)[k];
+
+          if (k === "startDate" || k === "endDate") {
+            const newTime = newVal instanceof Date ? newVal.getTime() : newVal ? new Date(newVal).getTime() : null;
+            const oldTime = oldVal instanceof Date ? oldVal.getTime() : oldVal ? new Date(oldVal).getTime() : null;
+            return newTime !== oldTime;
+          }
+
+          if (newVal === undefined) return false;
+          const normalizedNew = newVal === null || newVal === "" ? null : newVal;
+          const normalizedOld = oldVal === null || oldVal === "" ? null : oldVal;
+          return normalizedNew !== normalizedOld;
+        });
+
         if (otherKeys.length > 0) {
           await logProjectActivity({
             projectId: id,
@@ -1118,7 +1170,7 @@ export async function createProject(req: Request, res: Response) {
         }
 
         // 5. Custom fields update
-        if (Array.isArray(customFields)) {
+        if (customFieldsChanged && Array.isArray(customFields) && (customFields.length > 0 || (existing.customFields && existing.customFields.length > 0))) {
           await logProjectActivity({
             projectId: id,
             entityType: "PROJECT",
