@@ -84,6 +84,13 @@ interface DashboardStats {
         setupComplete: number;
         notSetup: number;
     };
+    amc: {
+        total: number;
+        active: number;
+        inactive: number;
+        setupComplete: number;
+        notSetup: number;
+    };
 
     // Renewal type breakdown
     byRenewalType: RenewalTypeStats;
@@ -284,6 +291,27 @@ export async function getCloudServiceDashboardStats(
             ? Math.round((comhardTrialsConverted / comhardTrialsCompleted) * 1000) / 10
             : 0;
 
+        // Get AMC stats
+        const [
+            amcTotal,
+            amcActive,
+            amcInactive,
+            amcSetupComplete,
+        ] = await Promise.all([
+            prisma.cloudService.count({
+                where: { type: "AMC" },
+            }),
+            prisma.cloudService.count({
+                where: { type: "AMC", isActive: true },
+            }),
+            prisma.cloudService.count({
+                where: { type: "AMC", isActive: false },
+            }),
+            prisma.cloudService.count({
+                where: { type: "AMC", isDriveSetup: true },
+            }),
+        ]);
+
         // ─────────────────────────────────────────────────────────────────────────
         // 3. By renewal type (QUARTERLY, SIX_MONTHS, YEARLY)
         // ─────────────────────────────────────────────────────────────────────────
@@ -440,6 +468,13 @@ export async function getCloudServiceDashboardStats(
                 setupComplete: comhardSetupComplete,
                 notSetup: comhardTotal - comhardSetupComplete,
             },
+            amc: {
+                total: amcTotal,
+                active: amcActive,
+                inactive: amcInactive,
+                setupComplete: amcSetupComplete,
+                notSetup: amcTotal - amcSetupComplete,
+            },
 
             // Renewal type
             byRenewalType: {
@@ -500,7 +535,7 @@ export async function getCloudServiceDashboardStats(
 // =============================================================================
 
 interface DetailedStatsQuery {
-    type?: "MIRACLE" | "COMHARD";
+    type?: "MIRACLE" | "COMHARD" | "AMC";
     isActive?: "true" | "false";
     expiringInDays?: string;
 }
@@ -556,7 +591,7 @@ export async function getCloudServiceDetailedStats(
             prisma.cloudService.count({ where: { isActive: false } }),
             prisma.cloudService.count({
                 where: {
-                    expiryDate: {
+                    billingDate: {
                         lt: new Date(),
                     },
                 },
@@ -694,6 +729,27 @@ export async function getCloudServiceDetailedStats(
         const comhardTrialConversionRate = comhardTrialsCompleted > 0
             ? Math.round((comhardTrialsConverted / comhardTrialsCompleted) * 1000) / 10
             : 0;
+
+        // Get AMC stats
+        const [
+            amcTotal,
+            amcActive,
+            amcInactive,
+            amcSetupComplete,
+        ] = await Promise.all([
+            prisma.cloudService.count({
+                where: { type: "AMC" },
+            }),
+            prisma.cloudService.count({
+                where: { type: "AMC", isActive: true },
+            }),
+            prisma.cloudService.count({
+                where: { type: "AMC", isActive: false },
+            }),
+            prisma.cloudService.count({
+                where: { type: "AMC", isDriveSetup: true },
+            }),
+        ]);
 
         const [quarterly, sixMonths, yearly] = await Promise.all([
             prisma.cloudService.count({
@@ -833,6 +889,13 @@ export async function getCloudServiceDetailedStats(
                 setupComplete: comhardSetupComplete,
                 notSetup: comhardTotal - comhardSetupComplete,
             },
+            amc: {
+                total: amcTotal,
+                active: amcActive,
+                inactive: amcInactive,
+                setupComplete: amcSetupComplete,
+                notSetup: amcTotal - amcSetupComplete,
+            },
             byRenewalType: {
                 QUARTERLY: quarterly,
                 SIX_MONTHS: sixMonths,
@@ -903,6 +966,7 @@ interface QuickStats {
     byType: {
         MIRACLE: number;
         COMHARD: number;
+        AMC: number;
     };
     expiringIn7Days: number;
     onTrial: number;
@@ -929,6 +993,7 @@ export async function getQuickCloudServiceStats(
             inactive,
             miracle,
             comhard,
+            amc,
             expiring,
             onTrial,
             needsSetup,
@@ -939,9 +1004,10 @@ export async function getQuickCloudServiceStats(
             prisma.cloudService.count({ where: { isActive: false } }),
             prisma.cloudService.count({ where: { type: "MIRACLE" } }),
             prisma.cloudService.count({ where: { type: "COMHARD" } }),
+            prisma.cloudService.count({ where: { type: "AMC" } }),
             prisma.cloudService.count({
                 where: {
-                    expiryDate: {
+                    billingDate: {
                         gte: now,
                         lte: sevenDaysLater,
                     },
@@ -955,7 +1021,7 @@ export async function getQuickCloudServiceStats(
             }),
             prisma.cloudService.count({
                 where: {
-                    expiryDate: {
+                    billingDate: {
                         lt: now,
                     },
                 },
@@ -969,6 +1035,7 @@ export async function getQuickCloudServiceStats(
             byType: {
                 MIRACLE: miracle,
                 COMHARD: comhard,
+                AMC: amc,
             },
             expiringIn7Days: expiring,
             onTrial,

@@ -2901,6 +2901,7 @@ model UserProductExpertise {
 enum CloudServiceType {
   MIRACLE
   COMHARD
+  AMC
 }
 
 enum CloudRenewalType {

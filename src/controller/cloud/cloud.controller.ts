@@ -192,8 +192,8 @@ function validateUsers(
                 return `users[${i}].tallyNumber must be a positive integer`;
             }
         }
-        if (type === "MIRACLE" && u.tallyNumber !== undefined) {
-            return `users[${i}].tallyNumber is not applicable for Miracle`;
+        if ((type === "MIRACLE" || type === "AMC") && u.tallyNumber !== undefined) {
+            return `users[${i}].tallyNumber is not applicable for ${type === "MIRACLE" ? "Miracle" : "AMC"}`;
         }
     }
     return null;
@@ -300,8 +300,8 @@ export async function createCloudService(req: Request, res: Response) {
         const actor = req.user.accountId as string;
 
         // -- 1. Common required fields --------------------------------------------
-        if (!body.type || !["MIRACLE", "COMHARD"].includes(body.type)) {
-            return sendErrorResponse(res, 400, "type must be MIRACLE or COMHARD");
+        if (!body.type || !["MIRACLE", "COMHARD", "AMC"].includes(body.type)) {
+            return sendErrorResponse(res, 400, "type must be MIRACLE, COMHARD, or AMC");
         }
         if (!body.renewalType) {
             return sendErrorResponse(res, 400, "renewalType is required");
@@ -672,15 +672,20 @@ export async function updateCloudService(req: Request, res: Response) {
             if (!lead) return sendErrorResponse(res, 404, "Lead not found");
         }
 
-        // -- 5. Validate Miracle-only fields ---------------------------------------
-        if (current.type === "MIRACLE") {
+        // -- 5. Validate Miracle/AMC fields ---------------------------------------
+        if (current.type === "MIRACLE" || current.type === "AMC") {
             if (body.isOnTrial !== undefined || body.trialExtendDays !== undefined ||
                 body.trialConvert !== undefined || body.trialEnd !== undefined) {
                 return sendErrorResponse(res, 400, "Trial fields are only valid for COMHARD services");
             }
             if (body.adminId !== undefined || body.comhardSubId !== undefined ||
                 body.numberOfTally !== undefined) {
-                return sendErrorResponse(res, 400, "Comhard-specific fields are not valid for MIRACLE services");
+                return sendErrorResponse(res, 400, `Comhard-specific fields are not valid for ${current.type} services`);
+            }
+        }
+        if (current.type === "AMC") {
+            if (body.ipAddress !== undefined || body.userCount !== undefined) {
+                return sendErrorResponse(res, 400, "Miracle-specific fields are not valid for AMC services");
             }
         }
 
