@@ -880,9 +880,15 @@ export async function createProject(req: Request, res: Response) {
       if (data.status === "ACTIVE" && !existing.startedAt) {
         data.startedAt = new Date();
       } else if (data.status === "COMPLETED") {
-        data.completedAt = new Date();
+        if (!existing.completedAt || existing.status !== "COMPLETED") {
+          data.completedAt = new Date();
+        }
       } else if (data.status === "CANCELLED") {
-        data.cancelledAt = new Date();
+        if (!existing.cancelledAt || existing.status !== "CANCELLED") {
+          data.cancelledAt = new Date();
+        }
+      } else if (data.status && data.status !== "COMPLETED" && existing.status === "COMPLETED") {
+        data.completedAt = null;
       }
 
       let members = req.body.members;
