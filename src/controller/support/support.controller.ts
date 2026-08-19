@@ -67,6 +67,57 @@ function sortSupportsArray(supports: any[]) {
     });
 }
 
+async function resolveProductCatalogIdForSupport(
+    productCatalogId?: string | null,
+    product?: any
+): Promise<string | null> {
+    const idToLookup = productCatalogId || product?.id;
+    const slugToLookup = product?.slug;
+
+    if (!idToLookup && !slugToLookup) return null;
+
+    try {
+        const catalog = await prisma.productCatalog.findFirst({
+            where: {
+                OR: [
+                    ...(idToLookup ? [{ id: idToLookup }, { adminProductId: idToLookup }] : []),
+                    ...(slugToLookup ? [{ slug: slugToLookup }] : []),
+                ],
+            },
+            select: { id: true },
+        });
+        return catalog?.id || null;
+    } catch {
+        return null;
+    }
+}
+
+async function getValidAccountId(accountId?: string | null): Promise<string | null> {
+    if (!accountId) return null;
+    try {
+        const acc = await prisma.account.findUnique({
+            where: { id: accountId },
+            select: { id: true },
+        });
+        return acc?.id || null;
+    } catch {
+        return null;
+    }
+}
+
+async function getValidTeamId(teamId?: string | null): Promise<string | null> {
+    if (!teamId) return null;
+    try {
+        const team = await prisma.team.findUnique({
+            where: { id: teamId },
+            select: { id: true },
+        });
+        return team?.id || null;
+    } catch {
+        return null;
+    }
+}
+
 export async function createSupportAdmin(req: Request, res: Response) {
     try {
         const {
@@ -100,6 +151,13 @@ export async function createSupportAdmin(req: Request, res: Response) {
             });
         }
 
+        const [resolvedCatalogId, validCreatedBy, validAssigneeAccountId, validAssigneeTeamId] = await Promise.all([
+            resolveProductCatalogIdForSupport(productCatalogId, product),
+            getValidAccountId(createdBy),
+            getValidAccountId(assigneeAccountId),
+            getValidTeamId(assigneeTeamId),
+        ]);
+
         const support = await prisma.support.create({
             data: {
                 subject,
@@ -108,24 +166,24 @@ export async function createSupportAdmin(req: Request, res: Response) {
                 priority,
                 customer: { connect: { id: customer.id } },
                 product: product || null,
-                productCatalogId: productCatalogId || null,
-                productCatalog: productCatalogId ? { connect: { id: productCatalogId } } : undefined,
+                productCatalogId: resolvedCatalogId || productCatalogId || product?.id || null,
+                productCatalog: resolvedCatalogId ? { connect: { id: resolvedCatalogId } } : undefined,
                 isWorking: isWorking || false,
                 expert: expert || null,
                 remarks: remarks || null,
-                createdByAcc: createdBy ? { connect: { id: createdBy } } : undefined,
-                assignments: (assigneeAccountId || assigneeTeamId) ? {
+                createdByAcc: validCreatedBy ? { connect: { id: validCreatedBy } } : undefined,
+                assignments: (validAssigneeAccountId || validAssigneeTeamId) ? {
                     create: {
-                        type: assigneeTeamId ? "TEAM" : "ACCOUNT",
-                        accountId: assigneeAccountId || undefined,
-                        teamId: assigneeTeamId || undefined,
-                        assignedBy: createdBy
+                        type: validAssigneeTeamId ? "TEAM" : "ACCOUNT",
+                        accountId: validAssigneeAccountId || undefined,
+                        teamId: validAssigneeTeamId || undefined,
+                        assignedBy: validCreatedBy || undefined,
                     }
                 } : undefined,
                 activityLogs: {
                     create: {
                         action: "CREATED",
-                        performedByAccount: createdBy ? { connect: { id: createdBy } } : undefined,
+                        performedByAccount: validCreatedBy ? { connect: { id: validCreatedBy } } : undefined,
                         meta: {
                             event: "SUPPORT_CREATED",
                             subject,
@@ -143,16 +201,16 @@ export async function createSupportAdmin(req: Request, res: Response) {
         try {
             const io = getIo();
             io.to("supports:admin").emit("support:created", support);
-            if (assigneeAccountId) io.to(`supports:user:${assigneeAccountId}`).emit("support:created", support);
-            if (createdBy && createdBy !== assigneeAccountId) io.to(`supports:user:${createdBy}`).emit("support:created", support);
+            if (validAssigneeAccountId) io.to(`supports:user:${validAssigneeAccountId}`).emit("support:created", support);
+            if (validCreatedBy && validCreatedBy !== validAssigneeAccountId) io.to(`supports:user:${validCreatedBy}`).emit("support:created", support);
         } catch (e) {
             console.warn("Socket emit skipped", e);
         }
 
         return sendSuccessResponse(res, 201, "Support created successfully", support);
-    } catch (error) {
-        console.error(error);
-        return sendErrorResponse(res, 500, "Error creating support");
+    } catch (error: any) {
+        console.error("createSupportAdmin error:", error);
+        return sendErrorResponse(res, 500, error?.message || "Error creating support");
     }
 }
 
@@ -188,6 +246,11 @@ export async function createSupportUser(req: Request, res: Response) {
             });
         }
 
+        const [resolvedCatalogId, validCreatedBy] = await Promise.all([
+            resolveProductCatalogIdForSupport(productCatalogId, product),
+            getValidAccountId(createdBy),
+        ]);
+
         const support = await prisma.support.create({
             data: {
                 subject,
@@ -196,23 +259,23 @@ export async function createSupportUser(req: Request, res: Response) {
                 priority,
                 customer: { connect: { id: customer.id } },
                 product: product || null,
-                productCatalogId: productCatalogId || null,
-                productCatalog: productCatalogId ? { connect: { id: productCatalogId } } : undefined,
+                productCatalogId: resolvedCatalogId || productCatalogId || product?.id || null,
+                productCatalog: resolvedCatalogId ? { connect: { id: resolvedCatalogId } } : undefined,
                 isWorking: isWorking || false,
                 expert: expert || null,
                 remarks: remarks || null,
-                createdByAcc: createdBy ? { connect: { id: createdBy } } : undefined,
-                assignments: createdBy ? {
+                createdByAcc: validCreatedBy ? { connect: { id: validCreatedBy } } : undefined,
+                assignments: validCreatedBy ? {
                     create: {
                         type: "ACCOUNT",
-                        accountId: createdBy,
-                        assignedBy: createdBy
+                        accountId: validCreatedBy,
+                        assignedBy: validCreatedBy
                     }
                 } : undefined,
                 activityLogs: {
                     create: {
                         action: "CREATED",
-                        performedByAccount: createdBy ? { connect: { id: createdBy } } : undefined,
+                        performedByAccount: validCreatedBy ? { connect: { id: validCreatedBy } } : undefined,
                         meta: {
                             event: "SUPPORT_CREATED",
                             subject,
@@ -230,15 +293,15 @@ export async function createSupportUser(req: Request, res: Response) {
         try {
             const io = getIo();
             io.to("supports:admin").emit("support:created", support);
-            if (createdBy) io.to(`supports:user:${createdBy}`).emit("support:created", support);
+            if (validCreatedBy) io.to(`supports:user:${validCreatedBy}`).emit("support:created", support);
         } catch (e) {
             console.warn("Socket emit skipped", e);
         }
 
         return sendSuccessResponse(res, 201, "Support created successfully", support);
-    } catch (error) {
-        console.error(error);
-        return sendErrorResponse(res, 500, "Error creating support");
+    } catch (error: any) {
+        console.error("createSupportUser error:", error);
+        return sendErrorResponse(res, 500, error?.message || "Error creating support");
     }
 }
 
@@ -550,9 +613,10 @@ export async function updateSupportAdmin(req: Request, res: Response) {
         }
         // ProductCatalog: many-to-many — connect new or clear
         if (productCatalogId !== undefined) {
-            updateData.productCatalogId = productCatalogId || null;
-            updateData.productCatalog = productCatalogId
-                ? { set: [{ id: productCatalogId }] }
+            const resolvedCatalogId = productCatalogId ? await resolveProductCatalogIdForSupport(productCatalogId) : null;
+            updateData.productCatalogId = resolvedCatalogId || productCatalogId || null;
+            updateData.productCatalog = resolvedCatalogId
+                ? { set: [{ id: resolvedCatalogId }] }
                 : { set: [] };
         }
 
@@ -657,9 +721,10 @@ export async function updateSupportUser(req: Request, res: Response) {
         }
         // ProductCatalog — users can also link/update
         if (productCatalogId !== undefined) {
-            updateData.productCatalogId = productCatalogId || null;
-            updateData.productCatalog = productCatalogId
-                ? { set: [{ id: productCatalogId }] }
+            const resolvedCatalogId = productCatalogId ? await resolveProductCatalogIdForSupport(productCatalogId) : null;
+            updateData.productCatalogId = resolvedCatalogId || productCatalogId || null;
+            updateData.productCatalog = resolvedCatalogId
+                ? { set: [{ id: resolvedCatalogId }] }
                 : { set: [] };
         }
 
