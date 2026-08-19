@@ -40,15 +40,16 @@ export async function createProjectCustomField(req: Request, res: Response) {
 
     await logProjectActivity({
       projectId,
-      entityType: "PROJECT",
+      entityType: "LABEL",
       entityId: field.id,
       action: "CREATED",
       performedBy: callerAccountId || user?.id,
       meta: {
+        type: "CUSTOM_FIELD_ADDED",
         fieldId: field.id,
         fieldName: field.name,
         fieldType: field.fieldType,
-        message: `Created custom field "${field.name}" (${field.fieldType})`,
+        message: `Added custom field "${field.name}" (${field.fieldType})`,
       },
     });
 
@@ -110,11 +111,12 @@ export async function updateProjectCustomField(req: Request, res: Response) {
 
     await logProjectActivity({
       projectId,
-      entityType: "PROJECT",
+      entityType: "LABEL",
       entityId: fieldId,
       action: "UPDATED",
       performedBy: callerAccountId || user?.id,
       meta: {
+        type: "CUSTOM_FIELD_UPDATED",
         fieldId,
         fieldName: updated.name,
         message: `Updated custom field "${updated.name}"`,
@@ -154,11 +156,12 @@ export async function deleteProjectCustomField(req: Request, res: Response) {
 
     await logProjectActivity({
       projectId,
-      entityType: "PROJECT",
+      entityType: "LABEL",
       entityId: fieldId,
       action: "DELETED",
       performedBy: callerAccountId || user?.id,
       meta: {
+        type: "CUSTOM_FIELD_DELETED",
         fieldId,
         fieldName: existing.name,
         message: `Deleted custom field "${existing.name}"`,

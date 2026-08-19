@@ -1363,10 +1363,11 @@ export async function createProject(req: Request, res: Response) {
         if (customFieldsChanged && Array.isArray(customFields) && (customFields.length > 0 || (existing.customFields && existing.customFields.length > 0))) {
           await logProjectActivity({
             projectId: id,
-            entityType: "PROJECT",
+            entityType: "LABEL",
             action: "UPDATED",
             performedBy: accountId,
             meta: {
+              type: "CUSTOM_FIELDS_UPDATED",
               message: `Updated custom fields (${customFields.length} field${customFields.length === 1 ? "" : "s"})`,
             },
           });
