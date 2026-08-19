@@ -104,7 +104,10 @@ export async function listProjects(req: Request, res: Response) {
       completedTo,
       priority,
       projectType,
+      projectSource,
       onWork,
+      unlinkedOnly,
+      leadId,
     } = req.query;
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -134,14 +137,25 @@ export async function listProjects(req: Request, res: Response) {
         ],
       };
 
+    const leadFilter =
+      String(unlinkedOnly) === "true" || leadId === "null" || leadId === "unlinked"
+        ? { leadId: null }
+        : leadId
+        ? { leadId: String(leadId) }
+        : {};
+
     const where: Record<string, any> = {
       deletedAt: null,
       ...accessWhere,
+      ...leadFilter,
       ...(status && { status }),
       ...(visibility && { visibility }),
       ...(createdBy && { createdBy: String(createdBy) }),
       ...(String(priority) === "true" ? { priority: true } : String(priority) === "false" ? { priority: false } : {}),
       ...(projectType ? { projectType: projectType as any } : {}),
+      ...(projectSource && projectSource !== "ALL" && projectSource !== "all"
+        ? { projectSource: String(projectSource).toUpperCase() === "OUTSOURCE" ? "OUTSOURCE" : "INHOUSE" }
+        : {}),
       ...(String(onWork) === "true" ? { onWork: true } : String(onWork) === "false" ? { onWork: false } : {}),
       ...(search && {
         name: { contains: String(search), mode: "insensitive" },
@@ -179,10 +193,14 @@ export async function listProjects(req: Request, res: Response) {
     const baseWhere: Record<string, any> = {
         deletedAt: null,
         ...accessWhere,
+        ...leadFilter,
         ...(visibility && { visibility }),
         ...(createdBy && { createdBy: String(createdBy) }),
         ...(String(priority) === "true" ? { priority: true } : String(priority) === "false" ? { priority: false } : {}),
         ...(projectType ? { projectType: projectType as any } : {}),
+        ...(projectSource && projectSource !== "ALL" && projectSource !== "all"
+          ? { projectSource: String(projectSource).toUpperCase() === "OUTSOURCE" ? "OUTSOURCE" : "INHOUSE" }
+          : {}),
         ...(String(onWork) === "true" ? { onWork: true } : String(onWork) === "false" ? { onWork: false } : {}),
         ...(search && {
           name: { contains: String(search), mode: "insensitive" },
@@ -327,6 +345,15 @@ export async function listProjects(req: Request, res: Response) {
                 where: { deletedAt: null },
                 select: { id: true, status: true },
               },
+              outsourceDeveloper: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  phone: true,
+                  skills: true,
+                },
+              },
               _count: {
                 select: { tasks: true, members: true, comments: true },
               },
@@ -445,6 +472,9 @@ export async function createProject(req: Request, res: Response) {
         return sendErrorResponse(res, 400, "Project name is required");
       }
 
+      const finalProjectSource = String(req.body.projectSource || "").toUpperCase() === "OUTSOURCE" ? "OUTSOURCE" : "INHOUSE";
+      const finalOutsourceDevId = finalProjectSource === "OUTSOURCE" && req.body.outsourceDeveloperId ? String(req.body.outsourceDeveloperId).trim() : undefined;
+
       const project = await prisma.$transaction(async (tx) => {
         const created = await tx.project.create({
           data: {
@@ -454,6 +484,8 @@ export async function createProject(req: Request, res: Response) {
             visibility,
             priority: priority === true || priority === "true",
             projectType: projectType === "NEW_PROJECT" ? "NEW_PROJECT" : "UPDATES",
+            projectSource: finalProjectSource,
+            outsourceDeveloperId: finalOutsourceDevId || undefined,
             onWork: status === "COMPLETED" ? false : (onWork === true || onWork === "true"),
             startDate: startDate ? new Date(startDate) : undefined,
             endDate: endDate ? new Date(endDate) : undefined,
@@ -829,6 +861,7 @@ export async function createProject(req: Request, res: Response) {
           },
           customFields: true,
           attachments: { where: { deletedAt: null } },
+          outsourceDeveloper: true,
           _count: {
             select: { tasks: true, members: true },
           },
@@ -938,6 +971,7 @@ export async function createProject(req: Request, res: Response) {
         "name", "description", "status", "visibility",
         "startDate", "endDate", "color", "icon", "coverUrl",
         "leadId", "customerId", "priority", "projectType", "onWork", "createdBy",
+        "projectSource", "outsourceDeveloperId",
       ];
 
       const data: Record<string, any> = {};
@@ -949,6 +983,10 @@ export async function createProject(req: Request, res: Response) {
             data[f] = req.body[f] === true || req.body[f] === "true";
           } else if (f === "projectType") {
             data[f] = req.body[f] === "NEW_PROJECT" ? "NEW_PROJECT" : "UPDATES";
+          } else if (f === "projectSource") {
+            data[f] = String(req.body[f]).toUpperCase() === "OUTSOURCE" ? "OUTSOURCE" : "INHOUSE";
+          } else if (f === "outsourceDeveloperId") {
+            data[f] = req.body[f] ? String(req.body[f]).trim() : null;
           } else if (f === "createdBy") {
             data[f] = req.body[f] ? String(req.body[f]).trim() : null;
           } else {
@@ -1174,6 +1212,7 @@ export async function createProject(req: Request, res: Response) {
             },
             customFields: true,
             attachments: { where: { deletedAt: null } },
+            outsourceDeveloper: true,
             pipeline: {
               include: {
                 steps: {

@@ -19,6 +19,7 @@ import expertiseRouter from "./expertise";
 import cloudServicesRouter from "./cloud";
 import projectsRouter from "./project"
 import labelsRouter from "./label/label.routes"
+import outsourceDevelopersRouter from "./outsourceDeveloper/outsourceDeveloper.routes";
 
 
 const router = Router();
@@ -43,6 +44,7 @@ router.use("/expertise", expertiseRouter);
 router.use("/cloud-services", cloudServicesRouter);
 router.use("/projects", projectsRouter);
 router.use("/labels", labelsRouter);
+router.use("/outsource-developers", outsourceDevelopersRouter);
 
 
 // export main

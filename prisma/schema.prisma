@@ -497,6 +497,11 @@ enum ProjectType {
   UPDATES
 }
 
+enum ProjectSource {
+  INHOUSE
+  OUTSOURCE
+}
+
 enum PipelineSource {
   BLANK // Built from scratch
   TEMPLATE // Cloned from a PipelineTemplate
@@ -639,9 +644,10 @@ model Project {
   description String?
   status      ProjectStatus     @default(DRAFT)
   visibility  ProjectVisibility @default(TEAM)
-  priority    Boolean           @default(false)
-  projectType ProjectType       @default(UPDATES)
-  onWork      Boolean           @default(false)
+  priority             Boolean            @default(false)
+  projectType          ProjectType        @default(UPDATES)
+  projectSource        ProjectSource      @default(INHOUSE)
+  onWork               Boolean            @default(false)
 
   // Dates
   startDate   DateTime?
@@ -662,6 +668,10 @@ model Project {
   createdBy String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Outsource Developer (optional, for outsource projects)
+  outsourceDeveloperId String?
+  outsourceDeveloper   OutsourceDeveloper? @relation(fields: [outsourceDeveloperId], references: [id], onDelete: SetNull)
 
   // Relations
   pipeline     ProjectPipeline?
@@ -684,9 +694,30 @@ model Project {
   @@index([visibility])
   @@index([priority])
   @@index([projectType])
+  @@index([projectSource])
+  @@index([outsourceDeveloperId])
   @@index([onWork])
   @@index([leadId])
   @@index([customerId])
+}
+
+model OutsourceDeveloper {
+  id        String    @id @default(uuid())
+  name      String
+  email     String?
+  phone     String?
+  skills    String? // e.g. React, Node.js, Flutter
+  notes     String? // Internal rates, portfolio, tracking notes
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+  createdBy String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  projects Project[]
+
+  @@index([deletedAt])
+  @@index([isActive])
 }
 
 model ProjectMember {
