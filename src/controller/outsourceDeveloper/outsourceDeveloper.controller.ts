@@ -187,24 +187,29 @@ export async function updateOutsourceDeveloper(req: Request, res: Response) {
 
 /**
  * DELETE /outsource-developers/:id
- * Soft delete an outsource developer.
+ * Hard delete an outsource developer permanently.
  */
 export async function deleteOutsourceDeveloper(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const existing = await prisma.outsourceDeveloper.findFirst({
-      where: { id, deletedAt: null },
+    const existing = await prisma.outsourceDeveloper.findUnique({
+      where: { id },
     });
     if (!existing) {
       return sendErrorResponse(res, 404, "Outsource developer not found");
     }
 
-    await prisma.outsourceDeveloper.update({
-      where: { id },
-      data: { deletedAt: new Date() },
+    // Unlink any projects assigned to this developer
+    await prisma.project.updateMany({
+      where: { outsourceDeveloperId: id },
+      data: { outsourceDeveloperId: null },
     });
 
-    sendSuccessResponse(res, 200, "Outsource developer deleted successfully");
+    await prisma.outsourceDeveloper.delete({
+      where: { id },
+    });
+
+    sendSuccessResponse(res, 200, "Outsource developer deleted permanently");
   } catch (error: any) {
     console.error("[outsourceDeveloper.controller] deleteOutsourceDeveloper:", error);
     sendErrorResponse(res, 500, error.message || "Failed to delete outsource developer");
