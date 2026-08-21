@@ -643,7 +643,7 @@ model Project {
   name        String
   description String?
   status      ProjectStatus     @default(DRAFT)
-  visibility  ProjectVisibility @default(TEAM)
+  visibility  ProjectVisibility @default(PUBLIC)
   priority             Boolean            @default(false)
   projectType          ProjectType        @default(UPDATES)
   projectSource        ProjectSource      @default(INHOUSE)

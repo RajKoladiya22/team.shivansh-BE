@@ -430,7 +430,7 @@ export async function createProject(req: Request, res: Response) {
         name,
         description,
         status = "DRAFT",
-        visibility = "TEAM",
+        visibility = "PUBLIC",
         priority = false,
         projectType = "UPDATES",
         onWork = false,
