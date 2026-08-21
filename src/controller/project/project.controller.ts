@@ -269,31 +269,60 @@ export async function listProjects(req: Request, res: Response) {
       }
 
       allMatchingProjects.sort((a, b) => {
+        // 1. Maintain status-wise grouping
         const pA = STATUS_PRIORITY[a.status] ?? 99;
         const pB = STATUS_PRIORITY[b.status] ?? 99;
         if (pA !== pB) return pA - pB;
 
-        // Show Priority projects first, then On Work projects first
+        // 2. Specific ordering for ACTIVE status
+        if (a.status === "ACTIVE" && b.status === "ACTIVE") {
+          // (a) Own Work projects appear first
+          const onWorkA = a.onWork ? 1 : 0;
+          const onWorkB = b.onWork ? 1 : 0;
+          if (onWorkA !== onWorkB) return onWorkB - onWorkA;
+
+          // (b) Within Own Work / non-Own Work, sort by Priority
+          const priorityA = a.priority ? 1 : 0;
+          const priorityB = b.priority ? 1 : 0;
+          if (priorityA !== priorityB) return priorityB - priorityA;
+
+          // (c) Show projects with nearest End Date first
+          if (a.endDate && b.endDate) {
+            const timeA = new Date(a.endDate).getTime();
+            const timeB = new Date(b.endDate).getTime();
+            if (timeA !== timeB) return timeA - timeB;
+          } else if (a.endDate) {
+            return -1;
+          } else if (b.endDate) {
+            return 1;
+          }
+
+          // (d) Fallback for remaining Active projects
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        }
+
+        // 3. For COMPLETED status
+        if (a.status === "COMPLETED" && b.status === "COMPLETED") {
+          if (a.completedAt && b.completedAt) {
+            return new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime();
+          }
+          if (a.completedAt) return -1;
+          if (b.completedAt) return 1;
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        }
+
+        // 4. For other statuses (ON_HOLD, DRAFT, CANCELLED, ARCHIVED)
         if (a.priority !== b.priority) {
           return (b.priority ? 1 : 0) - (a.priority ? 1 : 0);
         }
         if (a.onWork !== b.onWork) {
           return (b.onWork ? 1 : 0) - (a.onWork ? 1 : 0);
         }
-
-        if (a.status === "COMPLETED") {
-          if (a.completedAt && b.completedAt) {
-            return new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime();
-          }
-          if (a.completedAt) return -1;
-          if (b.completedAt) return 1;
-        } else {
-          if (a.endDate && b.endDate) {
-            return new Date(a.endDate).getTime() - new Date(b.endDate).getTime();
-          }
-          if (a.endDate) return -1;
-          if (b.endDate) return 1;
+        if (a.endDate && b.endDate) {
+          return new Date(a.endDate).getTime() - new Date(b.endDate).getTime();
         }
+        if (a.endDate) return -1;
+        if (b.endDate) return 1;
 
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
