@@ -1,4 +1,5 @@
 // src/services/notifications.ts
+export * from "./notifications/index";
 
 import { getIo } from "../core/utils/socket";
 import { prisma } from "../config/database.config";

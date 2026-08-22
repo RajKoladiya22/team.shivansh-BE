@@ -8,6 +8,7 @@ import {
 } from "../../core/utils/httpResponse";
 import {
     triggerAssignmentNotification,
+    dispatchLeadAssignedNotification,
 } from "../../services/notifications";
 import { getIo } from "../../core/utils/socket";
 
@@ -140,7 +141,15 @@ export async function assignLeadAdmin(req: Request, res: Response) {
         void triggerAssignmentNotification({
             leadId: id,
             assigneeAccountId: accountId ?? null,
-            assigneeTeamId: accountId ?? null,
+            assigneeTeamId: teamId ?? null,
+        });
+
+        // Automated WhatsApp Notification on Reassignment
+        void dispatchLeadAssignedNotification({
+            leadId: id,
+            assigneeAccountId: accountId ?? null,
+            assigneeTeamId: teamId ?? null,
+            assignedByAccountId: performerAccountId,
         });
 
         return sendSuccessResponse(res, 200, "Lead reassigned");

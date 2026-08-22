@@ -55,7 +55,7 @@ model Account {
   firstName      String
   lastName       String
   contactEmail   String    @unique
-  contactPhone   String    @unique
+  contactPhone   String
   address        Json?
   avatar         String?
   documents      Json? // optional file metadata (Aadhar, etc.)
@@ -137,6 +137,7 @@ model Account {
   @@index([isActive])
   @@index([jobType])
   @@index([contactEmail])
+  @@index([contactPhone])
 }
 
 // ------------------------------------------------------------------

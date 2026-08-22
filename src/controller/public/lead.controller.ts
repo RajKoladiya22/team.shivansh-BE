@@ -5,7 +5,10 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { randomUUID } from "crypto";
-import { triggerPublicLeadNotification } from "../../services/notifications";
+import {
+  triggerPublicLeadNotification,
+  dispatchAdminPublicLeadNotification,
+} from "../../services/notifications";
 import { buildCustomerProductEntries } from "../../core/utils/leadProducts";
 
 const normalizeMobile = (m: unknown) => String(m ?? "").replace(/\D/g, "");
@@ -189,6 +192,7 @@ export async function createPublicLead(req: Request, res: Response) {
 
     /* ── Notify admins (non-blocking) ───────────── */
     void triggerPublicLeadNotification({ leadId: lead.id, source });
+    void dispatchAdminPublicLeadNotification({ leadId: lead.id, source });
 
     return sendSuccessResponse(res, 201, "Inquiry submitted successfully", {
       id: lead.id,

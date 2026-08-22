@@ -12,6 +12,8 @@ import {
   ServerNotificationPayload,
   triggerAssignmentNotification,
   triggerHelperNotification,
+  dispatchLeadCreatedNotification,
+  dispatchLeadAssignedNotification,
 } from "../../services/notifications";
 import {
   syncLeadFollowUpAggregates,
@@ -131,6 +133,17 @@ export async function createLeadAdmin(req: Request, res: Response) {
       assigneeAccountId: assigneeAccountId ?? null,
       assigneeTeamId: assigneeTeamId ?? null,
     });
+
+    // Automated WhatsApp Notifications (Phase 1: Customer + Team Member)
+    void dispatchLeadCreatedNotification({ leadId: lead.id });
+    if (assigneeAccountId || assigneeTeamId) {
+      void dispatchLeadAssignedNotification({
+        leadId: lead.id,
+        assigneeAccountId: assigneeAccountId ?? null,
+        assigneeTeamId: assigneeTeamId ?? null,
+        assignedByAccountId: creatorAccountId,
+      });
+    }
 
     try {
       const io = getIo();
@@ -267,6 +280,9 @@ export async function createMyLead(req: Request, res: Response) {
       assigneeAccountId: assigneeAccountId ?? null,
       assigneeTeamId: assigneeTeamId ?? null,
     });
+
+    // Automated WhatsApp Notification: Customer only when user creates own lead
+    void dispatchLeadCreatedNotification({ leadId: lead.id });
 
     try {
       const io = getIo();
