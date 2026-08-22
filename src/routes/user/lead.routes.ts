@@ -23,6 +23,7 @@ import {
 } from "../../controller/user/lead.controller";
 import { createMyLead } from "../../controller/lead/create.controller";
 import { updateMyLeadStatus } from "../../controller/lead/update.controller";
+import { resendLeadWhatsAppNotification } from "../../controller/lead/notification.controller";
 
 const router = Router();
 
@@ -34,6 +35,7 @@ router.get("/leads/my/dsu", requireAuth, listMyLeads);
 router.get("/leads/:id", requireAuth, getMyLeadById);
 router.patch("/leads/:id/status", requireAuth, updateMyLeadStatus);
 router.get("/leads/:id/activity", requireAuth, getMyLeadActivity);
+router.post("/leads/:id/notifications/whatsapp/resend", requireAuth, resendLeadWhatsAppNotification);
 router.post("/leads/:id/helpers", requireAuth, addLeadHelper);
 router.delete("/leads/:id/helpers/:accountId", requireAuth, removeLeadHelper);
 router.post("/leads/:id/work/start", requireAuth, startLeadWork);

@@ -20,6 +20,8 @@ import cloudServicesRouter from "./cloud";
 import projectsRouter from "./project"
 import labelsRouter from "./label/label.routes"
 import outsourceDevelopersRouter from "./outsourceDeveloper/outsourceDeveloper.routes";
+import { requireAuth } from "../core/middleware/auth";
+import { resendLeadWhatsAppNotification } from "../controller/lead/notification.controller";
 
 
 const router = Router();
@@ -46,6 +48,12 @@ router.use("/projects", projectsRouter);
 router.use("/labels", labelsRouter);
 router.use("/outsource-developers", outsourceDevelopersRouter);
 
+// Direct lead routes
+router.post(
+  "/leads/:id/notifications/whatsapp/resend",
+  requireAuth,
+  resendLeadWhatsAppNotification,
+);
 
 // export main
 export default router;

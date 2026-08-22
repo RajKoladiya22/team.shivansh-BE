@@ -37,6 +37,7 @@ import { getLeadByIdAdmin } from "../../controller/lead/details.controller";
 import { assignLeadAdmin } from "../../controller/lead/reassign.controller";
 import { closeLeadAdmin } from "../../controller/lead/close.controller";
 import { deleteLeadPermanentAdmin, deleteLeadState } from "../../controller/lead/delete.controller";
+import { resendLeadWhatsAppNotification } from "../../controller/lead/notification.controller";
 
 const router = Router();
 
@@ -77,6 +78,18 @@ router.get(
   requireRole("ADMIN", "SALES"),
   requirePermission("ALL", "VIEW_LEADS"),
   getLeadActivityTimelineAdmin,
+);
+
+/**
+ * Resend Lead WhatsApp Notification (Customer / Team Member)
+ * POST /admin/leads/:id/notifications/whatsapp/resend
+ */
+router.post(
+  "/leads/:id/notifications/whatsapp/resend",
+  requireAuth,
+  requireRole("ADMIN", "SALES"),
+  requirePermission("ALL", "VIEW_LEADS"),
+  resendLeadWhatsAppNotification,
 );
 
 /* ================= DYNAMIC :id ROUTES ================= */

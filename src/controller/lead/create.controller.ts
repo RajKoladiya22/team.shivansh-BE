@@ -14,6 +14,7 @@ import {
   triggerHelperNotification,
   dispatchLeadCreatedNotification,
   dispatchLeadAssignedNotification,
+  recordLeadNotificationSkipped,
 } from "../../services/notifications";
 import {
   syncLeadFollowUpAggregates,
@@ -59,6 +60,8 @@ export async function createLeadAdmin(req: Request, res: Response) {
       isImportant,
       forceCreate = false,
       voiceCommandText,
+      sendCustomerWhatsapp = true,
+      sendTeamWhatsapp = true,
     } = req.body as Record<string, any>;
 
     if (!source || !type)
@@ -134,15 +137,36 @@ export async function createLeadAdmin(req: Request, res: Response) {
       assigneeTeamId: assigneeTeamId ?? null,
     });
 
-    // Automated WhatsApp Notifications (Phase 1: Customer + Team Member)
-    void dispatchLeadCreatedNotification({ leadId: lead.id });
-    if (assigneeAccountId || assigneeTeamId) {
-      void dispatchLeadAssignedNotification({
+    // Automated WhatsApp Notifications (Customer + Team Member with opt-out controls)
+    if (sendCustomerWhatsapp !== false) {
+      void dispatchLeadCreatedNotification({ leadId: lead.id, performedByAccountId: creatorAccountId });
+    } else {
+      void recordLeadNotificationSkipped({
         leadId: lead.id,
-        assigneeAccountId: assigneeAccountId ?? null,
-        assigneeTeamId: assigneeTeamId ?? null,
-        assignedByAccountId: creatorAccountId,
+        recipientType: "CUSTOMER",
+        recipientName: lead.customerName,
+        recipientPhone: lead.mobileNumber,
+        performedByAccountId: creatorAccountId,
+        reason: "Customer notification disabled during lead creation",
       });
+    }
+
+    if (assigneeAccountId || assigneeTeamId) {
+      if (sendTeamWhatsapp !== false) {
+        void dispatchLeadAssignedNotification({
+          leadId: lead.id,
+          assigneeAccountId: assigneeAccountId ?? null,
+          assigneeTeamId: assigneeTeamId ?? null,
+          assignedByAccountId: creatorAccountId,
+        });
+      } else {
+        void recordLeadNotificationSkipped({
+          leadId: lead.id,
+          recipientType: "TEAM_MEMBER",
+          performedByAccountId: creatorAccountId,
+          reason: "Team member notification disabled during lead creation",
+        });
+      }
     }
 
     try {
@@ -205,6 +229,7 @@ export async function createMyLead(req: Request, res: Response) {
       isImportant,
       forceCreate = false,
       voiceCommandText,
+      sendCustomerWhatsapp = true,
     } = req.body as Record<string, any>;
 
     if (!source || !type)
@@ -282,7 +307,18 @@ export async function createMyLead(req: Request, res: Response) {
     });
 
     // Automated WhatsApp Notification: Customer only when user creates own lead
-    void dispatchLeadCreatedNotification({ leadId: lead.id });
+    if (sendCustomerWhatsapp !== false) {
+      void dispatchLeadCreatedNotification({ leadId: lead.id, performedByAccountId: creatorAccountId });
+    } else {
+      void recordLeadNotificationSkipped({
+        leadId: lead.id,
+        recipientType: "CUSTOMER",
+        recipientName: lead.customerName,
+        recipientPhone: lead.mobileNumber,
+        performedByAccountId: creatorAccountId,
+        reason: "Customer notification disabled during lead creation",
+      });
+    }
 
     try {
       const io = getIo();

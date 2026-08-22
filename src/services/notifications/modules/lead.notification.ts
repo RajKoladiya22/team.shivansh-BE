@@ -18,6 +18,8 @@ import { NotificationEvent, NotificationModule, RecipientType } from "../types";
 
 export interface LeadCreatedNotificationParams {
   leadId: string;
+  performedByAccountId?: string | null;
+  bypassDedupe?: boolean;
 }
 
 export interface LeadAssignedNotificationParams {
@@ -25,21 +27,105 @@ export interface LeadAssignedNotificationParams {
   assigneeAccountId?: string | null;
   assigneeTeamId?: string | null;
   assignedByAccountId?: string | null;
+  bypassDedupe?: boolean;
 }
 
 export interface LeadAdminPublicLeadNotificationParams {
   leadId: string;
   source?: string;
+  bypassDedupe?: boolean;
+}
+
+export interface LogLeadNotificationActivityParams {
+  leadId: string;
+  recipientType: "CUSTOMER" | "TEAM_MEMBER" | "ADMIN";
+  status: "SENT" | "FAILED" | "NOT_SENT";
+  recipientName?: string;
+  recipientPhone?: string;
+  campaignName?: string;
+  messageId?: string;
+  error?: string;
+  reason?: string;
+  performedByAccountId?: string | null;
+}
+
+/**
+ * Safely creates an activity log entry for WhatsApp notification attempts.
+ */
+export async function logLeadNotificationActivity(params: LogLeadNotificationActivityParams): Promise<void> {
+  try {
+    await prisma.leadActivityLog.create({
+      data: {
+        leadId: params.leadId,
+        action: "UPDATED",
+        performedBy: params.performedByAccountId ?? null,
+        meta: {
+          type: "WHATSAPP_NOTIFICATION",
+          recipientType: params.recipientType,
+          status: params.status,
+          recipientName: params.recipientName,
+          recipientPhone: params.recipientPhone,
+          campaignName: params.campaignName,
+          messageId: params.messageId,
+          error: params.error,
+          reason: params.reason,
+          at: new Date().toISOString(),
+        },
+      },
+    });
+  } catch (err) {
+    console.warn(`[Notification] Failed to log lead activity for ${params.leadId}:`, err);
+  }
+}
+
+/**
+ * Records an activity log when a notification is intentionally skipped.
+ */
+export async function recordLeadNotificationSkipped(params: {
+  leadId: string;
+  recipientType: "CUSTOMER" | "TEAM_MEMBER";
+  recipientPhone?: string;
+  recipientName?: string;
+  performedByAccountId?: string | null;
+  reason?: string;
+}): Promise<void> {
+  await logLeadNotificationActivity({
+    leadId: params.leadId,
+    recipientType: params.recipientType,
+    status: "NOT_SENT",
+    recipientPhone: params.recipientPhone,
+    recipientName: params.recipientName,
+    reason: params.reason || "Notification disabled during lead creation",
+    performedByAccountId: params.performedByAccountId,
+  });
 }
 
 /**
  * Handles WhatsApp notification when a new Lead is created.
  * Sends confirmation to the customer with tracking URL and assigned representative details.
  */
-export async function dispatchLeadCreatedNotification(params: LeadCreatedNotificationParams): Promise<void> {
-  const { leadId } = params;
+export async function dispatchLeadCreatedNotification(params: LeadCreatedNotificationParams): Promise<{
+  success: boolean;
+  status: "SENT" | "FAILED" | "NOT_SENT";
+  messageId?: string;
+  error?: string;
+}> {
+  const { leadId, performedByAccountId, bypassDedupe = false } = params;
 
   try {
+    const isEnabled = process.env.ONBITS_ENABLED !== "false";
+    if (!isEnabled) {
+      console.log(`[Notification] WhatsApp notifications disabled via ONBITS_ENABLED=false`);
+      await logLeadNotificationActivity({
+        leadId,
+        recipientType: "CUSTOMER",
+        status: "NOT_SENT",
+        reason: "WhatsApp notifications disabled via ONBITS_ENABLED=false",
+        performedByAccountId,
+      });
+      return { success: false, status: "NOT_SENT", error: "WhatsApp provider disabled" };
+    }
+
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
       include: {
@@ -63,20 +149,29 @@ export async function dispatchLeadCreatedNotification(params: LeadCreatedNotific
 
     if (!lead) {
       console.warn(`[Notification] Lead not found for leadId: ${leadId}`);
-      return;
+      return { success: false, status: "FAILED", error: "Lead not found" };
     }
 
     if (!isValidPhoneNumber(lead.mobileNumber)) {
       console.warn(`[Notification] Lead ${leadId} has invalid customer phone: ${lead.mobileNumber}`);
-      return;
+      await logLeadNotificationActivity({
+        leadId,
+        recipientType: "CUSTOMER",
+        status: "FAILED",
+        recipientName: lead.customerName,
+        recipientPhone: lead.mobileNumber,
+        error: `Invalid recipient phone number: ${lead.mobileNumber}`,
+        performedByAccountId,
+      });
+      return { success: false, status: "FAILED", error: `Invalid phone number: ${lead.mobileNumber}` };
     }
 
     const customerPhone = normalizePhoneNumber(lead.mobileNumber)!;
     const dedupeKey = `lead:created:${leadId}:${customerPhone}`;
 
-    if (!idempotencyCache.acquire(dedupeKey)) {
+    if (!bypassDedupe && !idempotencyCache.acquire(dedupeKey)) {
       console.log(`[Notification] Duplicate lead created notification prevented for ${dedupeKey}`);
-      return;
+      return { success: true, status: "SENT", error: "Duplicate request prevented" };
     }
 
     // Resolve assigned member details or default support contact
@@ -156,11 +251,12 @@ export async function dispatchLeadCreatedNotification(params: LeadCreatedNotific
 
     const message = renderCustomerConfirmation(variables);
     const provider = getNotificationProvider();
+    const campaignName = process.env.ONBITS_CUSTOMER_LEAD_CAMPAIGN || "New Customer Lead";
 
     const result = await provider.sendMessage({
       to: customerPhone,
       message,
-      campaignName: process.env.ONBITS_CUSTOMER_LEAD_CAMPAIGN || "New Customer Lead",
+      campaignName,
       templateName: "lead_customer_confirmation",
       templateVariables: {
         customer_name: `*${(lead.customerName || "Customer").trim()}*`,
@@ -178,11 +274,42 @@ export async function dispatchLeadCreatedNotification(params: LeadCreatedNotific
 
     if (!result.success) {
       console.error(`[Notification] Failed to send customer lead creation WhatsApp to ${customerPhone}:`, result.error);
-    } else {
-      console.log(`[Notification] Customer WhatsApp notification sent successfully for Lead ${leadId}`);
+      await logLeadNotificationActivity({
+        leadId,
+        recipientType: "CUSTOMER",
+        status: "FAILED",
+        recipientName: lead.customerName,
+        recipientPhone: customerPhone,
+        campaignName,
+        error: result.error || "WhatsApp delivery failed",
+        performedByAccountId,
+      });
+      return { success: false, status: "FAILED", error: result.error };
     }
-  } catch (err) {
+
+    console.log(`[Notification] Customer WhatsApp notification sent successfully for Lead ${leadId}`);
+    await logLeadNotificationActivity({
+      leadId,
+      recipientType: "CUSTOMER",
+      status: "SENT",
+      recipientName: lead.customerName,
+      recipientPhone: customerPhone,
+      campaignName,
+      messageId: result.messageId,
+      performedByAccountId,
+    });
+
+    return { success: true, status: "SENT", messageId: result.messageId };
+  } catch (err: any) {
     console.error(`[Notification] Error processing lead created notification for ${leadId}:`, err);
+    await logLeadNotificationActivity({
+      leadId,
+      recipientType: "CUSTOMER",
+      status: "FAILED",
+      error: err?.message || "Internal notification error",
+      performedByAccountId,
+    });
+    return { success: false, status: "FAILED", error: err?.message || "Internal notification error" };
   }
 }
 
@@ -190,14 +317,26 @@ export async function dispatchLeadCreatedNotification(params: LeadCreatedNotific
  * Handles WhatsApp notification when a Lead is assigned / reassigned.
  * Sends notification with lead information and direct portal link to the assigned team member(s).
  */
-export async function dispatchLeadAssignedNotification(params: LeadAssignedNotificationParams): Promise<void> {
-  const { leadId, assigneeAccountId, assigneeTeamId, assignedByAccountId } = params;
+export async function dispatchLeadAssignedNotification(params: LeadAssignedNotificationParams): Promise<{
+  success: boolean;
+  status: "SENT" | "FAILED" | "NOT_SENT";
+  count: number;
+  errors: string[];
+}> {
+  const { leadId, assigneeAccountId, assigneeTeamId, assignedByAccountId, bypassDedupe = false } = params;
 
   try {
     const isEnabled = process.env.ONBITS_ENABLED !== "false";
     if (!isEnabled) {
       console.log(`[Notification] WhatsApp notifications disabled via ONBITS_ENABLED=false`);
-      return;
+      await logLeadNotificationActivity({
+        leadId,
+        recipientType: "TEAM_MEMBER",
+        status: "NOT_SENT",
+        reason: "WhatsApp notifications disabled via ONBITS_ENABLED=false",
+        performedByAccountId: assignedByAccountId,
+      });
+      return { success: false, status: "NOT_SENT", count: 0, errors: ["WhatsApp provider disabled"] };
     }
 
     const lead = await prisma.lead.findUnique({
@@ -217,7 +356,7 @@ export async function dispatchLeadAssignedNotification(params: LeadAssignedNotif
 
     if (!lead) {
       console.warn(`[Notification] Lead not found for assignment notification: ${leadId}`);
-      return;
+      return { success: false, status: "FAILED", count: 0, errors: ["Lead not found"] };
     }
 
     // Resolve assigner name
@@ -271,7 +410,14 @@ export async function dispatchLeadAssignedNotification(params: LeadAssignedNotif
     }
 
     if (recipientAccounts.length === 0) {
-      return;
+      await logLeadNotificationActivity({
+        leadId,
+        recipientType: "TEAM_MEMBER",
+        status: "FAILED",
+        error: "No active assigned team members with valid phone numbers found",
+        performedByAccountId: assignedByAccountId,
+      });
+      return { success: false, status: "FAILED", count: 0, errors: ["No valid recipient phone numbers found"] };
     }
 
     const provider = getNotificationProvider();
@@ -283,14 +429,28 @@ export async function dispatchLeadAssignedNotification(params: LeadAssignedNotif
 
     const customerPhone = lead.mobileNumber || lead.customer?.mobile || "";
     const customerEmail = lead.customer?.email || "";
+    const campaignName = process.env.ONBITS_TEAM_LEAD_CAMPAIGN || "New Member Lead";
+
+    let successCount = 0;
+    const errors: string[] = [];
 
     for (const recipient of recipientAccounts) {
       const normalizedPhone = normalizePhoneNumber(recipient.phone);
-      if (!normalizedPhone) continue;
+      if (!normalizedPhone) {
+        await logLeadNotificationActivity({
+          leadId: lead.id,
+          recipientType: "TEAM_MEMBER",
+          status: "FAILED",
+          recipientName: recipient.name,
+          recipientPhone: recipient.phone,
+          error: "Invalid phone number format",
+          performedByAccountId: assignedByAccountId,
+        });
+        continue;
+      }
 
       const dedupeKey = `lead:assigned:${lead.id}:${recipient.id}:${normalizedPhone}`;
-      if (!idempotencyCache.acquire(dedupeKey, 10 * 60 * 1000)) {
-        // Skip duplicate assignment notification within 10 minutes
+      if (!bypassDedupe && !idempotencyCache.acquire(dedupeKey, 10 * 60 * 1000)) {
         continue;
       }
 
@@ -312,7 +472,7 @@ export async function dispatchLeadAssignedNotification(params: LeadAssignedNotif
       const result = await provider.sendMessage({
         to: normalizedPhone,
         message,
-        campaignName: process.env.ONBITS_TEAM_LEAD_CAMPAIGN || "New Member Lead",
+        campaignName,
         templateName: "lead_team_member_assignment",
         templateVariables: {
           team_member_name: recipient.name,
@@ -333,12 +493,118 @@ export async function dispatchLeadAssignedNotification(params: LeadAssignedNotif
 
       if (!result.success) {
         console.error(`[Notification] Failed to send team member lead assignment WhatsApp to ${normalizedPhone}:`, result.error);
+        errors.push(result.error || `Failed to send to ${recipient.name}`);
+        await logLeadNotificationActivity({
+          leadId: lead.id,
+          recipientType: "TEAM_MEMBER",
+          status: "FAILED",
+          recipientName: recipient.name,
+          recipientPhone: normalizedPhone,
+          campaignName,
+          error: result.error || "WhatsApp delivery failed",
+          performedByAccountId: assignedByAccountId,
+        });
       } else {
+        successCount++;
         console.log(`[Notification] Lead assignment WhatsApp sent successfully to ${recipient.name} (${normalizedPhone}) for Lead ${lead.id}`);
+        await logLeadNotificationActivity({
+          leadId: lead.id,
+          recipientType: "TEAM_MEMBER",
+          status: "SENT",
+          recipientName: recipient.name,
+          recipientPhone: normalizedPhone,
+          campaignName,
+          messageId: result.messageId,
+          performedByAccountId: assignedByAccountId,
+        });
       }
     }
-  } catch (err) {
+
+    return {
+      success: successCount > 0,
+      status: successCount > 0 ? "SENT" : "FAILED",
+      count: successCount,
+      errors,
+    };
+  } catch (err: any) {
     console.error(`[Notification] Error processing lead assigned notification for ${leadId}:`, err);
+    await logLeadNotificationActivity({
+      leadId,
+      recipientType: "TEAM_MEMBER",
+      status: "FAILED",
+      error: err?.message || "Internal notification error",
+      performedByAccountId: assignedByAccountId,
+    });
+    return { success: false, status: "FAILED", count: 0, errors: [err?.message || "Internal notification error"] };
+  }
+}
+
+/**
+ * Direct Manual / Resend trigger for Lead WhatsApp Notifications.
+ */
+export async function sendLeadWhatsAppNotificationDirect(params: {
+  leadId: string;
+  recipientType: "CUSTOMER" | "TEAM_MEMBER";
+  performedByAccountId: string;
+}): Promise<{
+  success: boolean;
+  status: "SENT" | "FAILED";
+  message: string;
+  error?: string;
+}> {
+  const { leadId, recipientType, performedByAccountId } = params;
+
+  if (recipientType === "CUSTOMER") {
+    const res = await dispatchLeadCreatedNotification({
+      leadId,
+      performedByAccountId,
+      bypassDedupe: true,
+    });
+    return {
+      success: res.success,
+      status: res.status === "SENT" ? "SENT" : "FAILED",
+      message: res.success
+        ? "WhatsApp notification sent to Customer successfully"
+        : res.error || "Failed to send WhatsApp notification to Customer",
+      error: res.error,
+    };
+  } else {
+    // Find active assignment for this lead
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      include: {
+        assignments: {
+          where: { isActive: true },
+          take: 1,
+        },
+      },
+    });
+
+    if (!lead) {
+      return { success: false, status: "FAILED", message: "Lead not found" };
+    }
+
+    const activeAssignment = lead.assignments?.[0];
+    if (!activeAssignment) {
+      return { success: false, status: "FAILED", message: "No active team member or team assigned to this lead" };
+    }
+
+    const res = await dispatchLeadAssignedNotification({
+      leadId,
+      assigneeAccountId: activeAssignment.accountId ?? undefined,
+      assigneeTeamId: activeAssignment.teamId ?? undefined,
+      assignedByAccountId: performedByAccountId,
+      bypassDedupe: true,
+    });
+
+    return {
+      success: res.success,
+      status: res.status === "SENT" ? "SENT" : "FAILED",
+      message: res.success
+        ? `WhatsApp notification sent to ${res.count} assigned member(s)`
+        : res.errors.join(", ") || "Failed to send WhatsApp notification to team member(s)",
+      error: res.errors.join(", "),
+    };
   }
 }
 
