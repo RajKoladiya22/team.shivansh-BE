@@ -33,11 +33,16 @@ import {
   updateProjectComment,
   deleteProjectComment,
 } from "../../controller/project/comment.controller";
+import { getProjectAnalyticsDashboard } from "../../controller/project/projectAnalytics.controller";
 import { requireAuth, requireRole } from "../../core/middleware/auth";
 
 const router = Router();
 
 router.use(requireAuth);
+
+// ── Analytics & Dashboard ───────────────────────────────────
+router.get("/analytics", getProjectAnalyticsDashboard);
+router.get("/analytics/dashboard", getProjectAnalyticsDashboard);
 
 // ── Project CRUD ────────────────────────────────────────────
 router.get("/", listProjects);
