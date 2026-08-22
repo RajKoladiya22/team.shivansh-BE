@@ -21,6 +21,7 @@ interface BIODetails {
   bloodGroup?: string;
   gender?: string;
   referredBy?: string;
+  personalNumber?: string;
 }
 
 interface AddressDetails {
