@@ -9,13 +9,18 @@ async function emitSupportPatch(supportId, patchData) {
     try {
         const io = getIo();
         io.to("supports:admin").emit("support:patch", { id: supportId, patch: patchData });
+        io.to(`support:${supportId}`).emit("support:patch", { id: supportId, patch: patchData });
 
         const support = await prisma.support.findUnique({
             where: { id: supportId },
-            select: { createdBy: true, assignments: { select: { accountId: true, isActive: true } } }
+            select: { customerId: true, createdBy: true, assignments: { select: { accountId: true, isActive: true } } }
         });
 
         if (support) {
+            if (support.customerId) {
+                io.to(`customer:support:${support.customerId}`).emit("support:patch", { id: supportId, patch: patchData });
+                io.to(`customer:${support.customerId}`).emit("support:patch", { id: supportId, patch: patchData });
+            }
             if (support.createdBy) {
                 io.to(`supports:user:${support.createdBy}`).emit("support:patch", { id: supportId, patch: patchData });
             }

@@ -3,6 +3,7 @@
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpResponse";
+import { getIo } from "../../core/utils/socket";
 
 /**
  * GET /api/v1/public/portal/discoveries
@@ -353,6 +354,16 @@ export async function addDiscoveryComment(req: Request, res: Response) {
         data: { commentsCount: { increment: 1 } },
       }),
     ]);
+
+    try {
+      const io = getIo();
+      io.to(`discovery:comments:${id}`).emit("discovery:comment", {
+        discoveryId: id,
+        comment: newComment,
+      });
+    } catch (socketErr) {
+      console.warn("[addDiscoveryComment] Socket emit skipped:", socketErr);
+    }
 
     return sendSuccessResponse(res, 201, "Comment posted successfully", newComment);
   } catch (err: any) {

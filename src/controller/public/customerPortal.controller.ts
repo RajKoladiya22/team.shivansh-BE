@@ -10,6 +10,7 @@ import {
   triggerPortalSupportRemarkNotification,
 } from "../../services/notifications";
 import { env } from "../../config/database.config";
+import { getIo } from "../../core/utils/socket";
 
 /**
  * GET /api/v1/public/portal/session
@@ -615,6 +616,19 @@ export async function addPortalSupportRemark(req: Request, res: Response) {
 
     // Trigger notification
     triggerPortalSupportRemarkNotification({ supportId: id });
+
+    // Emit live socket updates
+    try {
+      const io = getIo();
+      io.to(`support:${id}`).emit("support:patch", { id, patch: { remarks: updated.remarks, status: updated.status } });
+      io.to("supports:admin").emit("support:patch", { id, patch: { remarks: updated.remarks, status: updated.status } });
+      io.to(`customer:support:${customerId}`).emit("support:patch", { id, patch: { remarks: updated.remarks, status: updated.status } });
+      if (support.createdBy) {
+        io.to(`supports:user:${support.createdBy}`).emit("support:patch", { id, patch: { remarks: updated.remarks, status: updated.status } });
+      }
+    } catch (socketErr) {
+      console.warn("[addPortalSupportRemark] Socket emit skipped:", socketErr);
+    }
 
     await logCustomerPortalAudit(customerId, "ADD_SUPPORT_REMARK", req, { supportId: id });
 

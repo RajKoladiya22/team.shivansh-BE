@@ -2,6 +2,7 @@
 import http from "http";
 import { Server, Socket } from "socket.io";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { prisma } from "../../../config/database.config";
 import { validatedEnv } from "../../../config/validate-env";
 import { env } from "../../../config/database.config";
@@ -10,57 +11,150 @@ const JWT_SECRET = env.JWT_ACCESS_TOKEN_SECRET!;
 
 let io: Server | null = null;
 
+const allowedOrigins = [
+  "https://team.shivanshinfosys.in",
+  "https://customer.shivanshinfosys.in",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:3000",
+];
+
 export function initIo(server: http.Server) {
   if (io) return io;
 
   io = new Server(server, {
     cors: {
-      origin: ["https://team.shivanshinfosys.in", "http://localhost:5173"],
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (
+          allowedOrigins.includes(origin) ||
+          origin.endsWith(".shivanshinfosys.in") ||
+          origin.startsWith("http://localhost:") ||
+          origin.startsWith("http://127.0.0.1:")
+        ) {
+          return callback(null, true);
+        }
+        return callback(null, true);
+      },
       credentials: true,
     },
   });
 
   /**
-   * AUTH MIDDLEWARE
+   * DUAL AUTH MIDDLEWARE: Supports both Team Users (JWT) and Customers (Portal Token)
    */
   io.use(async (socket, next) => {
     try {
-      const token = socket.handshake.auth?.token;
-      // console.log("\n\n\nTOKEN-->\n", token);
+      const rawToken =
+        socket.handshake.auth?.token ||
+        socket.handshake.headers?.token ||
+        socket.handshake.query?.token;
 
-      if (!token) return next(new Error("Unauthorized"));
+      if (!rawToken || typeof rawToken !== "string") {
+        return next(new Error("Unauthorized: Token missing"));
+      }
 
-      const decoded: any = jwt.verify(token, JWT_SECRET);
+      const token = rawToken.trim();
 
-      const user = await prisma.user.findUnique({
-        where: { id: decoded.id },
-        select: {
-          id: true,
-          accountId: true,
-          roles: {
-            include: {
-              role: true, // 👈 this is the important part
-            },
-          },
-          username: true,
+      // 1. Try Customer Portal Token (SHA-256 hash lookup in database)
+      const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+      const portalToken = await prisma.customerPortalToken.findUnique({
+        where: { tokenHash },
+        include: {
+          customer: true,
         },
       });
 
-      // console.log("\n\n\nuser-->\n", user);
+      if (portalToken && portalToken.isActive && portalToken.customer?.isActive) {
+        if (portalToken.expiresAt && new Date(portalToken.expiresAt) < new Date()) {
+          return next(new Error("Unauthorized: Portal link expired"));
+        }
+        socket.data.isCustomer = true;
+        socket.data.customer = portalToken.customer;
+        socket.data.portalToken = portalToken;
+        return next();
+      }
 
-      if (!user) return next(new Error("Unauthorized"));
+      // 2. Try Team Member JWT Token
+      try {
+        const decoded: any = jwt.verify(token, JWT_SECRET);
+        if (decoded?.id) {
+          const user = await prisma.user.findUnique({
+            where: { id: decoded.id },
+            select: {
+              id: true,
+              accountId: true,
+              roles: {
+                include: {
+                  role: true,
+                },
+              },
+              username: true,
+            },
+          });
 
-      socket.data.user = user;
-      next();
+          if (user) {
+            socket.data.isCustomer = false;
+            socket.data.user = user;
+            return next();
+          }
+        }
+      } catch (jwtErr) {
+        // Not a valid team JWT
+      }
+
+      return next(new Error("Unauthorized: Invalid token"));
     } catch (err) {
-      next(new Error("Unauthorized"));
+      console.error("[SocketAuth] Error:", err);
+      return next(new Error("Unauthorized"));
     }
   });
 
   io.on("connection", (socket: Socket) => {
-    const user = socket.data.user;
+    // ── CUSTOMER CONNECTION ──────────────────────────────────
+    if (socket.data.isCustomer && socket.data.customer) {
+      const customer = socket.data.customer;
+      console.log("🔌 Customer socket connected:", socket.id, customer.name);
 
-    console.log("🔌 socket connected:", socket.id, user.username);
+      // Join core customer rooms
+      socket.join(`customer:${customer.id}`);
+      socket.join(`customer:notif:${customer.id}`);
+      socket.join(`customer:support:${customer.id}`);
+      socket.join("discovery:feed");
+
+      socket.on("support:join", (supportId: string) => {
+        if (!supportId) return;
+        socket.join(`support:${supportId}`);
+        console.log(`📡 Customer socket ${socket.id} joined support:${supportId}`);
+      });
+
+      socket.on("support:leave", (supportId: string) => {
+        if (!supportId) return;
+        socket.leave(`support:${supportId}`);
+      });
+
+      socket.on("discovery:join", (discoveryId: string) => {
+        if (!discoveryId) return;
+        socket.join(`discovery:comments:${discoveryId}`);
+      });
+
+      socket.on("discovery:leave", (discoveryId: string) => {
+        if (!discoveryId) return;
+        socket.leave(`discovery:comments:${discoveryId}`);
+      });
+
+      socket.on("disconnect", (reason) => {
+        console.log("❌ Customer socket disconnected:", socket.id, customer.name, reason);
+      });
+
+      return;
+    }
+
+    // ── TEAM MEMBER CONNECTION ──────────────────────────────
+    const user = socket.data.user;
+    if (!user) return;
+
+    console.log("🔌 Team socket connected:", socket.id, user.username);
 
     /**
      * AUTO JOIN CORE ROOMS
