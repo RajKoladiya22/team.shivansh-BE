@@ -16,6 +16,7 @@ import {
   trySendQuotationEmail,
   formatQuotationResponse,
 } from "../../services/quotation";
+import { dispatchQuotationWhatsAppNotification } from "../../services/notifications";
 
 async function resolveCatalogIds(items: any[]) {
   const incomingIds = items
@@ -615,6 +616,8 @@ export async function sendQuotationAdmin(req: Request, res: Response) {
       note: note ?? null,
     };
 
+    const effectiveChannel = (channel as any) ?? existing.channel;
+
     const updated = await prisma.$transaction(async (tx) => {
       const q = await tx.quotation.update({
         where: { id },
@@ -622,7 +625,7 @@ export async function sendQuotationAdmin(req: Request, res: Response) {
           status: "SENT",
           sentAt: existing.sentAt ?? new Date(), // only set first time
           sendHistory: [...existingHistory, newEntry],
-          channel: (channel as any) ?? existing.channel,
+          channel: effectiveChannel,
         },
         select: quotationFullSelect,
       });
@@ -632,19 +635,29 @@ export async function sendQuotationAdmin(req: Request, res: Response) {
           quotationId: id,
           action: "SENT",
           performedBy: performerAccountId,
-          meta: { channel, sentTo, note },
+          meta: { channel: effectiveChannel, sentTo, note },
         },
       });
 
       return q;
     });
 
-    // console.log("\n\n\n\n\n\n\n\n\n\n\nsend updated", updated, "\n\n\n");
-
-    // Only pass sentTo to trySendQuotationEmail if it looks like an email and channel is EMAIL
-    const isEmail = (str: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str);
-    const emailToSend = channel === "EMAIL" && sentTo && isEmail(sentTo) ? sentTo : undefined;
-    void trySendQuotationEmail(updated, false, emailToSend);
+    // ── Dispatch notifications based on channel ──
+    if (effectiveChannel === "WHATSAPP") {
+      void dispatchQuotationWhatsAppNotification({
+        quotationId: updated.id,
+        recipientPhone: sentTo || undefined,
+        performedByAccountId: performerAccountId,
+        note,
+        isReminder: false,
+        bypassDedupe: true,
+      });
+    } else {
+      // Only pass sentTo to trySendQuotationEmail if it looks like an email and channel is EMAIL
+      const isEmail = (str: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str);
+      const emailToSend = sentTo && isEmail(sentTo) ? sentTo : undefined;
+      void trySendQuotationEmail(updated, false, emailToSend);
+    }
 
     return sendSuccessResponse(res, 200, "Quotation marked as sent", formatQuotationResponse(updated));
   } catch (err: any) {
@@ -683,6 +696,8 @@ export async function remindQuotationAdmin(req: Request, res: Response) {
       ? (existing.sendHistory as any[])
       : [];
 
+    const effectiveChannel = (channel as any) ?? existing.channel;
+
     const updated = await prisma.$transaction(async (tx) => {
       const q = await tx.quotation.update({
         where: { id },
@@ -692,7 +707,7 @@ export async function remindQuotationAdmin(req: Request, res: Response) {
             ...existingHistory,
             {
               sentAt: new Date().toISOString(),
-              channel: channel ?? existing.channel,
+              channel: effectiveChannel,
               sentTo: sentTo ?? null,
               sentBy: performerAccountId,
               note: note ?? "Reminder",
@@ -700,7 +715,6 @@ export async function remindQuotationAdmin(req: Request, res: Response) {
             },
           ],
         },
-        // select: { id: true, quotationNumber: true, reminderSentAt: true },
         select: quotationFullSelect,
       });
 
@@ -709,17 +723,28 @@ export async function remindQuotationAdmin(req: Request, res: Response) {
           quotationId: id,
           action: "REMINDER_SENT",
           performedBy: performerAccountId,
-          meta: { channel, sentTo, note },
+          meta: { channel: effectiveChannel, sentTo, note },
         },
       });
 
       return q;
     });
 
-    // console.log("\n\n\n\n\n\n\n\n\n\n\nremind updated", updated, "\n\n\n");
-
-
-    void trySendQuotationEmail(updated, true);
+    // ── Dispatch reminder notifications based on channel ──
+    if (effectiveChannel === "WHATSAPP") {
+      void dispatchQuotationWhatsAppNotification({
+        quotationId: updated.id,
+        recipientPhone: sentTo || undefined,
+        performedByAccountId: performerAccountId,
+        note: note ?? "Reminder",
+        isReminder: true,
+        bypassDedupe: true,
+      });
+    } else {
+      const isEmail = (str: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str);
+      const emailToSend = sentTo && isEmail(sentTo) ? sentTo : undefined;
+      void trySendQuotationEmail(updated, true, emailToSend);
+    }
 
     return sendSuccessResponse(res, 200, "Reminder logged", formatQuotationResponse(updated));
   } catch (err: any) {

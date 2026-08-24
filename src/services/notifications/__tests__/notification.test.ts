@@ -11,6 +11,15 @@ import {
   renderTeamMemberAssignment,
   renderAdminPublicLead,
 } from "../templates/lead.templates";
+import {
+  getPublicQuotationUrl,
+  renderQuotationSent,
+  renderQuotationReminder,
+  buildQuotationSummary,
+  formatCurrency,
+  formatQuotationDate,
+  QUOTATION_TEMPLATES,
+} from "../templates/quotation.templates";
 import { MockProvider } from "../providers/mock.provider";
 import { getNotificationProvider, setNotificationProvider } from "../providers/provider.factory";
 
@@ -170,6 +179,87 @@ async function runTests() {
   assert(sendResult.success === true, "Mock provider successfully dispatches message");
   assert(mock.sentMessages.length === 1, "Mock provider tracks dispatched message history");
   assert(mock.sentMessages[0].to === "919876543210", "Dispatches with normalized phone number");
+
+  // 7. Quotation Templates, Formatting & WhatsApp Sending Tests
+  console.log("\n7. Quotation Templates, URL Builders & Dispatch:");
+  assert(getPublicQuotationUrl("qt-test-99").includes("/quotation/qt-test-99"), "Generates valid public quotation URL");
+  assert(formatCurrency(25000) === "25,000.00", "Formats integer amount to currency string");
+  assert(formatCurrency("18999.5") === "18,999.50", "Formats decimal amount correctly");
+  assert(formatCurrency(null) === "0.00", "Handles null currency fallback");
+
+  const singleItemSummary = buildQuotationSummary([{ name: "TallyPrime Gold", qty: 1 }]);
+  assert(singleItemSummary === "TallyPrime Gold (Qty: 1)", "Builds summary for single line item");
+
+  const multiItemSummary = buildQuotationSummary([
+    { name: "TallyPrime Gold", qty: 1 },
+    { name: "Cloud Server", qty: 1 },
+    { name: "Annual Support", qty: 1 },
+    { name: "Implementation", qty: 1 },
+  ]);
+  assert(multiItemSummary.includes("TallyPrime Gold (Qty: 1)") && multiItemSummary.includes("and 1 more item(s)"), "Truncates line items beyond 3 and adds remainder count");
+
+  const fallbackSummary = buildQuotationSummary([], "Custom Software Development Proposal");
+  assert(fallbackSummary === "Custom Software Development Proposal", "Falls back to quotation subject when line items are empty");
+
+  const quoteMsg = renderQuotationSent({
+    customer_name: "Amit Shah",
+    quotation_number: "QT-2026-08-0042",
+    grand_total: "25,000.00",
+    quotation_summary: "TallyPrime Gold (Qty: 1)",
+    valid_until: "31 Aug 2026",
+    quotation_url: getPublicQuotationUrl("qt-uuid-42"),
+    prepared_by_name: "Mehul Patel",
+    prepared_by_phone: "8141703007",
+  });
+  assert(
+    quoteMsg.includes("Hello Amit Shah,") &&
+    quoteMsg.includes("Your quotation *#QT-2026-08-0042* is ready.") &&
+    quoteMsg.includes("• Total Amount: ₹25,000.00") &&
+    quoteMsg.includes("• Valid Until: 31 Aug 2026") &&
+    quoteMsg.includes("/quotation/qt-uuid-42") &&
+    quoteMsg.includes("Mehul Patel") &&
+    quoteMsg.includes("8141703007") &&
+    quoteMsg.includes("Shivansh Infosys\nwww.shivanshinfosys.in"),
+    "Renders Meta-compliant quotation dispatch message with all dynamic fields"
+  );
+
+  const reminderMsg = renderQuotationReminder({
+    customer_name: "Amit Shah",
+    quotation_number: "QT-2026-08-0042",
+    grand_total: "25,000.00",
+    quotation_summary: "TallyPrime Gold (Qty: 1)",
+    valid_until: "31 Aug 2026",
+    quotation_url: getPublicQuotationUrl("qt-uuid-42"),
+    prepared_by_name: "Mehul Patel",
+    prepared_by_phone: "8141703007",
+  });
+  assert(
+    reminderMsg.includes("Hello Amit Shah,") &&
+    reminderMsg.includes("This is a gentle reminder regarding quotation *#QT-2026-08-0042*") &&
+    reminderMsg.includes("• Total Amount: ₹25,000.00"),
+    "Renders Meta-compliant quotation reminder message"
+  );
+
+  // Test WhatsApp message dispatch with Quotation variables via MockProvider
+  const quoteSendResult = await provider.sendMessage({
+    to: "+91 99134 23994",
+    message: quoteMsg,
+    campaignName: "Quotation",
+    templateName: "quotation_share_customer",
+    templateVariables: {
+      customer_name: "Amit Shah",
+      quotation_number: "QT-2026-08-0042",
+      grand_total: "25,000.00",
+      valid_until: "31 Aug 2026",
+      quotation_summary: "TallyPrime Gold (Qty: 1)",
+      quotation_url: getPublicQuotationUrl("qt-uuid-42"),
+      prepared_by_name: "Mehul Patel",
+      prepared_by_phone: "8141703007",
+    },
+  });
+  assert(quoteSendResult.success === true, "Mock provider successfully dispatches Quotation WhatsApp message");
+  assert(mock.sentMessages.length === 2, "Mock provider records quotation dispatch in history");
+  assert(mock.sentMessages[1].to === "919913423994", "Dispatches quotation with normalized recipient phone");
 
   console.log(`\n========================================`);
   console.log(`Test Summary: ${passed} passed, ${failed} failed.`);
