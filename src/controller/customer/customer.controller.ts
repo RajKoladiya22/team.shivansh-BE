@@ -96,29 +96,37 @@ export async function getCustomerList(req: Request, res: Response) {
     if (search?.trim()) {
       const raw = search.trim();
       const normalized = raw.replace(/\D/g, "");
-      const isPhone = /^\d+$/.test(raw) && normalized.length >= 6;
 
-      if (isPhone) {
-        // Fast indexed path for mobile lookups
-        andConditions.push({
-          OR: [
-            { normalizedMobile: { contains: normalized } },
-            { mobile: { contains: raw } },
-          ],
-        });
-      } else {
-        // Text search: names + company + mobile prefix
-        const orBlock: any[] = [
-          { name: { contains: raw, mode: "insensitive" } },
-          { customerCompanyName: { contains: raw, mode: "insensitive" } },
-          { contactPerson: { contains: raw, mode: "insensitive" } },
-        ];
-        // Also allow numeric substring within the text query
-        if (normalized.length >= 4) {
-          orBlock.push({ normalizedMobile: { contains: normalized } });
-        }
-        andConditions.push({ OR: orBlock });
+      // Match in JSON emails or phones
+      const jsonPattern = `%${raw}%`;
+      const phoneJsonPattern = normalized ? `%${normalized}%` : jsonPattern;
+
+      const matchingJsonRows = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT id
+        FROM "Customer"
+        WHERE (emails IS NOT NULL AND emails::text ILIKE ${jsonPattern})
+           OR (phones IS NOT NULL AND phones::text ILIKE ${phoneJsonPattern})
+      `;
+
+      const jsonIds = matchingJsonRows.map((r) => r.id);
+
+      const orBlock: any[] = [
+        { name: { contains: raw, mode: "insensitive" } },
+        { customerCompanyName: { contains: raw, mode: "insensitive" } },
+        { contactPerson: { contains: raw, mode: "insensitive" } },
+        { mobile: { contains: raw, mode: "insensitive" } },
+        { email: { contains: raw, mode: "insensitive" } },
+      ];
+
+      if (normalized.length > 0) {
+        orBlock.push({ normalizedMobile: { contains: normalized } });
       }
+
+      if (jsonIds.length > 0) {
+        orBlock.push({ id: { in: jsonIds } });
+      }
+
+      andConditions.push({ OR: orBlock });
     }
 
     /* ── Structured field filters ──────────────────
@@ -189,41 +197,149 @@ export async function getCustomerList(req: Request, res: Response) {
     /* ── Final where clause ── */
     const where = andConditions.length > 0 ? { AND: andConditions } : {};
 
-    /* ── Query ─────────────────────────────────────
-       Re-enable $transaction so count + findMany
-       share the same snapshot and avoid a TOCTOU gap.
+    const customerSelect = {
+      id: true,
+      name: true,
+      customerCompanyName: true,
+      contactPerson: true,
+      mobile: true,
+      normalizedMobile: true,
+      email: true,
+      emails: true,
+      phones: true,
+      city: true,
+      state: true,
+      customerCategory: true,
+      businessCategory: true,
+      tallySerial: true,
+      tallyVersion: true,
+      joiningDate: true,
+      products: true,
+      isActive: true,
+      createdAt: true,
+      isTncAccepted: true,
+      tncAcceptedAt: true,
+      tncToken: true,
+      _count: { select: { leads: true } },
+      leads: true,
+    };
+
+    let items: any[] = [];
+    let total = 0;
+
+    /* ── Query Execution with Relevance Prioritization ──
+       When a search term is provided, prioritize matches:
+       1. normalizedMobile / mobile
+       2. customerCompanyName
+       3. name
+       4. contactPerson
+       5. email
+       6. emails & phones (JSON)
+       Within the same tier, sort by createdAt DESC.
     ─────────────────────────────────────────────── */
-    const [items, total] = await prisma.$transaction([
-      prisma.customer.findMany({
+    if (search?.trim()) {
+      const raw = search.trim().toLowerCase();
+      const normalized = raw.replace(/\D/g, "");
+
+      const matchingCandidates = await prisma.customer.findMany({
         where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: "desc" },
         select: {
           id: true,
-          name: true,
-          customerCompanyName: true,
           mobile: true,
+          normalizedMobile: true,
+          customerCompanyName: true,
+          name: true,
+          contactPerson: true,
           email: true,
-          city: true,
-          state: true,
-          customerCategory: true,
-          businessCategory: true,
-          tallySerial: true,
-          tallyVersion: true,
-          joiningDate: true,
-          products: true,
-          isActive: true,
           createdAt: true,
-          isTncAccepted: true,
-          tncAcceptedAt: true,
-          tncToken: true,
-          _count: { select: { leads: true } },
-          leads: true,
         },
-      }),
-      prisma.customer.count({ where }),
-    ]);
+      });
+
+      total = matchingCandidates.length;
+
+      const getPriorityScore = (c: any) => {
+        const normMob = (c.normalizedMobile || "").toLowerCase();
+        const mob = (c.mobile || "").toLowerCase();
+        const comp = (c.customerCompanyName || "").toLowerCase();
+        const name = (c.name || "").toLowerCase();
+        const cp = (c.contactPerson || "").toLowerCase();
+        const em = (c.email || "").toLowerCase();
+
+        // Priority 1: normalizedMobile / mobile
+        if ((normalized && normMob.includes(normalized)) || (raw && mob.includes(raw))) {
+          if (normMob === normalized || mob === raw) return 1;
+          if (normMob.startsWith(normalized) || mob.startsWith(raw)) return 2;
+          return 3;
+        }
+
+        // Priority 2: customerCompanyName
+        if (comp && comp.includes(raw)) {
+          if (comp === raw) return 4;
+          if (comp.startsWith(raw)) return 5;
+          return 6;
+        }
+
+        // Priority 3: name
+        if (name && name.includes(raw)) {
+          if (name === raw) return 7;
+          if (name.startsWith(raw)) return 8;
+          return 9;
+        }
+
+        // Priority 4: contactPerson
+        if (cp && cp.includes(raw)) {
+          if (cp === raw) return 10;
+          if (cp.startsWith(raw)) return 11;
+          return 12;
+        }
+
+        // Priority 5: email
+        if (em && em.includes(raw)) {
+          if (em === raw) return 13;
+          if (em.startsWith(raw)) return 14;
+          return 15;
+        }
+
+        // Priority 6: emails & phones (JSON)
+        return 16;
+      };
+
+      matchingCandidates.sort((a, b) => {
+        const scoreA = getPriorityScore(a);
+        const scoreB = getPriorityScore(b);
+        if (scoreA !== scoreB) {
+          return scoreA - scoreB;
+        }
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+
+      const paginatedIds = matchingCandidates.slice(skip, skip + limit).map((c) => c.id);
+
+      if (paginatedIds.length > 0) {
+        const fetchedItems = await prisma.customer.findMany({
+          where: { id: { in: paginatedIds } },
+          select: customerSelect,
+        });
+
+        const itemMap = new Map(fetchedItems.map((item) => [item.id, item]));
+        items = paginatedIds.map((id) => itemMap.get(id)).filter(Boolean);
+      } else {
+        items = [];
+      }
+    } else {
+      const [fetchedItems, count] = await prisma.$transaction([
+        prisma.customer.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { createdAt: "desc" },
+          select: customerSelect,
+        }),
+        prisma.customer.count({ where }),
+      ]);
+      items = fetchedItems;
+      total = count;
+    }
 
     return sendSuccessResponse(res, 200, "Customers fetched", {
       page,
