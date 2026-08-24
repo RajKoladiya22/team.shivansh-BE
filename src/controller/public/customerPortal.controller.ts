@@ -19,13 +19,16 @@ export async function getPortalSession(req: Request, res: Response) {
   try {
     const customerId = req.customer.id;
 
-    const [activeProductsCount, openTicketsCount, pendingQuotationsCount, leadsCount] =
+    const [activeProductsCount, openTicketsCount, totalSupportsCount, pendingQuotationsCount, leadsCount] =
       await Promise.all([
         prisma.customerProduct.count({
           where: { customerId, isActive: true },
         }),
         prisma.support.count({
           where: { customerId, status: { in: ["OPEN", "IN_PROGRESS"] } },
+        }),
+        prisma.support.count({
+          where: { customerId },
         }),
         prisma.quotation.count({
           where: { customerId, status: { in: ["SENT", "VIEWED"] } },
@@ -57,6 +60,8 @@ export async function getPortalSession(req: Request, res: Response) {
         counts: {
           activeProducts: activeProductsCount,
           openTickets: openTicketsCount,
+          totalSupports: totalSupportsCount,
+          supports: totalSupportsCount,
           pendingQuotations: pendingQuotationsCount,
           inquiries: leadsCount,
         },
@@ -679,7 +684,7 @@ export async function getPortalLeads(req: Request, res: Response) {
 export async function createPortalLead(req: Request, res: Response) {
   try {
     const customerId = req.customer.id;
-    const { title, requirements, budget } = req.body;
+    const { title, requirements, budget, product } = req.body;
 
     if (!title || !title.trim()) {
       return res.status(400).json({ success: false, message: "Inquiry title is required" });
@@ -691,6 +696,7 @@ export async function createPortalLead(req: Request, res: Response) {
         mobileNumber: req.customer.mobile,
         customerCompanyName: req.customer.customerCompanyName || req.customer.name,
         productTitle: title.trim(),
+        product: product || undefined,
         remark: requirements?.trim() || null,
         cost: budget ? parseFloat(budget) : null,
         customerId,
