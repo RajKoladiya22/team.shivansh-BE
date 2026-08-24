@@ -88,6 +88,7 @@ export async function getPortalProfile(req: Request, res: Response) {
         customerCompanyName: true,
         contactPerson: true,
         mobile: true,
+        normalizedMobile: true,
         email: true,
         emails: true,
         phones: true,
@@ -120,17 +121,57 @@ export async function getPortalProfile(req: Request, res: Response) {
  */
 export async function updatePortalProfile(req: Request, res: Response) {
   try {
-    const { contactPerson, email, city, state, phones, emails } = req.body;
+    const {
+      name,
+      customerCompanyName,
+      contactPerson,
+      mobile,
+      email,
+      emails,
+      phones,
+      city,
+      state,
+      businessCategory,
+    } = req.body;
+
+    let normalizedMobile: string | undefined;
+    if (mobile !== undefined && typeof mobile === "string" && mobile.trim()) {
+      let cleaned = mobile.replace(/[\s\-\.]/g, "").replace(/^\+/, "");
+      cleaned = cleaned.replace(/^91(\d{10})$/, "$1").replace(/^0(\d{10})$/, "$1");
+      cleaned = cleaned.replace(/\D/g, "").slice(0, 10);
+
+      if (cleaned.length === 10) {
+        normalizedMobile = cleaned;
+        // Check uniqueness if mobile changed
+        const existing = await prisma.customer.findFirst({
+          where: {
+            normalizedMobile,
+            id: { not: req.customer.id },
+          },
+        });
+        if (existing) {
+          return res.status(400).json({
+            success: false,
+            message: "Mobile number already in use by another customer account",
+          });
+        }
+      }
+    }
 
     const updatedCustomer = await prisma.customer.update({
       where: { id: req.customer.id },
       data: {
-        ...(contactPerson !== undefined && { contactPerson }),
-        ...(email !== undefined && { email }),
-        ...(city !== undefined && { city }),
-        ...(state !== undefined && { state }),
-        ...(phones !== undefined && { phones }),
+        ...(name !== undefined && { name: name.trim() }),
+        ...(customerCompanyName !== undefined && { customerCompanyName: customerCompanyName.trim() || null }),
+        ...(contactPerson !== undefined && { contactPerson: contactPerson.trim() || null }),
+        ...(mobile !== undefined && { mobile: mobile.trim() }),
+        ...(normalizedMobile !== undefined && { normalizedMobile }),
+        ...(email !== undefined && { email: email.trim() || null }),
         ...(emails !== undefined && { emails }),
+        ...(phones !== undefined && { phones }),
+        ...(city !== undefined && { city: city.trim() || null }),
+        ...(state !== undefined && { state: state.trim() || null }),
+        ...(businessCategory !== undefined && { businessCategory: businessCategory.trim() || null }),
       },
     });
 
