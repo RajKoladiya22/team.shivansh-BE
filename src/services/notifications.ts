@@ -1577,3 +1577,124 @@ export async function triggerPortalSupportRemarkNotification({ supportId }: { su
     console.error("triggerPortalSupportRemarkNotification failed:", err);
   }
 }
+
+export async function triggerCustomerSupportRemarkNotification({
+  supportId,
+  remark,
+  senderName,
+}: {
+  supportId: string;
+  remark: { id?: string; text: string; by?: any; at?: string };
+  senderName?: string;
+}) {
+  try {
+    const support = await prisma.support.findUnique({
+      where: { id: supportId },
+      include: { customer: true },
+    });
+    if (!support || !support.customerId) return;
+
+    const customerId = support.customerId;
+    const author =
+      senderName ||
+      (remark.by?.firstName
+        ? `${remark.by.firstName} ${remark.by.lastName || ""}`.trim()
+        : "Support Team");
+
+    const cleanText = (remark.text || "").trim();
+    const previewText = cleanText.length > 90 ? cleanText.substring(0, 90) + "..." : cleanText;
+    const ticketCode = support.id.slice(-6).toUpperCase();
+    const title = `New Update on Support Ticket #${ticketCode}`;
+    const body = `${author}: ${previewText}`;
+    const actionUrl = `/support?ticketId=${support.id}`;
+    const dedupeKey = `customer_support_remark:${support.id}:${Date.now()}`;
+
+    // 1. Create In-App Notification for Customer
+    const notif = await prisma.notification.create({
+      data: {
+        customerId,
+        forCustomer: true,
+        title,
+        body,
+        category: "SYSTEM",
+        level: "INFO",
+        actionUrl,
+        dedupeKey,
+        payload: {
+          supportId: support.id,
+          ticketSubject: support.subject,
+          remark,
+        },
+      },
+    });
+
+    // 2. Realtime Socket Notification to Customer
+    let io: ReturnType<typeof getIo> | null = null;
+    try {
+      io = getIo();
+    } catch {}
+
+    if (io) {
+      const socketPayload = {
+        id: notif.id,
+        category: notif.category,
+        level: notif.level,
+        title: notif.title,
+        body: notif.body,
+        actionUrl: notif.actionUrl,
+        createdAt: notif.createdAt,
+        isRead: notif.isRead,
+        payload: notif.payload,
+      };
+
+      // Emit to customer notification rooms
+      io.to(`customer:notif:${customerId}`).emit("notification", socketPayload);
+      io.to(`customer:${customerId}`).emit("notification", socketPayload);
+
+      // Emit live support patch so active views update immediately
+      io.to(`customer:support:${customerId}`).emit("support:patch", {
+        id: support.id,
+        patch: { remarks: support.remarks, status: support.status },
+      });
+      io.to(`support:${support.id}`).emit("support:patch", {
+        id: support.id,
+        patch: { remarks: support.remarks, status: support.status },
+      });
+    }
+
+    // 3. Web Push Notification to active Customer Subscriptions
+    const customerSubs = await prisma.notificationSubscription.findMany({
+      where: { customerId, isActive: true },
+    });
+
+    for (const sub of customerSubs) {
+      try {
+        const pushSub = {
+          endpoint: sub.endpoint,
+          keys: { p256dh: sub.p256dh, auth: sub.auth },
+        };
+        await webpush.sendNotification(
+          pushSub,
+          JSON.stringify({
+            title: notif.title,
+            body: notif.body,
+            actionUrl: notif.actionUrl,
+            data: { actionUrl: notif.actionUrl, supportId: support.id },
+          }),
+          { TTL: 3600, headers: { urgency: "high" } }
+        );
+      } catch (err: any) {
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          await prisma.notificationSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+        }
+      }
+    }
+
+    await prisma.notification.update({
+      where: { id: notif.id },
+      data: { sentAt: new Date() },
+    });
+  } catch (err) {
+    console.error("triggerCustomerSupportRemarkNotification failed:", err);
+  }
+}

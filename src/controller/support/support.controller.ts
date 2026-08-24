@@ -3,6 +3,7 @@ import { prisma } from "../../config/database.config";
 import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpResponse";
 import { SupportStatus, SupportActivityAction } from "@prisma/client";
 import { getIo } from "../../core/utils/socket";
+import { triggerCustomerSupportRemarkNotification } from "../../services/notifications";
 
 
 async function emitSupportPatch(supportId, patchData) {
@@ -956,6 +957,13 @@ export async function addSupportRemarkAdmin(req: Request, res: Response) {
         });
 
         await emitSupportPatch(id, { remarks: updatedSupport.remarks });
+
+        // Trigger customer portal in-app, socket, and push notifications
+        triggerCustomerSupportRemarkNotification({
+            supportId: id,
+            remark: newRemark,
+            senderName: account ? `${account.firstName} ${account.lastName || ""}`.trim() : "Support Team",
+        }).catch((err) => console.error("triggerCustomerSupportRemarkNotification error:", err));
 
         return sendSuccessResponse(res, 201, "Remark added successfully", updatedSupport);
     } catch (error) {
