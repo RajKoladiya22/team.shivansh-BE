@@ -1179,7 +1179,7 @@ export async function triggerPortalSupportNotification({ supportId }: { supportI
             body,
             category: "SYSTEM",
             level: "INFO",
-            actionUrl: `/support`,
+            actionUrl: `/supports/admin/${support.id}`,
             dedupeKey,
           },
         });
@@ -1488,10 +1488,30 @@ export async function triggerPortalSupportRemarkNotification({ supportId }: { su
       });
     }
 
+    const userRoles = await prisma.userRole.findMany({
+      where: {
+        user: { accountId: { in: recipientAccountIds } },
+      },
+      select: {
+        user: { select: { accountId: true } },
+        role: { select: { name: true } },
+      },
+    });
+
+    const adminAccountIds = new Set(
+      userRoles
+        .filter((ur) => ur.role?.name === "ADMIN")
+        .map((ur) => ur.user?.accountId)
+        .filter(Boolean)
+    );
+
     const notifications = await Promise.all(
       recipientAccountIds.map(async (accountId) => {
         // use Date.now() in dedupeKey to allow multiple remarks over time
         const dedupeKey = `portal_support_remark:${support.id}:${Date.now()}:${accountId}`;
+        const actionUrl = adminAccountIds.has(accountId)
+          ? `/supports/admin/${support.id}`
+          : `/supports/user/${support.id}`;
         
         const notif = await prisma.notification.create({
           data: {
@@ -1500,7 +1520,7 @@ export async function triggerPortalSupportRemarkNotification({ supportId }: { su
             body,
             category: "SYSTEM",
             level: "INFO",
-            actionUrl: `/support`,
+            actionUrl,
             dedupeKey,
           },
         });
