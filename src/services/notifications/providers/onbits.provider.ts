@@ -11,6 +11,21 @@ export interface OnbitsConfig {
   timeoutMs?: number;
 }
 
+/**
+ * Sanitizes template parameters to strictly comply with Meta / WhatsApp Cloud API rules:
+ * 1. Cannot contain new-line characters (\r, \n) or tab characters (\t).
+ * 2. Cannot contain more than 4 consecutive spaces (collapses 2+ spaces to 1 space).
+ * 3. Trims leading and trailing whitespace.
+ */
+export function sanitizeTemplateParam(val: any): string {
+  if (val === undefined || val === null) return "";
+  return String(val)
+    .replace(/[\r\n]+/g, " | ")
+    .replace(/[\t]+/g, " ")
+    .replace(/[ ]{2,}/g, " ")
+    .trim();
+}
+
 export class OnbitsProvider implements INotificationProvider {
   public readonly name = "ONBITS";
   private client: AxiosInstance;
@@ -102,7 +117,7 @@ export class OnbitsProvider implements INotificationProvider {
     if (options.templateVariables) {
       for (const [key, val] of Object.entries(options.templateVariables)) {
         if (val !== undefined && val !== null) {
-          const textVal = String(val).trim();
+          const textVal = sanitizeTemplateParam(val);
           parameters.push({
             type: "text",
             parameter_name: key,
@@ -124,8 +139,12 @@ export class OnbitsProvider implements INotificationProvider {
         },
       ],
     };
+    // console.log("\n\n\n\n\n payload", payload);
 
     const response = await this.client.post(apiUrl!, payload);
+
+    // console.log("\n response", response);
+    
     return response.data;
   }
 

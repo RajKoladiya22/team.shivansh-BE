@@ -21,6 +21,7 @@ import {
   QUOTATION_TEMPLATES,
 } from "../templates/quotation.templates";
 import { MockProvider } from "../providers/mock.provider";
+import { OnbitsProvider, sanitizeTemplateParam } from "../providers/onbits.provider";
 import { getNotificationProvider, setNotificationProvider } from "../providers/provider.factory";
 
 async function runTests() {
@@ -260,6 +261,19 @@ async function runTests() {
   assert(quoteSendResult.success === true, "Mock provider successfully dispatches Quotation WhatsApp message");
   assert(mock.sentMessages.length === 2, "Mock provider records quotation dispatch in history");
   assert(mock.sentMessages[1].to === "919913423994", "Dispatches quotation with normalized recipient phone");
+
+  // 8. Meta / WhatsApp Parameter Sanitization Tests
+  console.log("\n8. Meta WhatsApp Parameter Sanitization:");
+  const multilineInput = "Email: salarindiacorp@gmail.com\nHi, I'm interested in FIFO.\r\nPlease share details.\t\tThanks!";
+  const sanitized = sanitizeTemplateParam(multilineInput);
+  assert(!sanitized.includes("\n") && !sanitized.includes("\r") && !sanitized.includes("\t"), "Strips all newlines, carriage returns, and tabs");
+  assert(sanitized === "Email: salarindiacorp@gmail.com | Hi, I'm interested in FIFO. | Please share details. Thanks!", "Sanitizes multiline lead remark into single-line clean text with separators");
+  
+  const multiSpaceInput = "FIFO   Outstanding    Report     Demo";
+  const spaceSanitized = sanitizeTemplateParam(multiSpaceInput);
+  assert(spaceSanitized === "FIFO Outstanding Report Demo", "Collapses 4+ consecutive spaces into single space");
+  assert(sanitizeTemplateParam(null) === "", "Handles null input safely");
+  assert(sanitizeTemplateParam(undefined) === "", "Handles undefined input safely");
 
   console.log(`\n========================================`);
   console.log(`Test Summary: ${passed} passed, ${failed} failed.`);

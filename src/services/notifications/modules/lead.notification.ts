@@ -454,6 +454,12 @@ export async function dispatchLeadAssignedNotification(params: LeadAssignedNotif
         continue;
       }
 
+      const cleanRemark = (lead.remark || "No additional remarks")
+        .replace(/[\r\n]+/g, " | ")
+        .replace(/[\t]+/g, " ")
+        .replace(/[ ]{2,}/g, " ")
+        .trim();
+
       const variables: LeadTeamMemberTemplateVariables = {
         lead_id: lead.id,
         team_member_name: recipient.name,
@@ -462,7 +468,7 @@ export async function dispatchLeadAssignedNotification(params: LeadAssignedNotif
         customer_email: customerEmail,
         product_title: resolvedProductTitle,
         is_important: Boolean(lead.isImportant),
-        remark: lead.remark || undefined,
+        remark: cleanRemark,
         assigned_by_name: assignedByName,
         team_member_url: teamMemberUrl,
       };
@@ -479,7 +485,7 @@ export async function dispatchLeadAssignedNotification(params: LeadAssignedNotif
           customer_name: `*${(lead.customerName || "Customer").trim()}*`,
           customer_phone: customerPhone || "N/A",
           product_title: `*${(resolvedProductTitle || "General Inquiry").trim()}*`,
-          remark: `*${(lead.remark || "No additional remarks").trim()}*`,
+          remark: `*${cleanRemark}*`,
           team_member_url: teamMemberUrl,
         },
         meta: {
@@ -675,7 +681,11 @@ export async function dispatchAdminPublicLeadNotification(
       lead.productTitle?.trim() || (lead.productCatalog?.length ? lead.productCatalog[0].title : "") || "General Inquiry";
 
     const customerPhone = lead.mobileNumber || lead.customer?.mobile || "N/A";
-    const remark = lead.remark?.trim() || "No additional remarks";
+    const remark = (lead.remark || "No additional remarks")
+      .replace(/[\r\n]+/g, " | ")
+      .replace(/[\t]+/g, " ")
+      .replace(/[ ]{2,}/g, " ")
+      .trim();
 
     const provider = getNotificationProvider();
 
