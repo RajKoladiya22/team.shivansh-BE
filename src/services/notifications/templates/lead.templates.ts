@@ -71,10 +71,11 @@ export function renderAdminPublicLead(variables: LeadAdminPublicLeadTemplateVari
   const customerPhone = variables.customer_phone || "N/A";
   const productTitle = variables.product_title || "General Inquiry";
   const remark = variables.remark || "No additional remarks";
-  const leadId = variables.lead_id || "";
+  const rawLeadId = variables.lead_id || "";
+  const leadUrl = rawLeadId.startsWith("http") ? rawLeadId : (rawLeadId ? getAdminLeadUrl(rawLeadId) : "");
 
   const lines: string[] = [];
-  lines.push(`New lead received from *${source}*.`);
+  lines.push(`New lead received from ${source}.`);
   lines.push("");
   lines.push("Customer Name:");
   lines.push(customerName.startsWith("*") ? customerName : `*${customerName}*`);
@@ -89,7 +90,7 @@ export function renderAdminPublicLead(variables: LeadAdminPublicLeadTemplateVari
   lines.push(remark.startsWith("*") ? remark : `*${remark}*`);
   lines.push("");
   lines.push("Lead ID:");
-  lines.push(leadId);
+  lines.push(leadUrl);
   lines.push("");
   lines.push("Please review the lead in CRM.");
   lines.push("Thank You.");

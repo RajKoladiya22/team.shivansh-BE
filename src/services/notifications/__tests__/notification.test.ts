@@ -118,7 +118,7 @@ async function runTests() {
     remark: "Needs quick quote",
     lead_id: "lead-abc-123",
   });
-  assert(adminPublicMsg.startsWith("New lead received from *Website*.") && adminPublicMsg.includes("Customer Name:\n*Mehul Patel*") && adminPublicMsg.includes("Product Details:\n*Tally on Cloud*") && adminPublicMsg.includes("Lead ID:\nlead-abc-123") && adminPublicMsg.includes("Thank You."), "Renders Meta-compliant admin public lead notification with asterisks");
+  assert(adminPublicMsg.startsWith("New lead received from Website.") && adminPublicMsg.includes("Customer Name:\n*Mehul Patel*") && adminPublicMsg.includes("Product Details:\n*Tally on Cloud*") && adminPublicMsg.includes("Lead ID:\nhttps://team.shivanshinfosys.in/leads/admin/lead-abc-123") && adminPublicMsg.includes("Thank You."), "Renders Meta-compliant admin public lead notification with full admin URL");
 
   // 4. Idempotency & Deduplication
   console.log("\n4. Idempotency & Deduplication Cache:");

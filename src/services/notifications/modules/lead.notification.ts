@@ -5,6 +5,7 @@ import {
   LEAD_TEMPLATES,
   getCustomerTrackingUrl,
   getTeamMemberLeadUrl,
+  getAdminLeadUrl,
   renderCustomerConfirmation,
   renderTeamMemberAssignment,
   renderAdminPublicLead,
@@ -698,13 +699,15 @@ export async function dispatchAdminPublicLeadNotification(
         continue;
       }
 
+      const adminLeadUrl = getAdminLeadUrl(lead.id);
+
       const variables: LeadAdminPublicLeadTemplateVariables = {
         source: resolvedSource,
         customer_name: (lead.customerName || "Customer").trim(),
         customer_phone: customerPhone,
         product_title: resolvedProductTitle,
         remark: remark,
-        lead_id: lead.id,
+        lead_id: adminLeadUrl,
       };
 
       const message = renderAdminPublicLead(variables);
@@ -720,7 +723,7 @@ export async function dispatchAdminPublicLeadNotification(
           customer_phone: customerPhone,
           product_title: `*${resolvedProductTitle}*`,
           remark: `*${remark}*`,
-          lead_id: lead.id,
+          lead_id: adminLeadUrl,
         },
         meta: {
           module: NotificationModule.LEAD,
