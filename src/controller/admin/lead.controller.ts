@@ -11,6 +11,8 @@ import {
   ServerNotificationPayload,
   triggerAssignmentNotification,
   triggerHelperNotification,
+  dispatchLeadAssignedNotification,
+  dispatchLeadCreatedNotification,
 } from "../../services/notifications";
 import { getIo } from "../../core/utils/socket";
 import { Lead_Status } from "@prisma/client";
@@ -1896,8 +1898,25 @@ export async function assignLeadAdmin(req: Request, res: Response) {
     void triggerAssignmentNotification({
       leadId: id,
       assigneeAccountId: accountId ?? null,
-      assigneeTeamId: accountId ?? null,
+      assigneeTeamId: teamId ?? null,
     });
+
+    // Automated WhatsApp Notification on Reassignment to assigned team member(s)
+    void dispatchLeadAssignedNotification({
+      leadId: id,
+      assigneeAccountId: accountId ?? null,
+      assigneeTeamId: teamId ?? null,
+      assignedByAccountId: performerAccountId,
+    });
+
+    // When a lead was created unassigned (e.g. from website/public lead), send WhatsApp
+    // confirmation to customer the first time it is assigned, with the assigned member's details.
+    if (!previousAssignment) {
+      void dispatchLeadCreatedNotification({
+        leadId: id,
+        performedByAccountId: performerAccountId,
+      });
+    }
 
     return sendSuccessResponse(res, 200, "Lead reassigned");
   } catch (err) {
