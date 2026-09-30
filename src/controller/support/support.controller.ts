@@ -616,6 +616,15 @@ export async function updateSupportAdmin(req: Request, res: Response) {
         if (status !== undefined) {
             updateData.status = status;
             updateData.closedAt = status === "SUPPORT_DONE" ? new Date() : null;
+            if (status === "SUPPORT_DONE" && oldSupport.isWorking) {
+                updateData.isWorking = false;
+                updateData.currentWorkSessionStart = null;
+                if (oldSupport.currentWorkSessionStart) {
+                    const diff = new Date().getTime() - new Date(oldSupport.currentWorkSessionStart).getTime();
+                    const addedSec = Math.max(0, Math.floor(diff / 1000));
+                    updateData.totalWorkSeconds = { increment: addedSec };
+                }
+            }
         }
         // ProductCatalog: many-to-many — connect new or clear
         if (productCatalogId !== undefined) {
@@ -724,6 +733,15 @@ export async function updateSupportUser(req: Request, res: Response) {
         if (status !== undefined) {
             updateData.status = status;
             updateData.closedAt = status === "SUPPORT_DONE" ? new Date() : null;
+            if (status === "SUPPORT_DONE" && oldSupport.isWorking) {
+                updateData.isWorking = false;
+                updateData.currentWorkSessionStart = null;
+                if (oldSupport.currentWorkSessionStart) {
+                    const diff = new Date().getTime() - new Date(oldSupport.currentWorkSessionStart).getTime();
+                    const addedSec = Math.max(0, Math.floor(diff / 1000));
+                    updateData.totalWorkSeconds = { increment: addedSec };
+                }
+            }
         }
         // ProductCatalog — users can also link/update
         if (productCatalogId !== undefined) {
@@ -1082,24 +1100,78 @@ export async function startSupportWorkAdmin(req: Request, res: Response) {
     try {
         const { id } = req.params;
         const performedBy = req.user?.accountId;
+        if (!performedBy) return sendErrorResponse(res, 401, "Invalid user");
 
-        const support = await prisma.support.update({
-            where: { id },
-            data: {
-                status: "IN_PROGRESS",
+        // Check if user is actively working on a lead
+        const account = await prisma.account.findUnique({
+            where: { id: performedBy },
+            select: { activeLeadId: true, isBusy: true },
+        });
+
+        if (account?.activeLeadId) {
+            return sendErrorResponse(res, 409, "Cannot start support work while actively working on a lead. Please stop lead work first.");
+        }
+
+        // Check if user is already working on another support ticket
+        const activeSupport = await prisma.support.findFirst({
+            where: {
+                id: { not: id },
                 isWorking: true,
-                currentWorkSessionStart: new Date(),
+                OR: [
+                    { assignments: { some: { accountId: performedBy, isActive: true } } },
+                    { supportHelpers: { some: { accountId: performedBy, isActive: true } } },
+                    { createdBy: performedBy },
+                ],
             },
         });
 
-        await prisma.supportActivityLog.create({
-            data: {
-                supportId: id,
-                action: "TIME_LOGGED",
-                performedBy: performedBy || null,
-                meta: { event: "WORK_STARTED" }
-            }
-        });
+        if (activeSupport) {
+            return sendErrorResponse(res, 409, "Already working on another support ticket. Please stop work first.");
+        }
+
+        const [support] = await prisma.$transaction([
+            prisma.support.update({
+                where: { id },
+                data: {
+                    status: "IN_PROGRESS",
+                    isWorking: true,
+                    currentWorkSessionStart: new Date(),
+                },
+            }),
+            prisma.account.update({
+                where: { id: performedBy },
+                data: {
+                    isBusy: true,
+                },
+            }),
+            prisma.busyActivityLog.create({
+                data: {
+                    accountId: performedBy,
+                    fromBusy: account?.isBusy ?? false,
+                    toBusy: true,
+                    reason: "SUPPORT_WORK_STARTED",
+                },
+            }),
+            prisma.supportActivityLog.create({
+                data: {
+                    supportId: id,
+                    action: "TIME_LOGGED",
+                    performedBy,
+                    meta: { event: "WORK_STARTED" },
+                },
+            }),
+        ]);
+
+        try {
+            const io = getIo();
+            io.emit("busy:changed", {
+                accountId: performedBy,
+                isBusy: true,
+                source: "SUPPORT_WORK_STARTED",
+            });
+        } catch {
+            console.warn("Socket emit skipped");
+        }
 
         await emitSupportPatch(support.id, support);
 
@@ -1121,7 +1193,7 @@ export async function stopSupportWorkAdmin(req: Request, res: Response) {
         let addedSeconds = 0;
         if (currentSupport.isWorking && currentSupport.currentWorkSessionStart) {
             const diff = new Date().getTime() - new Date(currentSupport.currentWorkSessionStart).getTime();
-            addedSeconds = Math.floor(diff / 1000);
+            addedSeconds = Math.max(0, Math.floor(diff / 1000));
         }
 
         const support = await prisma.support.update({
@@ -1152,6 +1224,53 @@ export async function stopSupportWorkAdmin(req: Request, res: Response) {
             });
         }
 
+        if (performedBy) {
+            const account = await prisma.account.findUnique({
+                where: { id: performedBy },
+                select: { activeLeadId: true },
+            });
+
+            // Check if they are still working on any other support ticket
+            const otherSupport = await prisma.support.findFirst({
+                where: {
+                    id: { not: id },
+                    isWorking: true,
+                    OR: [
+                        { assignments: { some: { accountId: performedBy, isActive: true } } },
+                        { supportHelpers: { some: { accountId: performedBy, isActive: true } } },
+                        { createdBy: performedBy },
+                    ],
+                },
+            });
+
+            if (!account?.activeLeadId && !otherSupport) {
+                await prisma.account.update({
+                    where: { id: performedBy },
+                    data: { isBusy: false },
+                });
+
+                await prisma.busyActivityLog.create({
+                    data: {
+                        accountId: performedBy,
+                        fromBusy: true,
+                        toBusy: false,
+                        reason: "SUPPORT_WORK_STOPPED",
+                    },
+                });
+
+                try {
+                    const io = getIo();
+                    io.emit("busy:changed", {
+                        accountId: performedBy,
+                        isBusy: false,
+                        source: "SUPPORT_WORK_STOPPED",
+                    });
+                } catch {
+                    console.warn("Socket emit skipped");
+                }
+            }
+        }
+
         await emitSupportPatch(support.id, support);
 
         return sendSuccessResponse(res, 200, "Support work stopped", support);
@@ -1169,6 +1288,9 @@ export async function deleteSupportAdmin(req: Request, res: Response) {
         const { id } = req.params;
         const support = await prisma.support.findUnique({ where: { id } });
         if (!support) return sendErrorResponse(res, 404, "Support not found");
+        if (support.isWorking) {
+            return sendErrorResponse(res, 400, "Cannot delete support ticket while work is active");
+        }
 
         await prisma.$transaction(async (tx) => {
             await tx.supportAssignment.deleteMany({ where: { supportId: id } });

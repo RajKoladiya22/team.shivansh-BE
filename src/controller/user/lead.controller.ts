@@ -1773,6 +1773,25 @@ export async function startLeadWork(req: Request, res: Response) {
       return sendErrorResponse(res, 409, "Already working on another lead");
     }
 
+    const activeSupport = await prisma.support.findFirst({
+      where: {
+        isWorking: true,
+        OR: [
+          { assignments: { some: { accountId, isActive: true } } },
+          { supportHelpers: { some: { accountId, isActive: true } } },
+          { createdBy: accountId },
+        ],
+      },
+    });
+
+    if (activeSupport) {
+      return sendErrorResponse(
+        res,
+        409,
+        "Cannot start lead work while actively working on a support ticket. Please stop support work first.",
+      );
+    }
+
     const initialAssignee = await resolveAssigneeSnapshot({
       accountId: accountId,
     });

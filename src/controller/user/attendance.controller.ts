@@ -16,6 +16,10 @@ import {
   LeaveType,
 } from "@prisma/client";
 import { triggerLeaveRequestNotification } from "../../services/notifications";
+import {
+  stopActiveWorkForAccount,
+  emitWorkStoppedEvents,
+} from "../../core/utils/workSession.util";
 
 /* ═══════════════════════════════════════════════════════════════
    INTERNAL HELPERS
@@ -329,12 +333,13 @@ export async function userCheckOut(req: Request, res: Response) {
         },
       });
 
-      await tx.account.update({
-        where: { id: accountId },
-        data: { isAvailable: false, isBusy: false },
+      const stoppedWork = await stopActiveWorkForAccount(tx, accountId, {
+        reason: "USER_CHECKOUT",
+        endTime: now,
+        clearAvailability: true,
       });
 
-      return { log: updatedLog, checkOut, sessionMinutes };
+      return { log: updatedLog, checkOut, sessionMinutes, stoppedWork };
     });
 
     /* 6. Real-time */
@@ -346,16 +351,13 @@ export async function userCheckOut(req: Request, res: Response) {
       log: result.log,
     });
 
-    try {
-      getIo().emit("busy:changed", {
-        accountId: accountId,
-        isBusy: false,
-        isAvailable: false,
-        source: "CHECK-OUT",
-      });
-    } catch (e) {
-      console.warn("[checkIn] busy:changed emit skipped:", e);
-    }
+    await emitWorkStoppedEvents({
+      accountId,
+      stoppedLeadIds: result.stoppedWork.stoppedLeadIds,
+      stoppedSupportIds: result.stoppedWork.stoppedSupportIds,
+      reason: "CHECK-OUT",
+      isAvailable: false,
+    });
 
     return sendSuccessResponse(res, 200, "Checked out successfully", {
       checkedOutAt: result.checkOut.checkedAt,
@@ -774,12 +776,13 @@ export async function userBreakStart(req: Request, res: Response) {
         data: { hasOpenBreak: true } as any,
       });
 
-      await tx.account.update({
-        where: { id: accountId },
-        data: { isAvailable: false, isBusy: false },
+      const stoppedWork = await stopActiveWorkForAccount(tx, accountId, {
+        reason: "BREAK_START",
+        endTime: now,
+        clearAvailability: true,
       });
 
-      return { log: updatedLog, breakLog, breakSessionId };
+      return { log: updatedLog, breakLog, breakSessionId, stoppedWork };
     });
 
     // console.log("\n\n\n\n\n\n\n result--->", result);
@@ -792,18 +795,14 @@ export async function userBreakStart(req: Request, res: Response) {
       breakType,
       startedAt: result.breakLog.checkedAt,
     });
-    try {
-      // console.log("\n\n\n[break-start] Emitting busy:changed — accountId:", accountId);
 
-      getIo().emit("busy:changed", {
-        accountId: accountId,
-        isBusy: false,
-        isAvailable: false,
-        source: "BREAK-START",
-      });
-    } catch (e) {
-      console.warn("[break-start] busy:changed emit skipped:", e);
-    }
+    await emitWorkStoppedEvents({
+      accountId,
+      stoppedLeadIds: result.stoppedWork.stoppedLeadIds,
+      stoppedSupportIds: result.stoppedWork.stoppedSupportIds,
+      reason: "BREAK-START",
+      isAvailable: false,
+    });
 
     return sendSuccessResponse(res, 200, "Break started", {
       breakSessionId: result.breakSessionId,

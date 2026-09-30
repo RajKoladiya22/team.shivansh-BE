@@ -15,6 +15,10 @@ import {
   LeaveType,
 } from "@prisma/client";
 import { triggerLeaveDecidedNotification } from "../../services/notifications";
+import {
+  stopActiveWorkForAccount,
+  emitWorkStoppedEvents,
+} from "../../core/utils/workSession.util";
 
 /* ═══════════════════════════════════════════════════════════════
    INTERNAL HELPERS
@@ -456,6 +460,15 @@ export async function adminManualCheckIn(req: Request, res: Response) {
         },
       });
 
+      if (date.getTime() === toDateOnly().getTime()) {
+        await tx.account.update({
+          where: { id: accountId },
+          data: {
+            isAvailable: true,
+          },
+        });
+      }
+
       return { log: updatedLog, checkLog };
     });
 
@@ -465,6 +478,19 @@ export async function adminManualCheckIn(req: Request, res: Response) {
       checkedInAt: result.checkLog.checkedAt,
       note: note ?? "Admin manual check-in",
     });
+
+    if (date.getTime() === toDateOnly().getTime()) {
+      try {
+        getIo().emit("busy:changed", {
+          accountId,
+          isBusy: false,
+          isAvailable: true,
+          source: "ADMIN_CHECKIN",
+        });
+      } catch (e) {
+        console.warn("[adminManualCheckIn] busy:changed emit skipped:", e);
+      }
+    }
 
     return sendSuccessResponse(res, 201, "Manual check-in recorded", result);
   } catch (err: any) {
@@ -579,12 +605,10 @@ export async function adminManualCheckOut(req: Request, res: Response) {
         },
       });
 
-      await tx.account.update({
-        where: { id: accountId },
-        data: {
-          isAvailable: false, 
-          isBusy: false,
-        },
+      const stoppedWork = await stopActiveWorkForAccount(tx, accountId, {
+        reason: "ADMIN_CHECKOUT",
+        endTime: checkedAt,
+        clearAvailability: true,
       });
 
       /* Check if any OTHER open sessions remain after this checkout */
@@ -610,7 +634,7 @@ export async function adminManualCheckOut(req: Request, res: Response) {
         },
       });
 
-      return { log: updatedLog, checkOut, sessionMinutes };
+      return { log: updatedLog, checkOut, sessionMinutes, stoppedWork };
     });
 
     emit(`notif:${accountId}`, "attendance:admin_checkout", {
@@ -618,6 +642,14 @@ export async function adminManualCheckOut(req: Request, res: Response) {
       sessionWorkMinutes: result.sessionMinutes,
       totalWorkMinutes: result.log.totalWorkMinutes,
       note: note ?? "Admin manual check-out",
+    });
+
+    await emitWorkStoppedEvents({
+      accountId,
+      stoppedLeadIds: result.stoppedWork.stoppedLeadIds,
+      stoppedSupportIds: result.stoppedWork.stoppedSupportIds,
+      reason: "ADMIN_CHECKOUT",
+      isAvailable: false,
     });
 
     return sendSuccessResponse(res, 201, "Manual check-out recorded", result);

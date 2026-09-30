@@ -10,6 +10,10 @@ import {
 import { buildFileUrl } from "../../core/middleware/multer/fileUrl";
 import { safeUnlink } from "../../core/middleware/multer/fileCleanup";
 import { getIo } from "../../core/utils/socket";
+import {
+  stopActiveWorkForAccount,
+  emitWorkStoppedEvents,
+} from "../../core/utils/workSession.util";
 
 /* ===== KEEP AS-IS ===== */
 interface BIODetails {
@@ -232,6 +236,7 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
         select: {
           id: true,
           isBusy: true,
+          isAvailable: true,
           activeLeadId: true,
         },
       });
@@ -240,75 +245,18 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
 
       // ⛔ No-op protection
       if (account.isBusy === isBusy && !account.activeLeadId) {
-        return { skipped: true, account };
+        return { skipped: true, account, stoppedWorkResult: { stoppedLeadIds: [], stoppedSupportIds: [] } };
       }
 
-      /* =====================================================
-         🛑 AUTO-STOP LEAD WORK (CRITICAL FIX)
-      ===================================================== */
-      if (account.activeLeadId && isBusy === false) {
-        const leadId = account.activeLeadId;
-        tag = leadId ? true : false;
-        affectedLeadId = leadId;
+      let stoppedWorkResult: { stoppedLeadIds: string[]; stoppedSupportIds: string[] } = {
+        stoppedLeadIds: [],
+        stoppedSupportIds: [],
+      };
 
-        const lastStart = await tx.leadActivityLog.findFirst({
-          where: {
-            leadId,
-            performedBy: account.id,
-            action: "WORK_STARTED",
-          },
-          orderBy: { createdAt: "desc" },
-        });
-
-        let durationSeconds = 0;
-        let startedAtIso: string | null = null;
-
-        if (lastStart?.meta && typeof lastStart.meta === "object") {
-          startedAtIso =
-            (lastStart.meta as any).startedAt ??
-            lastStart.createdAt.toISOString();
-        }
-
-        if (startedAtIso) {
-          const startedAt = new Date(startedAtIso);
-          if (!isNaN(startedAt.getTime())) {
-            durationSeconds = Math.max(
-              0,
-              Math.floor((now.getTime() - startedAt.getTime()) / 1000),
-            );
-          }
-        }
-
-        // 🔻 END WORK
-        await tx.leadActivityLog.create({
-          data: {
-            leadId,
-            action: "WORK_ENDED",
-            performedBy: account.id,
-            meta: {
-              startedAt: startedAtIso,
-              endedAt: now.toISOString(),
-              durationSeconds,
-              autoStopped: true,
-              reason: reason ?? "MANUAL_BUSY_CHANGE",
-            },
-          },
-        });
-
-        await tx.lead.update({
-          where: { id: leadId },
-          data: {
-            totalWorkSeconds: { increment: durationSeconds },
-            isWorking: false,
-          },
-        });
-
-        // clear active lead
-        await tx.account.update({
-          where: { id: account.id },
-          data: {
-            activeLeadId: null,
-          },
+      if (isBusy === false) {
+        stoppedWorkResult = await stopActiveWorkForAccount(tx, account.id, {
+          reason: reason ?? "MANUAL_BUSY_CHANGE",
+          clearAvailability: false,
         });
       }
 
@@ -318,7 +266,7 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
       const updatedAccount = await tx.account.update({
         where: { id: account.id },
         data: { isBusy },
-        select: { id: true, isBusy: true },
+        select: { id: true, isBusy: true, isAvailable: true },
       });
 
       await tx.busyActivityLog.create({
@@ -333,6 +281,7 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
       return {
         skipped: false,
         account: updatedAccount,
+        stoppedWorkResult,
       };
     });
 
@@ -340,29 +289,26 @@ export async function updateMyBusyStatus(req: Request, res: Response) {
        SOCKET EVENT
       ===================================================== */
     if (!result.skipped) {
-      const io = getIo();
-      io.emit("busy:changed", {
-        accountId: result.account.id,
-        leadId: affectedLeadId,
-        isBusy: result.account.isBusy,
-        source: reason ?? "MANUAL",
-      });
-
-      if (affectedLeadId) {
-        io.to(`lead:${affectedLeadId}`).emit("lead:patch", {
-          id: affectedLeadId,
-          patch: {
-            isWorking: false,
-            updatedAt: new Date(),
-          },
+      if (
+        isBusy === false &&
+        (result.stoppedWorkResult.stoppedLeadIds.length > 0 ||
+          result.stoppedWorkResult.stoppedSupportIds.length > 0)
+      ) {
+        await emitWorkStoppedEvents({
+          accountId: result.account.id,
+          stoppedLeadIds: result.stoppedWorkResult.stoppedLeadIds,
+          stoppedSupportIds: result.stoppedWorkResult.stoppedSupportIds,
+          reason: reason ?? "MANUAL",
+          isAvailable: result.account.isAvailable,
         });
-
-        io.to("leads:admin").emit("lead:patch", {
-          id: affectedLeadId,
-          patch: {
-            isWorking: false,
-            updatedAt: new Date(),
-          },
+      } else {
+        const io = getIo();
+        io.emit("busy:changed", {
+          accountId: result.account.id,
+          leadId: null,
+          isBusy: result.account.isBusy,
+          isAvailable: result.account.isAvailable,
+          source: reason ?? "MANUAL",
         });
       }
     }

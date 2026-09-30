@@ -49,6 +49,11 @@ export async function closeLeadAdmin(req: Request, res: Response) {
         data: { status: "CLOSED", closedAt: new Date(), isWorking: false, statusMark },
       });
 
+      await tx.account.updateMany({
+        where: { activeLeadId: id },
+        data: { activeLeadId: null, isBusy: false },
+      });
+
       await tx.leadAssignment.updateMany({
         where: { leadId: id, isActive: true },
         data: { isActive: false, unassignedAt: new Date() },
