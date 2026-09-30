@@ -65,11 +65,13 @@ async function calculateAchievementMetrics(startDate: Date, endDate: Date, accou
   const leadCreated = await prisma.lead.count({ where: leadCreatedWhere });
 
   // 2. CONVERTED Achievement: Count leads converted into purchases in this period
+  // We determine conversion timestamp from closedAt (when lead moved to CONVERTED),
+  // falling back to createdAt if closedAt is null.
   const convertedWhere: any = {
     status: "CONVERTED",
     OR: [
-      { updatedAt: { gte: startDate, lte: endDate } },
-      { createdAt: { gte: startDate, lte: endDate } },
+      { closedAt: { gte: startDate, lte: endDate } },
+      { closedAt: null, createdAt: { gte: startDate, lte: endDate } },
     ],
   };
   if (accountId) {
