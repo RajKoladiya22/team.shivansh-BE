@@ -1183,7 +1183,8 @@ type LeadStatusBreakdown = Partial<
         | 'DEMO_DONE'
         | 'INTERESTED'
         | 'CONVERTED'
-        | 'CLOSED',
+        | 'CLOSED'
+        | 'ON_HOLD',
         number
     >
 >;

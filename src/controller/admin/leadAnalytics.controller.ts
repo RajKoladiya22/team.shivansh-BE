@@ -78,7 +78,8 @@ export const getLeadAnalytics = async (req: Request, res: Response): Promise<voi
       DEMO_DONE: 0,
       INTERESTED: 0,
       CONVERTED: 0,
-      CLOSED: 0
+      CLOSED: 0,
+      ON_HOLD: 0,
     };
 
     const productBreakdown: Record<string, { count: number; value: number; convertedCount: number; convertedValue: number }> = {};
@@ -199,7 +200,7 @@ export const getLeadAnalytics = async (req: Request, res: Response): Promise<voi
     // Cumulative Funnel Calculation (Water-fall logic)
     // If a lead is converted, they also passed through Interested, Demo_Done, Follow_Ups, In_Progress, Pending.
     const cumulativeFunnel = {
-        PENDING: funnelStages.PENDING + funnelStages.IN_PROGRESS + funnelStages.FOLLOW_UPS + funnelStages.DEMO_DONE + funnelStages.INTERESTED + funnelStages.CONVERTED + funnelStages.CLOSED,
+        PENDING: funnelStages.PENDING + funnelStages.IN_PROGRESS + funnelStages.FOLLOW_UPS + funnelStages.DEMO_DONE + funnelStages.INTERESTED + funnelStages.CONVERTED + funnelStages.CLOSED + funnelStages.ON_HOLD,
         IN_PROGRESS: funnelStages.IN_PROGRESS + funnelStages.FOLLOW_UPS + funnelStages.DEMO_DONE + funnelStages.INTERESTED + funnelStages.CONVERTED,
         FOLLOW_UPS: funnelStages.FOLLOW_UPS + funnelStages.DEMO_DONE + funnelStages.INTERESTED + funnelStages.CONVERTED,
         DEMO_DONE: funnelStages.DEMO_DONE + funnelStages.INTERESTED + funnelStages.CONVERTED,

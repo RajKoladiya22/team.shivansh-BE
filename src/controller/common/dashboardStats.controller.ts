@@ -287,6 +287,7 @@ export async function getDashboardStats(req: Request, res: Response) {
       "INTERESTED",
       "CONVERTED",
       "CLOSED",
+      "ON_HOLD",
     ] as const;
 
     const leadStatusCounts = STATUS_LIST.reduce(

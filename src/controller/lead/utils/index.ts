@@ -32,7 +32,8 @@ export type LeadStatus =
     | "CLOSED"
     | "CONVERTED"
     | "DEMO_DONE"
-    | "INTERESTED";
+    | "INTERESTED"
+    | "ON_HOLD";
 export type LeadActivityAction =
     | "CREATED"
     | "ASSIGNED"

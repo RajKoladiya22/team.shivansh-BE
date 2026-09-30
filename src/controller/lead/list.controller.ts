@@ -341,7 +341,7 @@ export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
 
         const result = {
             PENDING: 0, IN_PROGRESS: 0, FOLLOW_UPS: 0, DEMO_DONE: 0,
-            INTERESTED: 0, CONVERTED: 0, CLOSED: 0, TOTAL: 0,
+            INTERESTED: 0, CONVERTED: 0, CLOSED: 0, ON_HOLD: 0, TOTAL: 0,
         };
 
         for (const row of grouped) {
@@ -385,7 +385,7 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
 
         const statuses: Lead_Status[] = [
             "PENDING", "IN_PROGRESS", "FOLLOW_UPS", "DEMO_DONE",
-            "INTERESTED", "CONVERTED", "CLOSED",
+            "INTERESTED", "CONVERTED", "CLOSED", "ON_HOLD",
         ];
 
         const byStatus = statuses.reduce(

@@ -3070,6 +3070,7 @@ export async function getLeadCountByStatusAdmin(req: Request, res: Response) {
       INTERESTED: 0,
       CONVERTED: 0,
       CLOSED: 0,
+      ON_HOLD: 0,
       TOTAL: 0,
     };
 
@@ -3145,6 +3146,7 @@ export async function getLeadValueStatsAdmin(req: Request, res: Response) {
       "INTERESTED",
       "CONVERTED",
       "CLOSED",
+      "ON_HOLD",
     ];
 
     // normalize — include all statuses even if no leads

@@ -123,6 +123,7 @@ export async function listEmployees(req: Request, res: Response) {
           isActive: true,
           joinedAt: true,
           createdAt: true,
+          bio: true,
           leaveRequests: {
             where: {
               status: "APPROVED",
@@ -158,6 +159,7 @@ export async function listEmployees(req: Request, res: Response) {
         isActive: a.isActive,
         joinedAt: a.joinedAt,
         createdAt: a.createdAt,
+        bio: (a as any).bio,
         isOnLeave: (a as any).leaveRequests && (a as any).leaveRequests.length > 0,
       };
     });

@@ -2,7 +2,7 @@
 
 import { Router } from "express";
 import { requireAuth } from "../../core/middleware/auth";
-import { getEmployeeById, listEmployees } from "../../controller/common/employee.controller";
+import { getEmployeeById, listEmployees, getTodayBirthdayEmployees } from "../../controller/common/employee.controller";
 import { getCommonTeamById, listCommonTeams } from "../../controller/common/team.controller";
 import { getDashboardStats } from "../../controller/common/dashboardStats.controller";
 import {
@@ -19,6 +19,7 @@ const router = Router();
 
 // BASE : api/v1/common
 router.get("/employees", requireAuth, listEmployees);
+router.get("/employees/birthdays/today", requireAuth, getTodayBirthdayEmployees);
 router.get("/employees/:id", requireAuth, getEmployeeById);
 
 

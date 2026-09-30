@@ -1444,7 +1444,8 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
                 | "CONVERTED"
                 | "DEMO_DONE"
                 | "FOLLOW_UPS"
-                | "INTERESTED";
+                | "INTERESTED"
+                | "ON_HOLD";
                 remark?: string;
                 cost?: number;
                 customerName?: string;
@@ -1462,6 +1463,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
             "FOLLOW_UPS",
             "PENDING",
             "INTERESTED",
+            "ON_HOLD",
         ] as const;
 
         const isTerminalStatus =

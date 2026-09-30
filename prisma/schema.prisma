@@ -1237,6 +1237,7 @@ enum Lead_Status {
   INTERESTED
   CONVERTED
   CLOSED
+  ON_HOLD
 }
 
 enum LeadActivityAction {

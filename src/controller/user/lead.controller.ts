@@ -547,7 +547,8 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
         | "CONVERTED"
         | "DEMO_DONE"
         | "FOLLOW_UPS"
-        | "INTERESTED";
+        | "INTERESTED"
+        | "ON_HOLD";
         remark?: string;
         cost?: number;
         customerName?: string;
@@ -566,6 +567,7 @@ export async function updateMyLeadStatus(req: Request, res: Response) {
       "CONVERTED",
       "FOLLOW_UPS",
       "PENDING",
+      "ON_HOLD",
     ] as const;
 
     const isTerminalStatus =
@@ -2167,6 +2169,7 @@ export async function getMyLeadStatusStats(req: Request, res: Response) {
       "INTERESTED",
       "CONVERTED",
       "CLOSED",
+      "ON_HOLD",
     ] as const;
 
     // console.log("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nfromDate", fromDate);
@@ -2248,6 +2251,7 @@ export async function getLeadValueStatsUser(req: Request, res: Response) {
       "INTERESTED",
       "CONVERTED",
       "CLOSED",
+      "ON_HOLD",
     ] as const;
 
     const byStatus = statuses.reduce(

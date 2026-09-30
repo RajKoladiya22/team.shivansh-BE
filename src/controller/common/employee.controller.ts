@@ -367,6 +367,92 @@ export async function listEmployees(req: Request, res: Response) {
   }
 }
 
+/**
+ * GET /common/employees/birthdays/today
+ * Returns list of active employees whose birthday is today (based on bio.dob)
+ */
+export async function getTodayBirthdayEmployees(req: Request, res: Response) {
+  try {
+    const today = new Date();
+    const currentDay = today.getDate();
+    const currentMonth = today.getMonth() + 1;
+
+    const accounts = await prisma.account.findMany({
+      where: {
+        isActive: true,
+      },
+      select: {
+        id: true,
+        registerNumber: true,
+        firstName: true,
+        lastName: true,
+        designation: true,
+        avatar: true,
+        contactEmail: true,
+        bio: true,
+      },
+      orderBy: {
+        firstName: "asc",
+      },
+    });
+
+    const birthdayEmployees = accounts.filter((a) => {
+      const bio = a.bio as any;
+      const dob = bio?.dob;
+      if (!dob) return false;
+
+      let raw = "";
+      if (typeof dob === "string") raw = dob.trim();
+      else if (dob instanceof Date) {
+        return dob.getDate() === currentDay && dob.getMonth() + 1 === currentMonth;
+      }
+      if (!raw) return false;
+
+      const clean = raw.replace(/\/+/g, "/").replace(/-+/g, "-");
+      const datePart = clean.includes("T") ? clean.split("T")[0] : clean;
+      const parts = datePart.split(/[-/]/);
+      if (parts.length >= 3) {
+        let day: number;
+        let month: number;
+        if (parts[0].length === 4) {
+          month = parseInt(parts[1], 10);
+          day = parseInt(parts[2], 10);
+        } else {
+          day = parseInt(parts[0], 10);
+          month = parseInt(parts[1], 10);
+        }
+        if (!isNaN(day) && !isNaN(month)) {
+          if (day === currentDay && month === currentMonth) return true;
+        }
+      }
+
+      const d = new Date(clean);
+      if (!isNaN(d.getTime())) {
+        return (
+          (d.getDate() === currentDay && d.getMonth() + 1 === currentMonth) ||
+          (d.getUTCDate() === currentDay && d.getUTCMonth() + 1 === currentMonth)
+        );
+      }
+      return false;
+    });
+
+    return sendSuccessResponse(
+      res,
+      200,
+      "Today's birthday employees fetched successfully",
+      birthdayEmployees
+    );
+  } catch (err: any) {
+    console.error("getTodayBirthdayEmployees error:", err);
+    return sendErrorResponse(
+      res,
+      500,
+      err?.message ?? "Failed to fetch today birthday employees"
+    );
+  }
+}
+
+
 
 /**
  * GET /common/employees/:id
