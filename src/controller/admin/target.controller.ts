@@ -565,6 +565,73 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
       });
     }
 
+    // Multi-year comparison for Yearly Chart & Analytics
+    const compareYears = [year - 2, year - 1, year, year + 1];
+    const yearlyComparison = await Promise.all(
+      compareYears.map(async (y) => {
+        if (y === year) {
+          return {
+            year: y,
+            isCurrentYear: y === currentYear,
+            isSelectedYear: true,
+            amount: yearlyData.amount,
+            lead: yearlyData.lead,
+          };
+        }
+        const yRecord = await prisma.target.findFirst({
+          where: {
+            category,
+            year: y,
+            scope,
+            periodType: TargetPeriodType.YEARLY,
+            ...(targetAccountId ? { accountId: targetAccountId } : {}),
+          },
+        });
+        const yStart = new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0));
+        const yEnd = new Date(Date.UTC(y, 11, 31, 23, 59, 59, 999));
+        const yAchieve = await calculateAchievementMetrics(yStart, yEnd, targetAccountId);
+
+        const targetAmount = Number(yRecord?.targetAmount ?? 0);
+        const achievedAmount =
+          yRecord?.manualAchievedAmount !== null && yRecord?.manualAchievedAmount !== undefined
+            ? Number(yRecord.manualAchievedAmount)
+            : yAchieve.realizedRevenue;
+
+        const targetCreated = yRecord?.targetLeadsCreated ?? 0;
+        const achievedCreated =
+          yRecord?.manualAchievedLeadsCreated !== null && yRecord?.manualAchievedLeadsCreated !== undefined
+            ? yRecord.manualAchievedLeadsCreated
+            : yAchieve.leadCreated;
+
+        const targetConverted = yRecord?.targetLeadsConverted ?? 0;
+        const achievedConverted =
+          yRecord?.manualAchievedLeadsConverted !== null && yRecord?.manualAchievedLeadsConverted !== undefined
+            ? yRecord.manualAchievedLeadsConverted
+            : yAchieve.leadConverted;
+
+        return {
+          year: y,
+          isCurrentYear: y === currentYear,
+          isSelectedYear: false,
+          amount: {
+            target: targetAmount,
+            achieved: achievedAmount,
+            remaining: Math.max(0, targetAmount - achievedAmount),
+            achievementPercent: targetAmount > 0 ? Math.round((achievedAmount / targetAmount) * 100) : 0,
+            formatted: {
+              target: formatINRSummary(targetAmount),
+              achieved: formatINRSummary(achievedAmount),
+              remaining: formatINRSummary(Math.max(0, targetAmount - achievedAmount)),
+            },
+          },
+          lead: {
+            created: { target: targetCreated, achieved: achievedCreated },
+            converted: { target: targetConverted, achieved: achievedConverted },
+          },
+        };
+      })
+    );
+
     sendSuccessResponse(res, 200, "Target overview retrieved successfully", {
       category,
       year,
@@ -579,6 +646,7 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
         quarter: currentQuarterNum,
       },
       yearly: yearlyData,
+      yearlyComparison,
       quarterly: quartersData,
       monthly: monthsData,
       weekly: weeksData,
