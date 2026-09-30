@@ -16,9 +16,11 @@ import holidayRoutes from "./holiday.routes";
 import pipelineRouter from "./pipelineTemplate.routes"
 import supportRoutes from "./support.routes";
 import discoveryRoutes from "./discovery.routes";
+import targetRoutes from "./target.routes";
 // import tasksRoutes from "./task.routes"
 
 // base path for each module
+router.use("/targets", targetRoutes);
 router.use("/discoveries", discoveryRoutes);
 router.use("/quotations", quotationRoutes);
 router.use("/", leadRoutes);

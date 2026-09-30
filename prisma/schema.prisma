@@ -134,6 +134,11 @@ model Account {
   supportHelpers           SupportHelper[]            @relation("SupportHelperAccount")
   supportHelpersAdded      SupportHelper[]            @relation("SupportHelperAddedBy")
 
+  // Target & Achievement Management
+  targets                  Target[]                   @relation("AccountTargets")
+  targetsCreated           Target[]                   @relation("TargetCreatedBy")
+  targetsUpdated           Target[]                   @relation("TargetUpdatedBy")
+
   @@index([isActive])
   @@index([jobType])
   @@index([contactEmail])
@@ -449,6 +454,7 @@ model Team {
   leadAssignments LeadAssignment[]
   supportAssignments SupportAssignment[]
   dsuTemplates    DsuTemplate[]
+  targets         Target[]
 
   @@unique([name])
   @@index([isActive])
@@ -3416,4 +3422,92 @@ model DiscoveryView {
 
   @@index([discoveryId])
 }
+
+// ------------------------------------------------------------------
+// Target & Achievement Management (Admin Only)
+// ------------------------------------------------------------------
+
+enum TargetPeriodType {
+  YEARLY
+  QUARTERLY
+  MONTHLY
+  WEEKLY
+}
+
+enum TargetCategory {
+  AMOUNT
+  LEAD
+}
+
+enum TargetScope {
+  COMPANY
+  TEAM
+  INDIVIDUAL
+}
+
+enum TargetStatus {
+  ACTIVE
+  ACHIEVED
+  MISSED
+  ARCHIVED
+}
+
+model Target {
+  id          String           @id @default(uuid())
+  title       String
+  description String?
+  category    TargetCategory   @default(AMOUNT)
+  periodType  TargetPeriodType
+  scope       TargetScope      @default(COMPANY)
+  status      TargetStatus     @default(ACTIVE)
+
+  startDate   DateTime
+  endDate     DateTime
+  year        Int              // e.g. 2026
+  fiscalYear  String?          // e.g. "2026-27"
+  quarter     Int?             // 1, 2, 3, 4
+  month       Int?             // 1 to 12
+  week        Int?             // 1 to 53
+
+  // Financial / Revenue Target
+  targetAmount         Decimal  @default(0) @db.Decimal(14, 2)
+  manualAchievedAmount Decimal? @db.Decimal(14, 2)
+  autoSyncRevenue      Boolean  @default(true)
+
+  // Lead-based Measurable Targets
+  targetLeadsCreated            Int?
+  manualAchievedLeadsCreated    Int?
+  targetLeadsConverted          Int?
+  manualAchievedLeadsConverted  Int?
+  targetOrdersCompleted         Int?
+  manualAchievedOrdersCompleted Int?
+  targetQuotationsCount         Int?
+  manualAchievedQuotationsCount Int?
+
+  // Assignments
+  teamId      String?
+  team        Team?    @relation(fields: [teamId], references: [id])
+  accountId   String?
+  account     Account? @relation("AccountTargets", fields: [accountId], references: [id])
+
+  // Audit
+  createdById String
+  createdBy   Account  @relation("TargetCreatedBy", fields: [createdById], references: [id])
+  updatedById String?
+  updatedBy   Account? @relation("TargetUpdatedBy", fields: [updatedById], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@index([category, periodType, year])
+  @@index([periodType])
+  @@index([year])
+  @@index([startDate])
+  @@index([endDate])
+  @@index([status])
+  @@index([teamId])
+  @@index([accountId])
+}
+
 
