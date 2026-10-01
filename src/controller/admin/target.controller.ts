@@ -49,10 +49,9 @@ export function formatINRSummary(amount: number): { formatted: string; label: st
 }
 
 /**
- * Calculate system achievements for any arbitrary date window
+ * Calculate system achievements for any arbitrary date window (single period fallback)
  */
 async function calculateAchievementMetrics(startDate: Date, endDate: Date, accountId?: string) {
-  // 1. Lead Created Achievement: Count newly created leads in this period
   const leadCreatedWhere: any = {
     createdAt: { gte: startDate, lte: endDate },
   };
@@ -62,11 +61,7 @@ async function calculateAchievementMetrics(startDate: Date, endDate: Date, accou
       { assignments: { some: { accountId, isActive: true } } },
     ];
   }
-  const leadCreated = await prisma.lead.count({ where: leadCreatedWhere });
 
-  // 2. CONVERTED Achievement: Count leads converted into purchases in this period
-  // We determine conversion timestamp from closedAt (when lead moved to CONVERTED),
-  // falling back to createdAt if closedAt is null.
   const convertedWhere: any = {
     status: "CONVERTED",
     OR: [
@@ -84,20 +79,7 @@ async function calculateAchievementMetrics(startDate: Date, endDate: Date, accou
       },
     ];
   }
-  const leadConverted = await prisma.lead.count({ where: convertedWhere });
 
-  // 3. Amount / Customer Achievement:
-  // a) Sum cost of converted leads
-  const convertedLeads = await prisma.lead.findMany({
-    where: convertedWhere,
-    select: { cost: true },
-  });
-  const leadRevenue = convertedLeads.reduce(
-    (acc, l) => acc + (l.cost ? Number(l.cost) : 0),
-    0
-  );
-
-  // b) Sum accepted or converted quotations
   const quotationWhere: any = {
     status: { in: ["ACCEPTED", "CONVERTED"] },
     quotationDate: { gte: startDate, lte: endDate },
@@ -105,16 +87,95 @@ async function calculateAchievementMetrics(startDate: Date, endDate: Date, accou
   if (accountId) {
     quotationWhere.OR = [{ createdBy: accountId }, { preparedBy: accountId }];
   }
-  const quotations = await prisma.quotation.findMany({
-    where: quotationWhere,
-    select: { grandTotal: true },
-  });
-  const quotationRevenue = quotations.reduce(
-    (acc, q) => acc + (q.grandTotal ? Number(q.grandTotal) : 0),
-    0
-  );
 
-  // Realized revenue (combining lead deal value and quotations without negative figures)
+  // Execute database aggregations concurrently in a single Promise.all
+  const [leadCreated, convertedAgg, quotationAgg] = await Promise.all([
+    prisma.lead.count({ where: leadCreatedWhere }),
+    prisma.lead.aggregate({
+      where: convertedWhere,
+      _count: { id: true },
+      _sum: { cost: true },
+    }),
+    prisma.quotation.aggregate({
+      where: quotationWhere,
+      _sum: { grandTotal: true },
+    }),
+  ]);
+
+  const leadConverted = convertedAgg._count?.id ?? 0;
+  const leadRevenue = Number(convertedAgg._sum?.cost ?? 0);
+  const quotationRevenue = Number(quotationAgg._sum?.grandTotal ?? 0);
+  const realizedRevenue = Math.max(leadRevenue + quotationRevenue, 0);
+
+  return {
+    leadCreated,
+    leadConverted,
+    realizedRevenue,
+    leadRevenue,
+    quotationRevenue,
+  };
+}
+
+interface InMemAchievement {
+  leadCreated: number;
+  leadConverted: number;
+  realizedRevenue: number;
+  leadRevenue: number;
+  quotationRevenue: number;
+}
+
+/**
+ * Fast in-memory evaluator for any arbitrary date window from pre-fetched lean records
+ */
+function calculateAchievementFromMemory(
+  startDate: Date,
+  endDate: Date,
+  leads: Array<{
+    createdAt: Date;
+    closedAt: Date | null;
+    status: string;
+    cost: any;
+  }>,
+  quotations: Array<{
+    quotationDate: Date;
+    grandTotal: any;
+  }>
+): InMemAchievement {
+  const startMs = startDate.getTime();
+  const endMs = endDate.getTime();
+
+  let leadCreated = 0;
+  let leadConverted = 0;
+  let leadRevenue = 0;
+
+  for (let i = 0; i < leads.length; i++) {
+    const l = leads[i];
+    const createdMs = l.createdAt ? new Date(l.createdAt).getTime() : 0;
+    if (createdMs >= startMs && createdMs <= endMs) {
+      leadCreated++;
+    }
+
+    if (l.status === "CONVERTED") {
+      const convDate = l.closedAt || l.createdAt;
+      if (convDate) {
+        const convMs = new Date(convDate).getTime();
+        if (convMs >= startMs && convMs <= endMs) {
+          leadConverted++;
+          leadRevenue += l.cost ? Number(l.cost) : 0;
+        }
+      }
+    }
+  }
+
+  let quotationRevenue = 0;
+  for (let i = 0; i < quotations.length; i++) {
+    const q = quotations[i];
+    const qMs = q.quotationDate ? new Date(q.quotationDate).getTime() : 0;
+    if (qMs >= startMs && qMs <= endMs) {
+      quotationRevenue += q.grandTotal ? Number(q.grandTotal) : 0;
+    }
+  }
+
   const realizedRevenue = Math.max(leadRevenue + quotationRevenue, 0);
 
   return {
@@ -214,34 +275,101 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
     const currentMonthNum = now.getMonth() + 1;
     const currentQuarterNum = Math.floor((now.getMonth() + 3) / 3);
 
-    // ─────────────────────────────────────────────────────────────
-    // Fetch all existing target records for this (category, year, scope)
-    // ─────────────────────────────────────────────────────────────
-    const existingTargets = await prisma.target.findMany({
-      where: {
-        category,
-        year,
-        scope,
-        ...(targetAccountId ? { accountId: targetAccountId } : {}),
-      },
-      include: {
-        account: {
-          select: { id: true, firstName: true, lastName: true, avatar: true },
-        },
-        createdBy: {
-          select: { id: true, firstName: true, lastName: true },
-        },
-      },
-    });
+    const compareYears = [year - 2, year - 1, year, year + 1];
+    const minYear = Math.min(...compareYears);
+    const maxYear = Math.max(...compareYears);
 
-    const yearlyTargetRecord = existingTargets.find((t) => t.periodType === TargetPeriodType.YEARLY);
+    const globalStart = new Date(Date.UTC(minYear, 0, 1, 0, 0, 0, 0));
+    const globalEnd = new Date(Date.UTC(maxYear, 11, 31, 23, 59, 59, 999));
+
+    // ─────────────────────────────────────────────────────────────
+    // Fetch targets, leads, and quotations across the compare window
+    // in parallel with lean projection — ONLY 1 database round trip!
+    // ─────────────────────────────────────────────────────────────
+    const leadWhere: any = {
+      OR: [
+        { createdAt: { gte: globalStart, lte: globalEnd } },
+        {
+          status: "CONVERTED",
+          OR: [
+            { closedAt: { gte: globalStart, lte: globalEnd } },
+            { closedAt: null, createdAt: { gte: globalStart, lte: globalEnd } },
+          ],
+        },
+      ],
+    };
+
+    if (targetAccountId) {
+      leadWhere.AND = [
+        {
+          OR: [
+            { createdBy: targetAccountId },
+            { assignments: { some: { accountId: targetAccountId, isActive: true } } },
+          ],
+        },
+      ];
+    }
+
+    const quotationWhere: any = {
+      status: { in: ["ACCEPTED", "CONVERTED"] },
+      quotationDate: { gte: globalStart, lte: globalEnd },
+    };
+
+    if (targetAccountId) {
+      quotationWhere.OR = [
+        { createdBy: targetAccountId },
+        { preparedBy: targetAccountId },
+      ];
+    }
+
+    const [allTargets, allLeads, allQuotations] = await Promise.all([
+      prisma.target.findMany({
+        where: {
+          category,
+          scope,
+          ...(targetAccountId ? { accountId: targetAccountId } : {}),
+          OR: [
+            { year },
+            { year: { in: compareYears }, periodType: TargetPeriodType.YEARLY },
+          ],
+        },
+        include: {
+          account: {
+            select: { id: true, firstName: true, lastName: true, avatar: true },
+          },
+          createdBy: {
+            select: { id: true, firstName: true, lastName: true },
+          },
+        },
+      }),
+      prisma.lead.findMany({
+        where: leadWhere,
+        select: {
+          createdAt: true,
+          closedAt: true,
+          status: true,
+          cost: true,
+        },
+      }),
+      prisma.quotation.findMany({
+        where: quotationWhere,
+        select: {
+          quotationDate: true,
+          grandTotal: true,
+        },
+      }),
+    ]);
+
+    const yearlyTargetRecord = allTargets.find(
+      (t) => t.year === year && t.periodType === TargetPeriodType.YEARLY
+    );
 
     // ─────────────────────────────────────────────────────────────
     // 1. YEARLY METRICS
     // ─────────────────────────────────────────────────────────────
     const yearStart = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
     const yearEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
-    const yearAchieve = await calculateAchievementMetrics(yearStart, yearEnd, targetAccountId);
+    const yearAchieve = calculateAchievementFromMemory(yearStart, yearEnd, allLeads, allQuotations);
 
     const yearTargetAmount = Number(yearlyTargetRecord?.targetAmount ?? 0);
     const yearAchievedAmount = yearlyTargetRecord?.manualAchievedAmount !== null &&
@@ -337,11 +465,11 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
       const isCurrent = year === currentYear && q === currentQuarterNum;
       const isCompleted = year < currentYear || (year === currentYear && q < currentQuarterNum);
 
-      const qTargetRecord = existingTargets.find(
-        (t) => t.periodType === TargetPeriodType.QUARTERLY && t.quarter === q
+      const qTargetRecord = allTargets.find(
+        (t) => t.year === year && t.periodType === TargetPeriodType.QUARTERLY && t.quarter === q
       );
 
-      const achieve = await calculateAchievementMetrics(startDate, endDate, targetAccountId);
+      const achieve = calculateAchievementFromMemory(startDate, endDate, allLeads, allQuotations);
 
       // Amount
       const targetAmount = Number(qTargetRecord?.targetAmount ?? (yearTargetAmount > 0 ? Math.round(yearTargetAmount / 4) : 0));
@@ -417,11 +545,11 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
       const isCurrent = year === currentYear && m === currentMonthNum;
       const isCompleted = year < currentYear || (year === currentYear && m < currentMonthNum);
 
-      const mTargetRecord = existingTargets.find(
-        (t) => t.periodType === TargetPeriodType.MONTHLY && t.month === m
+      const mTargetRecord = allTargets.find(
+        (t) => t.year === year && t.periodType === TargetPeriodType.MONTHLY && t.month === m
       );
 
-      const achieve = await calculateAchievementMetrics(startDate, endDate, targetAccountId);
+      const achieve = calculateAchievementFromMemory(startDate, endDate, allLeads, allQuotations);
 
       // Amount
       const targetAmount = Number(mTargetRecord?.targetAmount ?? (yearTargetAmount > 0 ? Math.round(yearTargetAmount / 12) : 0));
@@ -499,11 +627,15 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
       const isCurrent = now >= w.startDate && now <= w.endDate;
       const isCompleted = now > w.endDate;
 
-      const wTargetRecord = existingTargets.find(
-        (t) => t.periodType === TargetPeriodType.WEEKLY && t.month === selectedMonth && t.week === w.weekNumber
+      const wTargetRecord = allTargets.find(
+        (t) =>
+          t.year === year &&
+          t.periodType === TargetPeriodType.WEEKLY &&
+          t.month === selectedMonth &&
+          t.week === w.weekNumber
       );
 
-      const achieve = await calculateAchievementMetrics(w.startDate, w.endDate, targetAccountId);
+      const achieve = calculateAchievementFromMemory(w.startDate, w.endDate, allLeads, allQuotations);
 
       // Amount
       const targetAmount = Number(wTargetRecord?.targetAmount ?? (monthTargetAmount > 0 ? Math.round(monthTargetAmount / weeksRaw.length) : 0));
@@ -566,71 +698,62 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
     }
 
     // Multi-year comparison for Yearly Chart & Analytics
-    const compareYears = [year - 2, year - 1, year, year + 1];
-    const yearlyComparison = await Promise.all(
-      compareYears.map(async (y) => {
-        if (y === year) {
-          return {
-            year: y,
-            isCurrentYear: y === currentYear,
-            isSelectedYear: true,
-            amount: yearlyData.amount,
-            lead: yearlyData.lead,
-          };
-        }
-        const yRecord = await prisma.target.findFirst({
-          where: {
-            category,
-            year: y,
-            scope,
-            periodType: TargetPeriodType.YEARLY,
-            ...(targetAccountId ? { accountId: targetAccountId } : {}),
-          },
-        });
-        const yStart = new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0));
-        const yEnd = new Date(Date.UTC(y, 11, 31, 23, 59, 59, 999));
-        const yAchieve = await calculateAchievementMetrics(yStart, yEnd, targetAccountId);
-
-        const targetAmount = Number(yRecord?.targetAmount ?? 0);
-        const achievedAmount =
-          yRecord?.manualAchievedAmount !== null && yRecord?.manualAchievedAmount !== undefined
-            ? Number(yRecord.manualAchievedAmount)
-            : yAchieve.realizedRevenue;
-
-        const targetCreated = yRecord?.targetLeadsCreated ?? 0;
-        const achievedCreated =
-          yRecord?.manualAchievedLeadsCreated !== null && yRecord?.manualAchievedLeadsCreated !== undefined
-            ? yRecord.manualAchievedLeadsCreated
-            : yAchieve.leadCreated;
-
-        const targetConverted = yRecord?.targetLeadsConverted ?? 0;
-        const achievedConverted =
-          yRecord?.manualAchievedLeadsConverted !== null && yRecord?.manualAchievedLeadsConverted !== undefined
-            ? yRecord.manualAchievedLeadsConverted
-            : yAchieve.leadConverted;
-
+    const yearlyComparison = compareYears.map((y) => {
+      if (y === year) {
         return {
           year: y,
           isCurrentYear: y === currentYear,
-          isSelectedYear: false,
-          amount: {
-            target: targetAmount,
-            achieved: achievedAmount,
-            remaining: Math.max(0, targetAmount - achievedAmount),
-            achievementPercent: targetAmount > 0 ? Math.round((achievedAmount / targetAmount) * 100) : 0,
-            formatted: {
-              target: formatINRSummary(targetAmount),
-              achieved: formatINRSummary(achievedAmount),
-              remaining: formatINRSummary(Math.max(0, targetAmount - achievedAmount)),
-            },
-          },
-          lead: {
-            created: { target: targetCreated, achieved: achievedCreated },
-            converted: { target: targetConverted, achieved: achievedConverted },
-          },
+          isSelectedYear: true,
+          amount: yearlyData.amount,
+          lead: yearlyData.lead,
         };
-      })
-    );
+      }
+      const yRecord = allTargets.find(
+        (t) => t.year === y && t.periodType === TargetPeriodType.YEARLY
+      );
+      const yStart = new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0));
+      const yEnd = new Date(Date.UTC(y, 11, 31, 23, 59, 59, 999));
+      const yAchieve = calculateAchievementFromMemory(yStart, yEnd, allLeads, allQuotations);
+
+      const targetAmount = Number(yRecord?.targetAmount ?? 0);
+      const achievedAmount =
+        yRecord?.manualAchievedAmount !== null && yRecord?.manualAchievedAmount !== undefined
+          ? Number(yRecord.manualAchievedAmount)
+          : yAchieve.realizedRevenue;
+
+      const targetCreated = yRecord?.targetLeadsCreated ?? 0;
+      const achievedCreated =
+        yRecord?.manualAchievedLeadsCreated !== null && yRecord?.manualAchievedLeadsCreated !== undefined
+          ? yRecord.manualAchievedLeadsCreated
+          : yAchieve.leadCreated;
+
+      const targetConverted = yRecord?.targetLeadsConverted ?? 0;
+      const achievedConverted =
+        yRecord?.manualAchievedLeadsConverted !== null && yRecord?.manualAchievedLeadsConverted !== undefined
+          ? yRecord.manualAchievedLeadsConverted
+          : yAchieve.leadConverted;
+
+      return {
+        year: y,
+        isCurrentYear: y === currentYear,
+        isSelectedYear: false,
+        amount: {
+          target: targetAmount,
+          achieved: achievedAmount,
+          remaining: Math.max(0, targetAmount - achievedAmount),
+          achievementPercent: targetAmount > 0 ? Math.round((achievedAmount / targetAmount) * 100) : 0,
+          formatted: {
+            target: formatINRSummary(targetAmount),
+            achieved: formatINRSummary(achievedAmount),
+            remaining: formatINRSummary(Math.max(0, targetAmount - achievedAmount)),
+          },
+        },
+        lead: {
+          created: { target: targetCreated, achieved: achievedCreated },
+          converted: { target: targetConverted, achieved: achievedConverted },
+        },
+      };
+    });
 
     sendSuccessResponse(res, 200, "Target overview retrieved successfully", {
       category,
