@@ -143,65 +143,62 @@ export async function getEmployeeTaskAnalytics(req: Request, res: Response) {
         const now = new Date();
 
         /* ══════════════════════════════════════════════════════════
-           SECTION A — Summary counts (single transaction)
+           SECTION A — Summary counts (parallelized)
         ══════════════════════════════════════════════════════════ */
-        const summaryCounts = await prisma.$transaction(async (tx) => ({
-            totalTasks: await tx.task.count({ where: taskWhere }),
-            completedTasks: await tx.task.count({ where: { ...taskWhere, status: "COMPLETED" } }),
-            inProgressTasks: await tx.task.count({ where: { ...taskWhere, status: "IN_PROGRESS" } }),
-            pendingTasks: await tx.task.count({ where: { ...taskWhere, status: "PENDING" } }),
-            cancelledTasks: await tx.task.count({ where: { ...taskWhere, status: "CANCELLED" } }),
-            blockedTasks: await tx.task.count({ where: { ...taskWhere, status: "BLOCKED" } }),
-            overdueTasks: await tx.task.count({
-                where: {
-                    ...taskWhere,
-                    dueDate: { lt: now },
-                    status: { notIn: ["COMPLETED", "CANCELLED"] },
-                },
-            }),
-            // new tasks created this calendar month
-            newThisMonth: await tx.task.count({
-                where: {
-                    ...taskWhere,
-                    createdAt: { gte: thisMonthStart },
-                },
-            }),
-            newLastMonth: await tx.task.count({
-                where: {
-                    ...taskWhere,
-                    createdAt: { gte: lastMonthStart, lt: lastMonthEnd },
-                },
-            }),
-            // tasks completed this month
-            completedThisMonth: await tx.task.count({
-                where: {
-                    ...taskWhere,
-                    status: "COMPLETED",
-                    completedAt: { gte: thisMonthStart },
-                },
-            }),
-            completedLastMonth: await tx.task.count({
-                where: {
-                    ...taskWhere,
-                    status: "COMPLETED",
-                    completedAt: { gte: lastMonthStart, lt: lastMonthEnd },
-                },
-            }),
-        }));
+        const [statusGroups, overdueTasks, newThisMonth, newLastMonth, completedThisMonth, completedLastMonth] =
+            await Promise.all([
+                prisma.task.groupBy({
+                    by: ["status"],
+                    where: taskWhere,
+                    _count: { id: true },
+                }),
+                prisma.task.count({
+                    where: {
+                        ...taskWhere,
+                        dueDate: { lt: now },
+                        status: { notIn: ["COMPLETED", "CANCELLED"] },
+                    },
+                }),
+                prisma.task.count({
+                    where: {
+                        ...taskWhere,
+                        createdAt: { gte: thisMonthStart },
+                    },
+                }),
+                prisma.task.count({
+                    where: {
+                        ...taskWhere,
+                        createdAt: { gte: lastMonthStart, lt: lastMonthEnd },
+                    },
+                }),
+                prisma.task.count({
+                    where: {
+                        ...taskWhere,
+                        status: "COMPLETED",
+                        completedAt: { gte: thisMonthStart },
+                    },
+                }),
+                prisma.task.count({
+                    where: {
+                        ...taskWhere,
+                        status: "COMPLETED",
+                        completedAt: { gte: lastMonthStart, lt: lastMonthEnd },
+                    },
+                }),
+            ]);
 
-        const {
-            totalTasks,
-            completedTasks,
-            inProgressTasks,
-            pendingTasks,
-            cancelledTasks,
-            blockedTasks,
-            overdueTasks,
-            newThisMonth,
-            newLastMonth,
-            completedThisMonth,
-            completedLastMonth,
-        } = summaryCounts;
+        const statusCountMap: Record<string, number> = {};
+        let totalTasks = 0;
+        for (const row of statusGroups) {
+            statusCountMap[row.status] = row._count.id;
+            totalTasks += row._count.id;
+        }
+
+        const completedTasks = statusCountMap["COMPLETED"] || 0;
+        const inProgressTasks = statusCountMap["IN_PROGRESS"] || 0;
+        const pendingTasks = statusCountMap["PENDING"] || 0;
+        const cancelledTasks = statusCountMap["CANCELLED"] || 0;
+        const blockedTasks = statusCountMap["BLOCKED"] || 0;
 
         const completionRate =
             totalTasks === 0
@@ -1573,16 +1570,6 @@ async function computeLeadMetrics(
             }
         },
     });
-
-    const leadIds = leads.map((l) => l.id);
-    const leadsWithWork = leadIds.length > 0
-        ? await prisma.lead.findMany({
-            where: { id: { in: leadIds } },
-            select: { id: true, status: true, cost: true, totalWorkSeconds: true, closedAt: true },
-        })
-        : [];
-
-    const workSecMap = new Map(leadsWithWork.map((l) => [l.id, l]));
 
     const toNumber = (val: Prisma.Decimal | null | undefined) =>
         val ? Number(val.toString()) : 0;

@@ -14,25 +14,26 @@ export async function getDashboardTasksWidget(req: Request, res: Response) {
     
     const now = new Date();
     
-    const upcoming = await prisma.task.findMany({
-      where: {
-        assignments: { some: { accountId } },
-        dueDate: { gte: now },
-        status: { notIn: ["COMPLETED", "CANCELLED"] }
-      },
-      orderBy: { dueDate: 'asc' },
-      take: 5
-    });
-
-    const overdue = await prisma.task.findMany({
-      where: {
-        assignments: { some: { accountId } },
-        dueDate: { lt: now },
-        status: { notIn: ["COMPLETED", "CANCELLED"] }
-      },
-      orderBy: { dueDate: 'desc' },
-      take: 5
-    });
+    const [upcoming, overdue] = await Promise.all([
+      prisma.task.findMany({
+        where: {
+          assignments: { some: { accountId } },
+          dueDate: { gte: now },
+          status: { notIn: ["COMPLETED", "CANCELLED"] }
+        },
+        orderBy: { dueDate: 'asc' },
+        take: 5
+      }),
+      prisma.task.findMany({
+        where: {
+          assignments: { some: { accountId } },
+          dueDate: { lt: now },
+          status: { notIn: ["COMPLETED", "CANCELLED"] }
+        },
+        orderBy: { dueDate: 'desc' },
+        take: 5
+      }),
+    ]);
 
     return sendSuccessResponse(res, 200, "Tasks fetched successfully", {
       upcoming,
@@ -53,23 +54,24 @@ export async function getDashboardQuotationsWidget(req: Request, res: Response) 
     
     const baseWhere = isAdmin ? { deletedAt: null } : { createdBy: accountId, deletedAt: null };
 
-    const recent = await prisma.quotation.findMany({
-      where: baseWhere,
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-      include: {
-        customer: { select: { name: true, mobile: true } },
-      }
-    });
-
-    const stats = await prisma.quotation.groupBy({
-      by: ['status'],
-      where: baseWhere,
-      _count: true,
-      _sum: {
-        grandTotal: true
-      }
-    });
+    const [recent, stats] = await Promise.all([
+      prisma.quotation.findMany({
+        where: baseWhere,
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        include: {
+          customer: { select: { name: true, mobile: true } },
+        }
+      }),
+      prisma.quotation.groupBy({
+        by: ['status'],
+        where: baseWhere,
+        _count: true,
+        _sum: {
+          grandTotal: true
+        }
+      }),
+    ]);
 
     return sendSuccessResponse(res, 200, "Quotations fetched successfully", {
       recent,
@@ -86,28 +88,29 @@ export async function getDashboardRemindersWidget(req: Request, res: Response) {
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session user");
     
     const now = new Date();
-    const upcomingTasks = await prisma.task.findMany({
-      where: {
-        assignments: { some: { accountId } },
-        dueDate: { gte: now },
-        status: { notIn: ["COMPLETED", "CANCELLED"] }
-      },
-      orderBy: { dueDate: 'asc' },
-      take: 3
-    });
-
-    const followUps = await prisma.leadFollowUp.findMany({
-      where: {
-        createdBy: accountId,
-        status: { notIn: ["DONE", "MISSED", "RESCHEDULED"] },
-        scheduledAt: { gte: now }
-      },
-      orderBy: { scheduledAt: 'asc' },
-      take: 3,
-      include: {
-        lead: { select: { id: true, customerCompanyName: true, customerName: true } }
-      }
-    });
+    const [upcomingTasks, followUps] = await Promise.all([
+      prisma.task.findMany({
+        where: {
+          assignments: { some: { accountId } },
+          dueDate: { gte: now },
+          status: { notIn: ["COMPLETED", "CANCELLED"] }
+        },
+        orderBy: { dueDate: 'asc' },
+        take: 3
+      }),
+      prisma.leadFollowUp.findMany({
+        where: {
+          createdBy: accountId,
+          status: { notIn: ["DONE", "MISSED", "RESCHEDULED"] },
+          scheduledAt: { gte: now }
+        },
+        orderBy: { scheduledAt: 'asc' },
+        take: 3,
+        include: {
+          lead: { select: { id: true, customerCompanyName: true, customerName: true } }
+        }
+      }),
+    ]);
 
     return sendSuccessResponse(res, 200, "Reminders fetched successfully", {
       tasks: upcomingTasks,

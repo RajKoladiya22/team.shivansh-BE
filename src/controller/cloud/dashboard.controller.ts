@@ -150,183 +150,98 @@ export async function getCloudServiceDashboardStats(
         ]);
 
         // ─────────────────────────────────────────────────────────────────────────
-        // 2. By type (MIRACLE / COMHARD)
+        // 2. By type (MIRACLE / COMHARD / AMC)
         // ─────────────────────────────────────────────────────────────────────────
 
-        const byTypeRaw = await prisma.cloudService.groupBy({
-            by: ["type"],
-            _count: {
-                id: true,
-            },
-            where: {},
-        });
-
-        const typeBreakdown: TypeBreakdown[] = [];
-
-        // Process each type
-        for (const typeGroup of byTypeRaw) {
-            const [
-                typeCount,
-                typeActive,
-                typeInactive,
-                typeOnTrial,
-                typeSetupComplete,
-            ] = await Promise.all([
-                prisma.cloudService.count({
-                    where: { type: typeGroup.type },
-                }),
-                prisma.cloudService.count({
-                    where: { type: typeGroup.type, isActive: true },
-                }),
-                prisma.cloudService.count({
-                    where: { type: typeGroup.type, isActive: false },
-                }),
-                prisma.cloudService.count({
-                    where: {
-                        type: typeGroup.type,
-                        ...(typeGroup.type === "COMHARD" && {
-                            isOnTrial: true,
-                        }),
-                    },
-                }),
-                prisma.cloudService.count({
-                    where: { type: typeGroup.type, isDriveSetup: true },
-                }),
-            ]);
-
-            typeBreakdown.push({
-                type: typeGroup.type,
-                count: typeCount,
-                active: typeActive,
-                inactive: typeInactive,
-                onTrial: typeOnTrial,
-                setupComplete: typeSetupComplete,
-            });
-        }
-
-        // Get Miracle stats
-        const [
-            miracleTotal,
-            miracleActive,
-            miracleInactive,
-            miracleSetupComplete,
-        ] = await Promise.all([
-            prisma.cloudService.count({
-                where: { type: "MIRACLE" },
+        const [byTypeActive, byTypeTrial, byTypeDrive, comhardTrials] = await Promise.all([
+            prisma.cloudService.groupBy({
+                by: ["type", "isActive"],
+                _count: { id: true },
             }),
             prisma.cloudService.count({
-                where: { type: "MIRACLE", isActive: true },
+                where: { type: "COMHARD", isOnTrial: true },
             }),
-            prisma.cloudService.count({
-                where: { type: "MIRACLE", isActive: false },
+            prisma.cloudService.groupBy({
+                by: ["type"],
+                where: { isDriveSetup: true },
+                _count: { id: true },
             }),
-            prisma.cloudService.count({
-                where: { type: "MIRACLE", isDriveSetup: true },
-            }),
+            Promise.all([
+                prisma.cloudService.count({
+                    where: { type: "COMHARD", isOnTrial: false, trialDoneAt: { not: null } },
+                }),
+                prisma.cloudService.count({
+                    where: { type: "COMHARD", trialStartDate: null },
+                }),
+                prisma.cloudService.count({
+                    where: { type: "COMHARD", trialDoneAt: { not: null } },
+                }),
+                prisma.cloudService.count({
+                    where: { type: "COMHARD", trialDoneAt: { not: null }, isActive: true },
+                }),
+            ]),
         ]);
 
-        // Get Comhard stats
-        const [
-            comhardTotal,
-            comhardActive,
-            comhardInactive,
-            comhardOnTrial,
-            comhardSetupComplete,
-        ] = await Promise.all([
-            prisma.cloudService.count({
-                where: { type: "COMHARD" },
-            }),
-            prisma.cloudService.count({
-                where: { type: "COMHARD", isActive: true },
-            }),
-            prisma.cloudService.count({
-                where: { type: "COMHARD", isActive: false },
-            }),
-            prisma.cloudService.count({
-                where: {
-                    type: "COMHARD",
-                    isOnTrial: true,
-                },
-            }),
-            prisma.cloudService.count({
-                where: { type: "COMHARD", isDriveSetup: true },
-            }),
-        ]);
-
-        const [
-            comhardTrialCompleted,
-            comhardNeverTrial,
-            comhardTrialsCompleted,
-            comhardTrialsConverted,
-        ] = await Promise.all([
-            prisma.cloudService.count({
-                where: {
-                    type: "COMHARD",
-                    isOnTrial: false,
-                    trialDoneAt: { not: null },
-                },
-            }),
-            prisma.cloudService.count({
-                where: {
-                    type: "COMHARD",
-                    trialStartDate: null,
-                },
-            }),
-            prisma.cloudService.count({
-                where: {
-                    type: "COMHARD",
-                    trialDoneAt: { not: null },
-                },
-            }),
-            prisma.cloudService.count({
-                where: {
-                    type: "COMHARD",
-                    trialDoneAt: { not: null },
-                    isActive: true,
-                },
-            }),
-        ]);
-
+        const [comhardTrialCompleted, comhardNeverTrial, comhardTrialsCompleted, comhardTrialsConverted] = comhardTrials;
         const comhardTrialConversionRate = comhardTrialsCompleted > 0
             ? Math.round((comhardTrialsConverted / comhardTrialsCompleted) * 1000) / 10
             : 0;
 
-        // Get AMC stats
-        const [
-            amcTotal,
-            amcActive,
-            amcInactive,
-            amcSetupComplete,
-        ] = await Promise.all([
-            prisma.cloudService.count({
-                where: { type: "AMC" },
-            }),
-            prisma.cloudService.count({
-                where: { type: "AMC", isActive: true },
-            }),
-            prisma.cloudService.count({
-                where: { type: "AMC", isActive: false },
-            }),
-            prisma.cloudService.count({
-                where: { type: "AMC", isDriveSetup: true },
-            }),
-        ]);
+        // Build type helper
+        const allTypes: CloudServiceType[] = ["MIRACLE", "COMHARD", "AMC"];
+        const driveSetupMap = Object.fromEntries(byTypeDrive.map((d) => [d.type, d._count.id]));
+
+        const typeBreakdown: TypeBreakdown[] = allTypes.map((type) => {
+            const activeCount = byTypeActive.find((b) => b.type === type && b.isActive)?._count.id ?? 0;
+            const inactiveCount = byTypeActive.find((b) => b.type === type && !b.isActive)?._count.id ?? 0;
+            const count = activeCount + inactiveCount;
+            const onTrial = type === "COMHARD" ? byTypeTrial : 0;
+            const setupComplete = driveSetupMap[type] ?? 0;
+
+            return {
+                type,
+                count,
+                active: activeCount,
+                inactive: inactiveCount,
+                onTrial,
+                setupComplete,
+            };
+        });
+
+        const miracleStats = typeBreakdown.find((t) => t.type === "MIRACLE")!;
+        const miracleTotal = miracleStats.count;
+        const miracleActive = miracleStats.active;
+        const miracleInactive = miracleStats.inactive;
+        const miracleSetupComplete = miracleStats.setupComplete;
+
+        const comhardStats = typeBreakdown.find((t) => t.type === "COMHARD")!;
+        const comhardTotal = comhardStats.count;
+        const comhardActive = comhardStats.active;
+        const comhardInactive = comhardStats.inactive;
+        const comhardOnTrial = comhardStats.onTrial;
+        const comhardSetupComplete = comhardStats.setupComplete;
+
+        const amcStats = typeBreakdown.find((t) => t.type === "AMC")!;
+        const amcTotal = amcStats.count;
+        const amcActive = amcStats.active;
+        const amcInactive = amcStats.inactive;
+        const amcSetupComplete = amcStats.setupComplete;
 
         // ─────────────────────────────────────────────────────────────────────────
         // 3. By renewal type (QUARTERLY, SIX_MONTHS, YEARLY)
         // ─────────────────────────────────────────────────────────────────────────
 
-        const [quarterly, sixMonths, yearly] = await Promise.all([
-            prisma.cloudService.count({
-                where: { renewalType: "QUARTERLY" },
-            }),
-            prisma.cloudService.count({
-                where: { renewalType: "SIX_MONTHS" },
-            }),
-            prisma.cloudService.count({
-                where: { renewalType: "YEARLY" },
-            }),
-        ]);
+        const renewalTypeGroups = await prisma.cloudService.groupBy({
+            by: ["renewalType"],
+            _count: { id: true },
+        });
+
+        const renewalMap = Object.fromEntries(
+            renewalTypeGroups.map((r) => [r.renewalType, r._count.id])
+        );
+        const quarterly = renewalMap["QUARTERLY"] ?? 0;
+        const sixMonths = renewalMap["SIX_MONTHS"] ?? 0;
+        const yearly = renewalMap["YEARLY"] ?? 0;
 
         // ─────────────────────────────────────────────────────────────────────────
         // 4. Expiring services (within N days from now)
@@ -392,14 +307,10 @@ export async function getCloudServiceDashboardStats(
         // 5. Drive setup status
         // ─────────────────────────────────────────────────────────────────────────
 
-        const [setupComplete, notSetup] = await Promise.all([
-            prisma.cloudService.count({
-                where: { isDriveSetup: true },
-            }),
-            prisma.cloudService.count({
-                where: { isDriveSetup: false },
-            }),
-        ]);
+        const setupComplete = await prisma.cloudService.count({
+            where: { isDriveSetup: true },
+        });
+        const notSetup = Math.max(0, totalServices - setupComplete);
 
         // ─────────────────────────────────────────────────────────────────────────
         // 6. Cost metrics

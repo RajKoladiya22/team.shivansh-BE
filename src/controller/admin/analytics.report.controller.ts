@@ -175,8 +175,24 @@ async function upsertVisitor(params: {
  * Defaults: from = 30 days ago, to = now.
  */
 function parseDateRange(query: Record<string, any>): { from: Date; to: Date } {
-  const to = query.to ? new Date(query.to as string) : new Date();
-  const from = query.from ? new Date(query.from as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  let to: Date;
+  if (query.to) {
+    const rawTo = String(query.to).trim();
+    to = new Date(rawTo.length <= 10 ? `${rawTo}T23:59:59.999Z` : rawTo);
+    if (isNaN(to.getTime())) to = new Date();
+  } else {
+    to = new Date();
+  }
+
+  let from: Date;
+  if (query.from) {
+    const rawFrom = String(query.from).trim();
+    from = new Date(rawFrom.length <= 10 ? `${rawFrom}T00:00:00.000Z` : rawFrom);
+    if (isNaN(from.getTime())) from = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+  } else {
+    from = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+  }
+
   return { from, to };
 }
 
@@ -539,11 +555,11 @@ export async function getOverview(req: Request, res: Response) {
 
       prisma.analyticsPageView.count({ where: { viewedAt: { gte: from, lte: to } } }),
 
-      prisma.analyticsSession.findMany({
-        where: { startedAt: { gte: from, lte: to } },
-        distinct: ["visitorId"],
-        select: { visitorId: true },
-      }).then((r) => r.length),
+      prisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(DISTINCT "visitorId") AS count
+        FROM "AnalyticsSession"
+        WHERE "startedAt" >= ${from} AND "startedAt" <= ${to}
+      `.then((r) => Number(r[0]?.count ?? 0)),
 
       // New visitors: firstSeenAt falls in this window
       prisma.analyticsVisitor.count({ where: { firstSeenAt: { gte: from, lte: to } } }),
@@ -561,18 +577,18 @@ export async function getOverview(req: Request, res: Response) {
       // Previous period comparisons
       prisma.analyticsSession.count({ where: { startedAt: { gte: prevFrom, lte: prevTo } } }),
       prisma.analyticsPageView.count({ where: { viewedAt: { gte: prevFrom, lte: prevTo } } }),
-      prisma.analyticsSession.findMany({
-        where: { startedAt: { gte: prevFrom, lte: prevTo } },
-        distinct: ["visitorId"],
-        select: { visitorId: true },
-      }).then((r) => r.length),
+      prisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(DISTINCT "visitorId") AS count
+        FROM "AnalyticsSession"
+        WHERE "startedAt" >= ${prevFrom} AND "startedAt" <= ${prevTo}
+      `.then((r) => Number(r[0]?.count ?? 0)),
 
       prisma.analyticsEvent.count({ where: { occurredAt: { gte: from, lte: to } } }),
     ]);
 
     const bounceRate = sessions > 0 ? Math.round((bouncedSessions / sessions) * 100 * 10) / 10 : 0;
     const avgSessionDuration = Math.round(durationAgg._avg.durationSec ?? 0);
-    const returningVisitors = uniqueVisitors - newVisitors;
+    const returningVisitors = Math.max(0, uniqueVisitors - newVisitors);
 
     return sendSuccessResponse(res, 200, "Overview fetched", {
       period: { from, to },

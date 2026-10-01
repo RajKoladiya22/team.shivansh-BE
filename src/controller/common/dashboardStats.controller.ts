@@ -59,10 +59,7 @@ export async function getDashboardStats(req: Request, res: Response) {
       newLeadsThisMonth,
       newLeadsLastMonth,
 
-      // Lead status breakdown
-      leadsByStatus,
-
-      // Lead value
+      // Lead value and status breakdown combined in one single query
       leadValueGrouped,
 
       // Demo stats
@@ -149,14 +146,7 @@ export async function getDashboardStats(req: Request, res: Response) {
         },
       }),
 
-      // ── Lead status breakdown ──
-      prisma.lead.groupBy({
-        by: ["status"],
-        where: { ...leadScope },
-        _count: { _all: true },
-      }),
-
-      // ── Lead value grouped by status ──
+      // ── Lead status and value grouped by status ──
       prisma.lead.groupBy({
         by: ["status"],
         where: { ...leadScope },
@@ -292,8 +282,8 @@ export async function getDashboardStats(req: Request, res: Response) {
 
     const leadStatusCounts = STATUS_LIST.reduce(
       (acc, status) => {
-        const row = leadsByStatus.find((r) => r.status === status);
-        acc[status] = row?._count._all ?? 0;
+        const row = leadValueGrouped.find((r) => r.status === status);
+        acc[status] = row?._count?._all ?? 0;
         return acc;
       },
       {} as Record<string, number>,

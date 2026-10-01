@@ -221,7 +221,16 @@ export async function getCustomerList(req: Request, res: Response) {
       tncAcceptedAt: true,
       tncToken: true,
       _count: { select: { leads: true } },
-      leads: true,
+      leads: {
+        select: {
+          id: true,
+          status: true,
+          cost: true,
+          createdAt: true,
+        },
+        take: 3,
+        orderBy: { createdAt: "desc" as const },
+      },
     };
 
     let items: any[] = [];
@@ -243,6 +252,7 @@ export async function getCustomerList(req: Request, res: Response) {
 
       const matchingCandidates = await prisma.customer.findMany({
         where,
+        take: 1000,
         select: {
           id: true,
           mobile: true,

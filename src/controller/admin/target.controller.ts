@@ -276,24 +276,22 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
     const currentQuarterNum = Math.floor((now.getMonth() + 3) / 3);
 
     const compareYears = [year - 2, year - 1, year, year + 1];
-    const minYear = Math.min(...compareYears);
-    const maxYear = Math.max(...compareYears);
 
-    const globalStart = new Date(Date.UTC(minYear, 0, 1, 0, 0, 0, 0));
-    const globalEnd = new Date(Date.UTC(maxYear, 11, 31, 23, 59, 59, 999));
+    const yearStart = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
+    const yearEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
 
     // ─────────────────────────────────────────────────────────────
-    // Fetch targets, leads, and quotations across the compare window
-    // in parallel with lean projection — ONLY 1 database round trip!
+    // Fetch targets, leads, and quotations across the selected year
+    // in parallel with lean projection — only current year in memory!
     // ─────────────────────────────────────────────────────────────
     const leadWhere: any = {
       OR: [
-        { createdAt: { gte: globalStart, lte: globalEnd } },
+        { createdAt: { gte: yearStart, lte: yearEnd } },
         {
           status: "CONVERTED",
           OR: [
-            { closedAt: { gte: globalStart, lte: globalEnd } },
-            { closedAt: null, createdAt: { gte: globalStart, lte: globalEnd } },
+            { closedAt: { gte: yearStart, lte: yearEnd } },
+            { closedAt: null, createdAt: { gte: yearStart, lte: yearEnd } },
           ],
         },
       ],
@@ -312,7 +310,7 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
 
     const quotationWhere: any = {
       status: { in: ["ACCEPTED", "CONVERTED"] },
-      quotationDate: { gte: globalStart, lte: globalEnd },
+      quotationDate: { gte: yearStart, lte: yearEnd },
     };
 
     if (targetAccountId) {
@@ -328,10 +326,7 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
           category,
           scope,
           ...(targetAccountId ? { accountId: targetAccountId } : {}),
-          OR: [
-            { year },
-            { year: { in: compareYears }, periodType: TargetPeriodType.YEARLY },
-          ],
+          year: { in: compareYears },
         },
         include: {
           account: {
@@ -367,8 +362,6 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
     // ─────────────────────────────────────────────────────────────
     // 1. YEARLY METRICS
     // ─────────────────────────────────────────────────────────────
-    const yearStart = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
-    const yearEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
     const yearAchieve = calculateAchievementFromMemory(yearStart, yearEnd, allLeads, allQuotations);
 
     const yearTargetAmount = Number(yearlyTargetRecord?.targetAmount ?? 0);
@@ -698,6 +691,17 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
     }
 
     // Multi-year comparison for Yearly Chart & Analytics
+    const otherYears = compareYears.filter((y) => y !== year);
+    const otherYearMetrics = await Promise.all(
+      otherYears.map(async (y) => {
+        const yStart = new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0));
+        const yEnd = new Date(Date.UTC(y, 11, 31, 23, 59, 59, 999));
+        const metrics = await calculateAchievementMetrics(yStart, yEnd, targetAccountId);
+        return { y, metrics };
+      })
+    );
+    const otherMetricsMap = new Map(otherYearMetrics.map((item) => [item.y, item.metrics]));
+
     const yearlyComparison = compareYears.map((y) => {
       if (y === year) {
         return {
@@ -711,9 +715,11 @@ export async function getTargetOverview(req: Request, res: Response): Promise<vo
       const yRecord = allTargets.find(
         (t) => t.year === y && t.periodType === TargetPeriodType.YEARLY
       );
-      const yStart = new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0));
-      const yEnd = new Date(Date.UTC(y, 11, 31, 23, 59, 59, 999));
-      const yAchieve = calculateAchievementFromMemory(yStart, yEnd, allLeads, allQuotations);
+      const yAchieve = otherMetricsMap.get(y) || {
+        leadCreated: 0,
+        leadConverted: 0,
+        realizedRevenue: 0,
+      };
 
       const targetAmount = Number(yRecord?.targetAmount ?? 0);
       const achievedAmount =
@@ -1104,7 +1110,7 @@ export async function listTargets(req: Request, res: Response): Promise<void> {
       scope,
       search,
       page = 1,
-      limit = 20,
+      limit = 100,
     } = req.query;
 
     const where: any = {};
@@ -1120,8 +1126,8 @@ export async function listTargets(req: Request, res: Response): Promise<void> {
       ];
     }
 
-    const take = Number(limit);
-    const skip = (Number(page) - 1) * take;
+    const take = Math.min(200, Math.max(1, Number(limit) || 100));
+    const skip = (Math.max(1, Number(page)) - 1) * take;
 
     const [total, targets] = await Promise.all([
       prisma.target.count({ where }),

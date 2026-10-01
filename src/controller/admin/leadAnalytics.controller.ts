@@ -2,75 +2,242 @@ import { Request, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/database.config";
 
+function buildLeadConditions(params: {
+  fromDate?: any;
+  toDate?: any;
+  accountId?: any;
+  status?: any;
+  source?: any;
+  productTitle?: any;
+}): Prisma.Sql[] {
+  const { fromDate, toDate, accountId, status, source, productTitle } = params;
+  const conditions: Prisma.Sql[] = [Prisma.sql`l."isActive" = true`];
+
+  if (fromDate) {
+    conditions.push(Prisma.sql`l."createdAt" >= ${new Date(fromDate as string)}`);
+  }
+  if (toDate) {
+    const to = new Date(toDate as string);
+    to.setUTCHours(23, 59, 59, 999);
+    conditions.push(Prisma.sql`l."createdAt" <= ${to}`);
+  }
+  if (status) {
+    conditions.push(Prisma.sql`l.status::text = ${status as string}`);
+  }
+  if (source) {
+    conditions.push(Prisma.sql`l.source::text = ${source as string}`);
+  }
+  if (productTitle) {
+    conditions.push(Prisma.sql`l."productTitle" ILIKE ${`%${productTitle}%`}`);
+  }
+  if (accountId) {
+    const aid = String(accountId);
+    conditions.push(Prisma.sql`(
+      l."createdBy" = ${aid}
+      OR EXISTS (SELECT 1 FROM "LeadAssignment" a WHERE a."leadId" = l.id AND a."accountId" = ${aid} AND a."isActive" = true)
+      OR EXISTS (SELECT 1 FROM "LeadHelper" h WHERE h."leadId" = l.id AND h."accountId" = ${aid} AND h."isActive" = true)
+    )`);
+  }
+
+  return conditions;
+}
+
 export const getLeadAnalytics = async (req: Request, res: Response): Promise<void> => {
   try {
     const { fromDate, toDate, accountId, status, source, productTitle } = req.query;
 
-    const where: Prisma.LeadWhereInput = { isActive: true };
-
-    if (fromDate || toDate) {
-      where.createdAt = {};
-      if (fromDate) where.createdAt.gte = new Date(fromDate as string);
-      if (toDate) {
-        const to = new Date(toDate as string);
-        to.setUTCHours(23, 59, 59, 999);
-        where.createdAt.lte = to;
-      }
-    }
-
-    if (accountId) {
-      where.OR = [
-        { createdBy: accountId as string },
-        { assignments: { some: { accountId: accountId as string } } },
-        { leadHelpers: { some: { accountId: accountId as string } } }
-      ];
-    }
-    if (status) where.status = status as any;
-    if (source) where.source = source as any;
-    if (productTitle) where.productTitle = { contains: productTitle as string, mode: "insensitive" };
-
-    const leads = await prisma.lead.findMany({
-      where,
-      select: {
-        id: true,
-        source: true,
-        status: true,
-        cost: true,
-        createdAt: true,
-        closedAt: true,
-        followUpCount: true,
-        productTitle: true,
-        isImportant: true,
-        isWorking: true,
-        demoCount: true,
-        totalWorkSeconds: true,
-        demoScheduledAt: true,
-        demoDoneAt: true,
-        followUps: {
-            select: { status: true, createdBy: true, doneBy: true, type: true }
-        },
-        assignments: { select: { accountId: true, account: { select: { firstName: true, lastName: true, avatar: true } } } },
-        leadHelpers: { select: { accountId: true, account: { select: { firstName: true, lastName: true, avatar: true } } } }
-      }
+    const conditions = buildLeadConditions({
+      fromDate,
+      toDate,
+      accountId,
+      status,
+      source,
+      productTitle,
     });
 
-    let totalLeads = leads.length;
-    let totalConverted = 0;
-    let totalValue = 0;
-    let totalWorkSeconds = 0;
-    let totalDemosScheduled = 0;
-    let totalDemosDone = 0;
-    
-    // Priorities
-    let importantCount = 0;
-    let workingCount = 0;
+    const whereSql = Prisma.join(conditions, " AND ");
 
-    let conversionTimes: number[] = [];
+    // ─────────────────────────────────────────────────────────────
+    // Run all database-level aggregations concurrently in parallel.
+    // Zero raw lead rows are pulled over the wire into Node.js.
+    // ─────────────────────────────────────────────────────────────
+    const [
+      summaryRows,
+      statusRows,
+      sourceRows,
+      productRows,
+      createdTrendsRows,
+      convertedTrendsRows,
+      topAssignedRows,
+      followUpRows,
+      accounts,
+    ] = await Promise.all([
+      // 1. Overall KPIs
+      prisma.$queryRaw<Array<{
+        totalLeads: number;
+        totalConverted: number;
+        totalValue: number;
+        avgConversionDays: number | null;
+        totalWorkSeconds: number;
+        totalDemosScheduled: number;
+        totalDemosDone: number;
+        importantCount: number;
+        workingCount: number;
+      }>>`
+        SELECT 
+          COUNT(*)::int AS "totalLeads",
+          COUNT(*) FILTER (WHERE l.status::text = 'CONVERTED')::int AS "totalConverted",
+          COALESCE(SUM(l.cost) FILTER (WHERE l.status::text = 'CONVERTED'), 0)::float AS "totalValue",
+          AVG(EXTRACT(EPOCH FROM (l."closedAt" - l."createdAt")) / 86400) FILTER (WHERE l.status::text = 'CONVERTED' AND l."closedAt" IS NOT NULL AND l."closedAt" >= l."createdAt")::float AS "avgConversionDays",
+          COALESCE(SUM(l."totalWorkSeconds"), 0)::int AS "totalWorkSeconds",
+          COUNT(*) FILTER (WHERE l."demoScheduledAt" IS NOT NULL)::int AS "totalDemosScheduled",
+          COUNT(*) FILTER (WHERE l."demoDoneAt" IS NOT NULL)::int AS "totalDemosDone",
+          COUNT(*) FILTER (WHERE l."isImportant" = true)::int AS "importantCount",
+          COUNT(*) FILTER (WHERE l."isWorking" = true)::int AS "workingCount"
+        FROM "Lead" l
+        WHERE ${whereSql}
+      `,
 
-    const statusBreakdown: Record<string, number> = {};
-    const sourceBreakdown: Record<string, number> = {};
-    
-    // For the true funnel tracking
+      // 2. Status breakdown
+      prisma.$queryRaw<Array<{ status: string; count: number }>>`
+        SELECT l.status::text AS status, COUNT(*)::int AS count
+        FROM "Lead" l
+        WHERE ${whereSql}
+        GROUP BY l.status
+      `,
+
+      // 3. Source breakdown
+      prisma.$queryRaw<Array<{ source: string; count: number }>>`
+        SELECT l.source::text AS source, COUNT(*)::int AS count
+        FROM "Lead" l
+        WHERE ${whereSql}
+        GROUP BY l.source
+      `,
+
+      // 4. Products breakdown
+      prisma.$queryRaw<Array<{
+        name: string;
+        count: number;
+        value: number;
+        convertedCount: number;
+        convertedValue: number;
+      }>>`
+        SELECT 
+          l."productTitle" AS name,
+          COUNT(*)::int AS count,
+          COALESCE(SUM(l.cost), 0)::float AS value,
+          COUNT(*) FILTER (WHERE l.status::text = 'CONVERTED')::int AS "convertedCount",
+          COALESCE(SUM(l.cost) FILTER (WHERE l.status::text = 'CONVERTED'), 0)::float AS "convertedValue"
+        FROM "Lead" l
+        WHERE ${whereSql}
+          AND l."productTitle" IS NOT NULL AND l."productTitle" != ''
+        GROUP BY l."productTitle"
+        ORDER BY value DESC
+      `,
+
+      // 5. Monthly created trends
+      prisma.$queryRaw<Array<{ month: string; count: number }>>`
+        SELECT TO_CHAR(l."createdAt", 'YYYY-MM') AS month, COUNT(*)::int AS count
+        FROM "Lead" l
+        WHERE ${whereSql}
+        GROUP BY 1
+        ORDER BY 1
+      `,
+
+      // 6. Monthly converted trends
+      prisma.$queryRaw<Array<{ month: string; count: number }>>`
+        SELECT TO_CHAR(l."closedAt", 'YYYY-MM') AS month, COUNT(*)::int AS count
+        FROM "Lead" l
+        WHERE ${whereSql}
+          AND l.status::text = 'CONVERTED' AND l."closedAt" IS NOT NULL
+        GROUP BY 1
+        ORDER BY 1
+      `,
+
+      // 7. Top assigned employees
+      prisma.$queryRaw<Array<{
+        accountId: string;
+        count: number;
+        converted: number;
+        valueGenerated: number;
+      }>>`
+        SELECT 
+          la."accountId" AS "accountId",
+          COUNT(DISTINCT l.id)::int AS count,
+          COUNT(DISTINCT CASE WHEN l.status::text = 'CONVERTED' THEN l.id END)::int AS converted,
+          COALESCE(SUM(CASE WHEN l.status::text = 'CONVERTED' THEN l.cost ELSE 0 END), 0)::float AS "valueGenerated"
+        FROM "LeadAssignment" la
+        JOIN "Lead" l ON la."leadId" = l.id
+        WHERE la."isActive" = true
+          AND la."accountId" IS NOT NULL
+          AND ${whereSql}
+        GROUP BY la."accountId"
+        ORDER BY "valueGenerated" DESC
+      `,
+
+      // 8. Follow-up metrics
+      prisma.$queryRaw<Array<{
+        ownerId: string;
+        done: number;
+        missed: number;
+        pending: number;
+      }>>`
+        SELECT 
+          COALESCE(fu."doneBy", fu."createdBy") AS "ownerId",
+          COUNT(*) FILTER (WHERE fu.status::text = 'DONE')::int AS done,
+          COUNT(*) FILTER (WHERE fu.status::text = 'MISSED')::int AS missed,
+          COUNT(*) FILTER (WHERE fu.status::text IN ('PENDING', 'RESCHEDULED'))::int AS pending
+        FROM "LeadFollowUp" fu
+        JOIN "Lead" l ON fu."leadId" = l.id
+        WHERE ${whereSql}
+          AND COALESCE(fu."doneBy", fu."createdBy") IS NOT NULL
+        GROUP BY 1
+        ORDER BY missed DESC
+      `,
+
+      // 9. Accounts for O(1) names & avatars
+      prisma.account.findMany({
+        select: { id: true, firstName: true, lastName: true, avatar: true },
+      }),
+    ]);
+
+    const accountMap = new Map(accounts.map((a) => [a.id, a]));
+
+    // ─────────────────────────────────────────────────────────────
+    // Format KPIs
+    // ─────────────────────────────────────────────────────────────
+    const s = summaryRows[0] || {
+      totalLeads: 0,
+      totalConverted: 0,
+      totalValue: 0,
+      avgConversionDays: 0,
+      totalWorkSeconds: 0,
+      totalDemosScheduled: 0,
+      totalDemosDone: 0,
+      importantCount: 0,
+      workingCount: 0,
+    };
+    const totalLeads = Number(s.totalLeads || 0);
+    const totalConverted = Number(s.totalConverted || 0);
+    const totalValue = Number(s.totalValue || 0);
+    const winRate = totalLeads > 0 ? (totalConverted / totalLeads) * 100 : 0;
+
+    const summary = {
+      totalLeads,
+      totalConverted,
+      winRate: Math.round(winRate * 100) / 100,
+      totalValue: Math.round(totalValue * 100) / 100,
+      avgConversionDays: Math.round(Number(s.avgConversionDays || 0) * 10) / 10,
+      totalWorkSeconds: Number(s.totalWorkSeconds || 0),
+      totalDemosScheduled: Number(s.totalDemosScheduled || 0),
+      totalDemosDone: Number(s.totalDemosDone || 0),
+      importantCount: Number(s.importantCount || 0),
+      workingCount: Number(s.workingCount || 0),
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // Format Status & Funnel
+    // ─────────────────────────────────────────────────────────────
     const funnelStages = {
       PENDING: 0,
       IN_PROGRESS: 0,
@@ -82,161 +249,97 @@ export const getLeadAnalytics = async (req: Request, res: Response): Promise<voi
       ON_HOLD: 0,
     };
 
-    const productBreakdown: Record<string, { count: number; value: number; convertedCount: number; convertedValue: number }> = {};
-    const trendMap: Record<string, { created: number; converted: number }> = {};
-    
-    const assignedMap: Record<string, { name: string; avatar: string | null; count: number; converted: number; valueGenerated: number }> = {};
-    
-    const followUpPerformanceMap: Record<string, { name: string; avatar: string | null; missed: number; done: number; pending: number }> = {};
-
-    for (const lead of leads) {
-      // Priorites
-      if (lead.isImportant) importantCount++;
-      if (lead.isWorking) workingCount++;
-
-      // Demos
-      if (lead.demoScheduledAt) totalDemosScheduled++;
-      if (lead.demoDoneAt) totalDemosDone++;
-
-      // Time
-      totalWorkSeconds += lead.totalWorkSeconds || 0;
-
-      // Basic aggregations
-      const isConverted = lead.status === "CONVERTED";
-      
-      // Funnel (Assume linear progression representation, though real world might skip stages)
-      // If a lead is CONVERTED, it technically passed through PENDING etc. For simplicity, we can do a cumulative waterfall or just a count per status.
-      // Usually a funnel is cumulative:
-      if (funnelStages.hasOwnProperty(lead.status as string)) {
-        funnelStages[lead.status as keyof typeof funnelStages]++;
-      } else {
-        // Map other statuses or ignore
-        statusBreakdown[lead.status] = (statusBreakdown[lead.status] || 0) + 1;
-      }
-
-      if (isConverted) {
-        totalConverted++;
-        if (lead.cost) totalValue += Number(lead.cost);
-        if (lead.closedAt) {
-          const daysToConvert = (lead.closedAt.getTime() - lead.createdAt.getTime()) / (1000 * 60 * 60 * 24);
-          if (daysToConvert >= 0) conversionTimes.push(daysToConvert);
-        }
-      }
-
-      // Source
-      const src = lead.source || "UNKNOWN";
-      sourceBreakdown[src] = (sourceBreakdown[src] || 0) + 1;
-
-      // Product (List)
-      if (lead.productTitle) {
-        if (!productBreakdown[lead.productTitle]) productBreakdown[lead.productTitle] = { count: 0, value: 0, convertedCount: 0, convertedValue: 0 };
-        productBreakdown[lead.productTitle].count += 1;
-        if (lead.cost) productBreakdown[lead.productTitle].value += Number(lead.cost);
-        if (isConverted) {
-            productBreakdown[lead.productTitle].convertedCount += 1;
-            if (lead.cost) productBreakdown[lead.productTitle].convertedValue += Number(lead.cost);
-        }
-      }
-
-      // Trends (Monthly)
-      const monthStr = lead.createdAt.toISOString().slice(0, 7); // YYYY-MM
-      if (!trendMap[monthStr]) trendMap[monthStr] = { created: 0, converted: 0 };
-      trendMap[monthStr].created += 1;
-
-      if (isConverted && lead.closedAt) {
-        const closedMonthStr = lead.closedAt.toISOString().slice(0, 7);
-        if (!trendMap[closedMonthStr]) trendMap[closedMonthStr] = { created: 0, converted: 0 };
-        trendMap[closedMonthStr].converted += 1;
-      }
-
-      // Top Assigned
-      for (const assignment of lead.assignments) {
-        if (!assignment.accountId || !assignment.account) continue;
-        const aid = assignment.accountId;
-        if (!assignedMap[aid]) {
-          assignedMap[aid] = {
-            name: `${assignment.account.firstName} ${assignment.account.lastName}`,
-            avatar: assignment.account.avatar,
-            count: 0,
-            converted: 0,
-            valueGenerated: 0
-          };
-        }
-        assignedMap[aid].count += 1;
-        if (isConverted) {
-            assignedMap[aid].converted += 1;
-            if (lead.cost) assignedMap[aid].valueGenerated += Number(lead.cost);
-        }
-      }
-
-      // Follow Up Analytics
-      for (const fu of lead.followUps) {
-         // Follow-ups are usually doneBy or createdBy. We map it to the account who was supposed to do it or did it.
-         // Let's use createdBy if pending/missed, doneBy if done. Or just createdBy as owner.
-         const ownerId = fu.doneBy || fu.createdBy;
-         if (!ownerId) continue;
-
-         // find name from assignments or helpers if possible, but actually we need full accounts query. 
-         // For now, if we don't have name mapped from assignment, it might just show ID, but let's try to map from assignments/helpers.
-         let ownerInfo = { name: "Unknown", avatar: null as string | null };
-         
-         const aFound = lead.assignments.find(a => a.accountId === ownerId);
-         if (aFound) ownerInfo = { name: `${aFound.account?.firstName} ${aFound.account?.lastName}`, avatar: aFound.account?.avatar || null };
-         else {
-             const hFound = lead.leadHelpers.find(h => h.accountId === ownerId);
-             if (hFound) ownerInfo = { name: `${hFound.account?.firstName} ${hFound.account?.lastName}`, avatar: hFound.account?.avatar || null };
-         }
-
-         if (!followUpPerformanceMap[ownerId]) {
-            followUpPerformanceMap[ownerId] = { name: ownerInfo.name, avatar: ownerInfo.avatar, missed: 0, done: 0, pending: 0 };
-         }
-
-         if (fu.status === "DONE") followUpPerformanceMap[ownerId].done++;
-         else if (fu.status === "MISSED") followUpPerformanceMap[ownerId].missed++;
-         else if (fu.status === "PENDING" || fu.status === "RESCHEDULED") followUpPerformanceMap[ownerId].pending++;
+    const statusBreakdown: Record<string, number> = {};
+    for (const row of statusRows) {
+      statusBreakdown[row.status] = row.count;
+      if (funnelStages.hasOwnProperty(row.status)) {
+        funnelStages[row.status as keyof typeof funnelStages] = row.count;
       }
     }
 
-    // Cumulative Funnel Calculation (Water-fall logic)
-    // If a lead is converted, they also passed through Interested, Demo_Done, Follow_Ups, In_Progress, Pending.
     const cumulativeFunnel = {
-        PENDING: funnelStages.PENDING + funnelStages.IN_PROGRESS + funnelStages.FOLLOW_UPS + funnelStages.DEMO_DONE + funnelStages.INTERESTED + funnelStages.CONVERTED + funnelStages.CLOSED + funnelStages.ON_HOLD,
-        IN_PROGRESS: funnelStages.IN_PROGRESS + funnelStages.FOLLOW_UPS + funnelStages.DEMO_DONE + funnelStages.INTERESTED + funnelStages.CONVERTED,
-        FOLLOW_UPS: funnelStages.FOLLOW_UPS + funnelStages.DEMO_DONE + funnelStages.INTERESTED + funnelStages.CONVERTED,
-        DEMO_DONE: funnelStages.DEMO_DONE + funnelStages.INTERESTED + funnelStages.CONVERTED,
-        INTERESTED: funnelStages.INTERESTED + funnelStages.CONVERTED,
-        CONVERTED: funnelStages.CONVERTED
+      PENDING:
+        funnelStages.PENDING +
+        funnelStages.IN_PROGRESS +
+        funnelStages.FOLLOW_UPS +
+        funnelStages.DEMO_DONE +
+        funnelStages.INTERESTED +
+        funnelStages.CONVERTED +
+        funnelStages.CLOSED +
+        funnelStages.ON_HOLD,
+      IN_PROGRESS:
+        funnelStages.IN_PROGRESS +
+        funnelStages.FOLLOW_UPS +
+        funnelStages.DEMO_DONE +
+        funnelStages.INTERESTED +
+        funnelStages.CONVERTED,
+      FOLLOW_UPS:
+        funnelStages.FOLLOW_UPS +
+        funnelStages.DEMO_DONE +
+        funnelStages.INTERESTED +
+        funnelStages.CONVERTED,
+      DEMO_DONE:
+        funnelStages.DEMO_DONE +
+        funnelStages.INTERESTED +
+        funnelStages.CONVERTED,
+      INTERESTED: funnelStages.INTERESTED + funnelStages.CONVERTED,
+      CONVERTED: funnelStages.CONVERTED,
     };
 
-    const avgConversionDays = conversionTimes.length > 0 ? conversionTimes.reduce((a, b) => a + b, 0) / conversionTimes.length : 0;
-    const winRate = totalLeads > 0 ? (totalConverted / totalLeads) * 100 : 0;
+    // ─────────────────────────────────────────────────────────────
+    // Format Sources
+    // ─────────────────────────────────────────────────────────────
+    const sourceBreakdown: Record<string, number> = {};
+    for (const row of sourceRows) {
+      sourceBreakdown[row.source] = row.count;
+    }
 
-    const trends = Object.keys(trendMap).sort().map(month => ({
-      month,
-      created: trendMap[month].created,
-      converted: trendMap[month].converted
-    }));
+    // ─────────────────────────────────────────────────────────────
+    // Format Monthly Trends
+    // ─────────────────────────────────────────────────────────────
+    const trendMap: Record<string, { created: number; converted: number }> = {};
+    for (const r of createdTrendsRows) {
+      if (!trendMap[r.month]) trendMap[r.month] = { created: 0, converted: 0 };
+      trendMap[r.month].created = r.count;
+    }
+    for (const r of convertedTrendsRows) {
+      if (!trendMap[r.month]) trendMap[r.month] = { created: 0, converted: 0 };
+      trendMap[r.month].converted = r.count;
+    }
+    const trends = Object.keys(trendMap)
+      .sort()
+      .map((month) => ({
+        month,
+        created: trendMap[month].created,
+        converted: trendMap[month].converted,
+      }));
 
-    const topAssigned = Object.values(assignedMap).sort((a, b) => b.valueGenerated - a.valueGenerated);
-    
-    const followUpMetrics = Object.values(followUpPerformanceMap).filter(f => f.name !== "Unknown" && (f.done > 0 || f.missed > 0 || f.pending > 0)).sort((a, b) => b.missed - a.missed); // Sorted by most missed
+    // ─────────────────────────────────────────────────────────────
+    // Format Top Assigned & Follow Ups
+    // ─────────────────────────────────────────────────────────────
+    const topAssigned = topAssignedRows.map((r) => {
+      const acc = accountMap.get(r.accountId);
+      return {
+        name: acc ? `${acc.firstName} ${acc.lastName}` : "Unknown",
+        avatar: acc?.avatar || null,
+        count: r.count,
+        converted: r.converted,
+        valueGenerated: Math.round(r.valueGenerated * 100) / 100,
+      };
+    });
 
-    const productList = Object.entries(productBreakdown)
-      .map(([name, data]) => ({ name, count: data.count, value: data.value, convertedCount: data.convertedCount, convertedValue: data.convertedValue }))
-      .sort((a, b) => b.value - a.value);
-
-    const summary = {
-      totalLeads,
-      totalConverted,
-      winRate: Math.round(winRate * 100) / 100,
-      totalValue: Math.round(totalValue * 100) / 100,
-      avgConversionDays: Math.round(avgConversionDays * 10) / 10,
-      totalWorkSeconds,
-      totalDemosScheduled,
-      totalDemosDone,
-      importantCount,
-      workingCount
-    };
+    const followUpMetrics = followUpRows
+      .map((r) => {
+        const acc = accountMap.get(r.ownerId);
+        return {
+          name: acc ? `${acc.firstName} ${acc.lastName}` : "Unknown",
+          avatar: acc?.avatar || null,
+          missed: r.missed,
+          done: r.done,
+          pending: r.pending,
+        };
+      })
+      .filter((f) => f.name !== "Unknown" && (f.done > 0 || f.missed > 0 || f.pending > 0));
 
     res.json({
       success: true,
@@ -245,13 +348,12 @@ export const getLeadAnalytics = async (req: Request, res: Response): Promise<voi
         funnel: cumulativeFunnel,
         statusBreakdown: { ...funnelStages, ...statusBreakdown },
         sourceBreakdown,
-        productList,
+        productList: productRows,
         trends,
         topAssigned,
-        followUpMetrics
-      }
+        followUpMetrics,
+      },
     });
-
   } catch (error) {
     console.error("Error in getLeadAnalytics:", error);
     res.status(500).json({ success: false, message: "Server error", error: String(error) });
