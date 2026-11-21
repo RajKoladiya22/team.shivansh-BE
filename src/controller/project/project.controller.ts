@@ -1,6 +1,7 @@
 import path from "path";
 import fs from "fs";
 import { Request, Response } from "express";
+import ExcelJS from "exceljs";
 import { prisma } from "../../config/database.config";
 import {
   sendErrorResponse,
@@ -2020,4 +2021,268 @@ export async function createProject(req: Request, res: Response) {
       sendErrorResponse(res, 500, error.message || "Failed to fetch project activities");
     }
   }
+
+/* =========================================================
+   GET /projects/export — export projects to Excel
+========================================================= */
+export async function exportProjects(req: Request, res: Response) {
+  try {
+    const {
+      status,
+      search,
+      visibility,
+      createdBy,
+      createdFrom,
+      createdTo,
+      completedFrom,
+      completedTo,
+      priority,
+      projectType,
+      projectSource,
+      onWork,
+      unlinkedOnly,
+      leadId,
+      format,
+    } = req.query;
+
+    const user = (req as any).user;
+    const accountId = await getAccountIdFromReqUser(user);
+    const isAdmin = Boolean(
+      user?.role === "ADMIN" ||
+      user?.roles?.includes("ADMIN") ||
+      user?.roles?.includes("SUPER_ADMIN") ||
+      user?.isSuperAdmin
+    );
+
+    const accessWhere = isAdmin
+      ? {}
+      : {
+        OR: [
+          { visibility: "PUBLIC" },
+          { visibility: "TEAM" },
+          {
+            visibility: "PRIVATE",
+            OR: [
+              ...(accountId ? [{ createdBy: accountId }] : []),
+              ...(user?.id ? [{ createdBy: user.id }] : []),
+              ...(accountId ? [{ members: { some: { accountId } } }] : []),
+            ],
+          },
+        ],
+      };
+
+    const leadFilter =
+      String(unlinkedOnly) === "true" || leadId === "null" || leadId === "unlinked"
+        ? { leadId: null }
+        : leadId
+        ? { leadId: String(leadId) }
+        : {};
+
+    const where: Record<string, any> = {
+      deletedAt: null,
+      ...accessWhere,
+      ...leadFilter,
+      ...(status && { status }),
+      ...(visibility && { visibility }),
+      ...(createdBy && { createdBy: String(createdBy) }),
+      ...(String(priority) === "true" ? { priority: true } : String(priority) === "false" ? { priority: false } : {}),
+      ...(projectType ? { projectType: projectType as any } : {}),
+      ...(projectSource && projectSource !== "ALL" && projectSource !== "all"
+        ? { projectSource: String(projectSource).toUpperCase() === "OUTSOURCE" ? "OUTSOURCE" : "INHOUSE" }
+        : {}),
+      ...(String(onWork) === "true" ? { onWork: true } : String(onWork) === "false" ? { onWork: false } : {}),
+      ...(search && {
+        name: { contains: String(search), mode: "insensitive" },
+      }),
+    };
+
+    if (createdFrom || createdTo) {
+      where.createdAt = {};
+      if (createdFrom) {
+        const d = new Date(createdFrom as string);
+        d.setHours(0, 0, 0, 0);
+        where.createdAt.gte = d;
+      }
+      if (createdTo) {
+        const d = new Date(createdTo as string);
+        d.setHours(23, 59, 59, 999);
+        where.createdAt.lte = d;
+      }
+    }
+
+    if (completedFrom || completedTo) {
+      where.completedAt = {};
+      if (completedFrom) {
+        const d = new Date(completedFrom as string);
+        d.setHours(0, 0, 0, 0);
+        where.completedAt.gte = d;
+      }
+      if (completedTo) {
+        const d = new Date(completedTo as string);
+        d.setHours(23, 59, 59, 999);
+        where.completedAt.lte = d;
+      }
+    }
+
+    const projects = await prisma.project.findMany({
+      where,
+      include: {
+        members: {
+          include: {
+            account: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                designation: true,
+              },
+            },
+          },
+        },
+        outsourceDeveloper: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    const createdByIds = Array.from(
+      new Set(projects.map((p) => p.createdBy).filter(Boolean))
+    ) as string[];
+    const creatorAccounts =
+      createdByIds.length > 0
+        ? await prisma.account.findMany({
+          where: { id: { in: createdByIds } },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        })
+        : [];
+    const creatorMap = new Map(creatorAccounts.map((a) => [a.id, a]));
+
+    const formatProjectRow = (p: typeof projects[0]) => {
+      const creatorAcc = p.createdBy ? creatorMap.get(p.createdBy) : null;
+      const memberCreator =
+        !creatorAcc && p.createdBy
+          ? p.members?.find((m) => m.accountId === p.createdBy || (m as any).role === "OWNER")?.account
+          : null;
+      const creator = creatorAcc || memberCreator || null;
+
+      let creatorOrDeveloper = "-";
+      if (p.projectSource === "OUTSOURCE" && p.outsourceDeveloper?.name) {
+        creatorOrDeveloper = p.outsourceDeveloper.name;
+      } else if (creator) {
+        creatorOrDeveloper = `${creator.firstName} ${creator.lastName}`.trim();
+      } else if (p.outsourceDeveloper?.name) {
+        creatorOrDeveloper = p.outsourceDeveloper.name;
+      }
+
+      const memberNames = (p.members || [])
+        .map((m) => `${m.account?.firstName || ""} ${m.account?.lastName || ""}`.trim())
+        .filter(Boolean)
+        .join(", ") || "-";
+
+      const plainDescription = p.description
+        ? p.description
+            .replace(/<br\s*[\/]?>/gi, "\n")
+            .replace(/<\/p>/gi, "\n")
+            .replace(/<\/li>/gi, "\n")
+            .replace(/<li>/gi, "• ")
+            .replace(/<[^>]+>/g, "")
+            .replace(/&nbsp;/g, " ")
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .trim()
+        : "-";
+
+      return {
+        projectName: p.name || "-",
+        projectDescription: plainDescription,
+        creatorOrDeveloper,
+        memberName: memberNames,
+      };
+    };
+
+    const newProjects = projects.filter((p) => p.projectType === "NEW_PROJECT").map(formatProjectRow);
+    const updates = projects.filter((p) => p.projectType !== "NEW_PROJECT").map(formatProjectRow);
+
+    if (String(format).toLowerCase() === "json") {
+      return sendSuccessResponse(res, 200, "Projects export data fetched", {
+        newProjects,
+        updates,
+        total: projects.length,
+      });
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Shivansh Infosys";
+    workbook.created = new Date();
+
+    const columns = [
+      { header: "Project Name", key: "projectName", width: 35 },
+      { header: "Project Description", key: "projectDescription", width: 55 },
+      { header: "Creator/developer name", key: "creatorOrDeveloper", width: 30 },
+      { header: "Member name", key: "memberName", width: 35 },
+    ];
+
+    const setupSheet = (sheetName: string, rows: any[]) => {
+      const sheet = workbook.addWorksheet(sheetName, {
+        views: [{ showGridLines: true }],
+      });
+      sheet.columns = columns;
+
+      const headerRow = sheet.getRow(1);
+      headerRow.values = [
+        "Project Name",
+        "Project Description",
+        "Creator/developer name",
+        "Member name",
+      ];
+      headerRow.font = { bold: true, color: { argb: "FFFFFF" }, size: 11 };
+      headerRow.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "1E293B" }, // dark slate
+      };
+      headerRow.alignment = { vertical: "middle", horizontal: "left" };
+      headerRow.height = 28;
+
+      rows.forEach((r) => {
+        const row = sheet.addRow(r);
+        row.alignment = { vertical: "top", wrapText: true };
+      });
+    };
+
+    setupSheet("New Projects", newProjects);
+    setupSheet("Updates", updates);
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="projects_${new Date().toISOString().slice(0, 10)}.xlsx"`
+    );
+
+    await workbook.xlsx.write(res);
+    return res.end();
+  } catch (error: any) {
+    console.error("[project.controller] exportProjects:", error);
+    sendErrorResponse(res, 500, error.message || "Failed to export projects");
+  }
+}
+
 

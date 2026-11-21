@@ -2,6 +2,7 @@
 import { Router } from "express";
 import {
   listProjects,
+  exportProjects,
   createProject,
   getProjectById,
   updateProject,
@@ -45,6 +46,7 @@ router.get("/analytics", getProjectAnalyticsDashboard);
 router.get("/analytics/dashboard", getProjectAnalyticsDashboard);
 
 // ── Project CRUD ────────────────────────────────────────────
+router.get("/export", exportProjects);
 router.get("/", listProjects);
 router.post("/", projectAttachmentUpload.array("attachmentFiles", 20), createProject);
 router.get("/:id", getProjectById);
