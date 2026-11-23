@@ -109,6 +109,7 @@ export async function listProjects(req: Request, res: Response) {
       onWork,
       unlinkedOnly,
       leadId,
+      hasAttachments,
     } = req.query;
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -145,10 +146,18 @@ export async function listProjects(req: Request, res: Response) {
         ? { leadId: String(leadId) }
         : {};
 
+    const attachmentsFilter =
+      String(hasAttachments) === "true" || String(hasAttachments).toLowerCase() === "with" || String(hasAttachments).toLowerCase() === "yes"
+        ? { attachments: { some: { deletedAt: null } } }
+        : String(hasAttachments) === "false" || String(hasAttachments).toLowerCase() === "without" || String(hasAttachments).toLowerCase() === "no"
+        ? { attachments: { none: { deletedAt: null } } }
+        : {};
+
     const where: Record<string, any> = {
       deletedAt: null,
       ...accessWhere,
       ...leadFilter,
+      ...attachmentsFilter,
       ...(status && { status }),
       ...(visibility && { visibility }),
       ...(createdBy && { createdBy: String(createdBy) }),
@@ -195,6 +204,7 @@ export async function listProjects(req: Request, res: Response) {
         deletedAt: null,
         ...accessWhere,
         ...leadFilter,
+        ...attachmentsFilter,
         ...(visibility && { visibility }),
         ...(createdBy && { createdBy: String(createdBy) }),
         ...(String(priority) === "true" ? { priority: true } : String(priority) === "false" ? { priority: false } : {}),
@@ -383,6 +393,10 @@ export async function listProjects(req: Request, res: Response) {
                   phone: true,
                   skills: true,
                 },
+              },
+              attachments: {
+                where: { deletedAt: null },
+                select: { id: true },
               },
               _count: {
                 select: { tasks: true, members: true, comments: true },
@@ -2043,6 +2057,7 @@ export async function exportProjects(req: Request, res: Response) {
       unlinkedOnly,
       leadId,
       format,
+      hasAttachments,
     } = req.query;
 
     const user = (req as any).user;
@@ -2078,10 +2093,18 @@ export async function exportProjects(req: Request, res: Response) {
         ? { leadId: String(leadId) }
         : {};
 
+    const attachmentsFilter =
+      String(hasAttachments) === "true" || String(hasAttachments).toLowerCase() === "with" || String(hasAttachments).toLowerCase() === "yes"
+        ? { attachments: { some: { deletedAt: null } } }
+        : String(hasAttachments) === "false" || String(hasAttachments).toLowerCase() === "without" || String(hasAttachments).toLowerCase() === "no"
+        ? { attachments: { none: { deletedAt: null } } }
+        : {};
+
     const where: Record<string, any> = {
       deletedAt: null,
       ...accessWhere,
       ...leadFilter,
+      ...attachmentsFilter,
       ...(status && { status }),
       ...(visibility && { visibility }),
       ...(createdBy && { createdBy: String(createdBy) }),
