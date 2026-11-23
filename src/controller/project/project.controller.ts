@@ -2124,6 +2124,9 @@ export async function exportProjects(req: Request, res: Response) {
       }
     }
 
+    const FRONTEND_BASE = "https://team.shivanshinfosys.in";
+    const API_BASE = "https://teamapi.shivanshinfosys.in";
+
     const projects = await prisma.project.findMany({
       where,
       include: {
@@ -2138,6 +2141,15 @@ export async function exportProjects(req: Request, res: Response) {
               },
             },
           },
+        },
+        attachments: {
+          where: { deletedAt: null },
+          select: {
+            id: true,
+            name: true,
+            url: true,
+          },
+          orderBy: { createdAt: "asc" },
         },
         outsourceDeveloper: {
           select: {
@@ -2207,11 +2219,21 @@ export async function exportProjects(req: Request, res: Response) {
             .trim()
         : "-";
 
+      const projectLink = `${FRONTEND_BASE}/projects/${p.id}`;
+
+      const attachmentLinks = (p.attachments || []).map((att) => {
+        const url = att.url?.startsWith("http") ? att.url : `${API_BASE}${att.url?.startsWith("/") ? "" : "/"}${att.url}`;
+        return { name: att.name, url };
+      });
+
       return {
         projectName: p.name || "-",
         projectDescription: plainDescription,
         creatorOrDeveloper,
         memberName: memberNames,
+        projectLink,
+        attachments: attachmentLinks,
+        status: p.status,
       };
     };
 
@@ -2230,39 +2252,164 @@ export async function exportProjects(req: Request, res: Response) {
     workbook.creator = "Shivansh Infosys";
     workbook.created = new Date();
 
-    const columns = [
-      { header: "Project Name", key: "projectName", width: 35 },
-      { header: "Project Description", key: "projectDescription", width: 55 },
-      { header: "Creator/developer name", key: "creatorOrDeveloper", width: 30 },
-      { header: "Member name", key: "memberName", width: 35 },
-    ];
-
-    const setupSheet = (sheetName: string, rows: any[]) => {
+    const setupSheet = (sheetName: string, rows: ReturnType<typeof formatProjectRow>[]) => {
       const sheet = workbook.addWorksheet(sheetName, {
         views: [{ showGridLines: true }],
       });
-      sheet.columns = columns;
 
-      const headerRow = sheet.getRow(1);
-      headerRow.values = [
-        "Project Name",
-        "Project Description",
-        "Creator/developer name",
-        "Member name",
+      // ── Define columns ──
+      sheet.columns = [
+        { header: "Sr No.", key: "srNo", width: 8 },
+        { header: "Project Name", key: "projectName", width: 35 },
+        { header: "Project Description", key: "projectDescription", width: 55 },
+        { header: "Creator/Developer Name", key: "creatorOrDeveloper", width: 28 },
+        { header: "Member Name", key: "memberName", width: 35 },
+        { header: "Status", key: "status", width: 14 },
+        { header: "Project Link", key: "projectLink", width: 22 },
+        { header: "Attachments", key: "attachments", width: 40 },
       ];
-      headerRow.font = { bold: true, color: { argb: "FFFFFF" }, size: 11 };
+
+      // ── Style header row ──
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: "FFFFFF" }, size: 11, name: "Calibri" };
       headerRow.fill = {
         type: "pattern",
         pattern: "solid",
-        fgColor: { argb: "1E293B" }, // dark slate
+        fgColor: { argb: "1E293B" },
       };
-      headerRow.alignment = { vertical: "middle", horizontal: "left" };
-      headerRow.height = 28;
-
-      rows.forEach((r) => {
-        const row = sheet.addRow(r);
-        row.alignment = { vertical: "top", wrapText: true };
+      headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      headerRow.height = 32;
+      headerRow.eachCell((cell) => {
+        cell.border = {
+          top: { style: "thin", color: { argb: "000000" } },
+          bottom: { style: "medium", color: { argb: "000000" } },
+          left: { style: "thin", color: { argb: "4B5563" } },
+          right: { style: "thin", color: { argb: "4B5563" } },
+        };
       });
+
+      // ── Status color map ──
+      const statusColors: Record<string, { bg: string; fg: string }> = {
+        ACTIVE: { bg: "DCFCE7", fg: "166534" },
+        ON_HOLD: { bg: "FEF3C7", fg: "92400E" },
+        DRAFT: { bg: "F3F4F6", fg: "374151" },
+        COMPLETED: { bg: "DBEAFE", fg: "1E40AF" },
+        CANCELLED: { bg: "FEE2E2", fg: "991B1B" },
+        ARCHIVED: { bg: "E5E7EB", fg: "4B5563" },
+      };
+
+      // ── Add data rows ──
+      rows.forEach((r, idx) => {
+        const rowNum = idx + 2;
+        const isEven = idx % 2 === 0;
+        const row = sheet.getRow(rowNum);
+
+        // Sr No.
+        row.getCell(1).value = idx + 1;
+        row.getCell(1).alignment = { vertical: "top", horizontal: "center" };
+
+        // Project Name
+        row.getCell(2).value = r.projectName;
+
+        // Project Description
+        row.getCell(3).value = r.projectDescription;
+
+        // Creator/Developer Name
+        row.getCell(4).value = r.creatorOrDeveloper;
+
+        // Member Name
+        row.getCell(5).value = r.memberName;
+
+        // Status with color coding
+        const statusLabel = r.status ? r.status.replace(/_/g, " ") : "-";
+        row.getCell(6).value = statusLabel;
+        row.getCell(6).alignment = { vertical: "top", horizontal: "center" };
+        const sc = statusColors[r.status] || statusColors["DRAFT"];
+        row.getCell(6).fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: sc.bg },
+        };
+        row.getCell(6).font = { bold: true, color: { argb: sc.fg }, size: 10, name: "Calibri" };
+
+        // Project Link — clickable hyperlink
+        row.getCell(7).value = {
+          text: "Open Project",
+          hyperlink: r.projectLink,
+          tooltip: r.projectLink,
+        } as ExcelJS.CellHyperlinkValue;
+        row.getCell(7).font = { color: { argb: "2563EB" }, underline: true, size: 10, name: "Calibri" };
+        row.getCell(7).alignment = { vertical: "top", horizontal: "center" };
+
+        // Attachments — multiple hyperlinks as rich text or joined links
+        if (r.attachments.length > 0) {
+          if (r.attachments.length === 1) {
+            row.getCell(8).value = {
+              text: `📎 ${r.attachments[0].name}`,
+              hyperlink: r.attachments[0].url,
+              tooltip: `Download: ${r.attachments[0].name}`,
+            } as ExcelJS.CellHyperlinkValue;
+            row.getCell(8).font = { color: { argb: "2563EB" }, underline: true, size: 10, name: "Calibri" };
+          } else {
+            // Multiple attachments — list as text with the first one linked, others as plain URLs
+            const lines = r.attachments.map((att, i) => `${i + 1}. ${att.name}`).join("\n");
+            const urls = r.attachments.map((att) => att.url).join("\n");
+            row.getCell(8).value = `📎 ${r.attachments.length} files:\n${lines}`;
+            // Add a note/comment with all download URLs
+            row.getCell(8).note = {
+              texts: [
+                { text: "Download Links:\n", font: { bold: true, size: 10, name: "Calibri" } },
+                ...r.attachments.map((att) => ({
+                  text: `${att.name}: ${att.url}\n`,
+                  font: { size: 9, name: "Calibri" },
+                })),
+              ],
+            } as any;
+          }
+        } else {
+          row.getCell(8).value = "-";
+          row.getCell(8).font = { color: { argb: "9CA3AF" }, size: 10, name: "Calibri" };
+        }
+
+        // ── Row styling ──
+        row.alignment = { vertical: "top", wrapText: true };
+        row.font = row.font || { size: 10, name: "Calibri" };
+
+        // Alternate row background
+        if (!isEven) {
+          for (let c = 1; c <= 8; c++) {
+            const cell = row.getCell(c);
+            if (c !== 6) { // Don't override status cell color
+              cell.fill = {
+                type: "pattern",
+                pattern: "solid",
+                fgColor: { argb: "F9FAFB" },
+              };
+            }
+          }
+        }
+
+        // Cell borders
+        for (let c = 1; c <= 8; c++) {
+          row.getCell(c).border = {
+            top: { style: "thin", color: { argb: "E5E7EB" } },
+            bottom: { style: "thin", color: { argb: "E5E7EB" } },
+            left: { style: "thin", color: { argb: "E5E7EB" } },
+            right: { style: "thin", color: { argb: "E5E7EB" } },
+          };
+        }
+      });
+
+      // ── Add Excel AutoFilter on the full data range ──
+      if (rows.length > 0) {
+        sheet.autoFilter = {
+          from: { row: 1, column: 1 },
+          to: { row: rows.length + 1, column: 8 },
+        };
+      }
+
+      // ── Freeze header row for scrolling ──
+      sheet.views = [{ state: "frozen", ySplit: 1, showGridLines: true }];
     };
 
     setupSheet("New Projects", newProjects);
