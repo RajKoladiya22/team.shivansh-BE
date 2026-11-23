@@ -396,7 +396,15 @@ export async function listProjects(req: Request, res: Response) {
               },
               attachments: {
                 where: { deletedAt: null },
-                select: { id: true },
+                select: {
+                  id: true,
+                  name: true,
+                  url: true,
+                  sizeBytes: true,
+                  mimeType: true,
+                  createdAt: true,
+                },
+                orderBy: { createdAt: "desc" },
               },
               _count: {
                 select: { tasks: true, members: true, comments: true },
