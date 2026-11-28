@@ -4,7 +4,7 @@ import { env } from "../../../config/database.config";
 import crypto from "crypto";
 
 const JWT_SECRET = env.JWT_ACCESS_TOKEN_SECRET!;
-const JWT_EXPIRES_IN = env.JWT_ACCESS_EXPIRES_IN as `${number}${string}`;
+const JWT_EXPIRES_IN = (env.JWT_ACCESS_EXPIRES_IN || "10d") as `${number}${string}`;
 // console.log("\n\nJWT_EXPIRES_IN\n--> ", JWT_EXPIRES_IN);
 
 export interface AccessTokenPayload {
