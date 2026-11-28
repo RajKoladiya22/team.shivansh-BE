@@ -7,10 +7,14 @@ import { registerProductSyncJob } from "./product/product-sync.job";
 console.log("Job scheduler initialized.");
 
 
-cron.schedule("55 18 * * 1-6", async () => {
-  // 18:55 = 6:55 PM
-  await autoFinalizeAttendance();
-});
+cron.schedule(
+  "55 18 * * *",
+  async () => {
+    // 18:55 IST (6:55 PM Asia/Kolkata) daily: closes open sessions, syncs leaves/holidays, marks absent on Mon-Sat working days
+    await autoFinalizeAttendance();
+  },
+  { timezone: "Asia/Kolkata" },
+);
 
 
 registerRecurringTaskJob();

@@ -7,21 +7,23 @@ import {
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
 import { AttendanceStatus } from "@prisma/client";
+import {
+  findAttendanceLogForISTDate,
+  findHolidayForISTDate,
+  getISTDayBounds,
+  getISTMonthBounds,
+  getISTYearBounds,
+  isManualAdminOverride,
+  parseDateInputToISTYMD,
+  recomputeAttendanceLogTx,
+  toISTDateOnly,
+  toISTDateStr,
+} from "../../core/utils/attendance.util";
 
 /* ===============================================================
    INTERNAL HELPERS
    =============================================================== */
 
-/** Strip time — midnight 00:00:00 in LOCAL server timezone */
-function toDateOnly(date: Date = new Date()): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function getDayName(date: Date): string {
-  return date.toLocaleDateString("en-US", { weekday: "long" });
-}
-
-/** Emit socket events safely */
 function emit(room: string, event: string, data: unknown) {
   try {
     getIo().to(room).emit(event, data);
@@ -29,10 +31,6 @@ function emit(room: string, event: string, data: unknown) {
     // socket not initialized in test/migration contexts
   }
 }
-
-/* ===============================================================
-   ADMIN GUARD
-   =============================================================== */
 
 function assertAdmin(req: Request, res: Response): boolean {
   if (!req.user?.roles?.includes?.("ADMIN")) {
@@ -46,20 +44,13 @@ function assertAdmin(req: Request, res: Response): boolean {
    CORE — mark / unmark holiday on AttendanceLog rows
    =============================================================== */
 
-/**
- * For a given date, upsert an AttendanceLog row with status HOLIDAY
- * for every active employee. Skips accounts that already have
- * check events on that date (don't stomp real work).
- *
- * Returns counts { upserted, skipped }
- */
 async function markHolidayForAllAccounts(
-  date: Date,
+  dateInput: Date | string,
   holidayName: string,
   adminAccountId: string | undefined,
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
 ): Promise<{ upserted: number; skipped: number }> {
-  const dayName = getDayName(date);
+  const { date, dayName, isSunday, start, end } = getISTDayBounds(dateInput);
 
   const activeAccounts = await tx.account.findMany({
     where: { isActive: true },
@@ -70,28 +61,44 @@ async function markHolidayForAllAccounts(
   let skipped = 0;
 
   for (const { id: accountId } of activeAccounts) {
-    /* If the employee has any check events on this date, leave them alone */
-    const hasChecks = await tx.checkLog.count({
-      where: { accountId, date },
-    });
+    const existingLog = await findAttendanceLogForISTDate(tx, accountId, date);
 
+    if (existingLog) {
+      // Do not overwrite manual admin overrides or employees with actual check events
+      const hasChecks = await tx.checkLog.count({
+        where: { attendanceLogId: existingLog.id },
+      });
+      if (hasChecks > 0 || isManualAdminOverride(existingLog)) {
+        skipped++;
+        continue;
+      }
+
+      await tx.attendanceLog.update({
+        where: { id: existingLog.id },
+        data: {
+          status: AttendanceStatus.HOLIDAY,
+          overrideNote: `Public holiday: ${holidayName}`,
+          overrideBy: adminAccountId ?? existingLog.overrideBy,
+        },
+      });
+      upserted++;
+      continue;
+    }
+
+    const hasChecks = await tx.checkLog.count({
+      where: { accountId, date: { gte: start, lte: end } },
+    });
     if (hasChecks > 0) {
       skipped++;
       continue;
     }
 
-    await tx.attendanceLog.upsert({
-      where: { accountId_date: { accountId, date } },
-      create: {
+    await tx.attendanceLog.create({
+      data: {
         accountId,
         date,
         day: dayName,
-        isSunday: date.getDay() === 0,
-        status: AttendanceStatus.HOLIDAY,
-        overrideNote: `Public holiday: ${holidayName}`,
-        overrideBy: adminAccountId,
-      },
-      update: {
+        isSunday,
         status: AttendanceStatus.HOLIDAY,
         overrideNote: `Public holiday: ${holidayName}`,
         overrideBy: adminAccountId,
@@ -104,32 +111,34 @@ async function markHolidayForAllAccounts(
   return { upserted, skipped };
 }
 
-/**
- * Revert HOLIDAY attendance logs for a given date.
- * - Rows with no check events → deleted entirely (clean slate).
- * - Rows that DO have check events → left untouched (shouldn't
- *   have been marked HOLIDAY in the first place, but guard anyway).
- *
- * Returns { deleted, untouched }
- */
 async function revertHolidayForDate(
-  date: Date,
+  dateInput: Date | string,
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
 ): Promise<{ deleted: number; untouched: number }> {
+  const { start, end } = getISTDayBounds(dateInput);
   const logs = await tx.attendanceLog.findMany({
-    where: { date, status: AttendanceStatus.HOLIDAY },
-    select: { id: true, accountId: true },
+    where: {
+      date: { gte: start, lte: end },
+      status: AttendanceStatus.HOLIDAY,
+    },
+    select: { id: true, accountId: true, overrideNote: true, overrideBy: true },
   });
 
   let deleted = 0;
   let untouched = 0;
 
   for (const log of logs) {
+    if (isManualAdminOverride(log)) {
+      untouched++;
+      continue;
+    }
+
     const hasChecks = await tx.checkLog.count({
       where: { attendanceLogId: log.id },
     });
 
     if (hasChecks > 0) {
+      await recomputeAttendanceLogTx(tx, log.id, { clearManualOverride: true });
       untouched++;
       continue;
     }
@@ -143,7 +152,6 @@ async function revertHolidayForDate(
 
 /* ===============================================================
    GET /admin/holidays?year=&month=&upcoming=true
-   List public holidays. Defaults to current year if no filters.
    =============================================================== */
 export async function adminGetHolidays(req: Request, res: Response) {
   try {
@@ -158,35 +166,28 @@ export async function adminGetHolidays(req: Request, res: Response) {
     const where: any = {};
 
     if (upcoming === "true") {
-      /* Upcoming = today onwards, current year */
-      const today = toDateOnly();
-      const endOfYear = new Date(today.getFullYear(), 11, 31, 23, 59, 59);
+      const { start: today } = getISTDayBounds();
+      const { year: curYear } = parseDateInputToISTYMD();
+      const { end: endOfYear } = getISTYearBounds(curYear);
       where.date = { gte: today, lte: endOfYear };
     } else if (yearStr) {
-      const y = parseInt(yearStr);
+      const y = parseInt(yearStr, 10);
       if (isNaN(y)) return sendErrorResponse(res, 400, "Invalid year");
 
       if (monthStr) {
-        const m = parseInt(monthStr);
+        const m = parseInt(monthStr, 10);
         if (isNaN(m) || m < 1 || m > 12)
           return sendErrorResponse(res, 400, "Invalid month (1–12)");
-        where.date = {
-          gte: new Date(y, m - 1, 1),
-          lte: new Date(y, m, 0, 23, 59, 59),
-        };
+        const b = getISTMonthBounds(y, m);
+        where.date = { gte: b.start, lte: b.end };
       } else {
-        where.date = {
-          gte: new Date(y, 0, 1),
-          lte: new Date(y, 11, 31, 23, 59, 59),
-        };
+        const b = getISTYearBounds(y);
+        where.date = { gte: b.start, lte: b.end };
       }
     } else {
-      /* Default: current year */
-      const y = new Date().getFullYear();
-      where.date = {
-        gte: new Date(y, 0, 1),
-        lte: new Date(y, 11, 31, 23, 59, 59),
-      };
+      const { year: y } = parseDateInputToISTYMD();
+      const b = getISTYearBounds(y);
+      where.date = { gte: b.start, lte: b.end };
     }
 
     const holidays = await prisma.publicHoliday.findMany({
@@ -196,7 +197,7 @@ export async function adminGetHolidays(req: Request, res: Response) {
 
     return sendSuccessResponse(res, 200, "Public holidays fetched", {
       total: holidays.length,
-      data: holidays,
+      data: holidays.map((h) => ({ ...h, dateStr: toISTDateStr(h.date) })),
     });
   } catch (err: any) {
     return sendErrorResponse(
@@ -209,7 +210,6 @@ export async function adminGetHolidays(req: Request, res: Response) {
 
 /* ===============================================================
    GET /admin/holidays/:id
-   Single holiday detail.
    =============================================================== */
 export async function adminGetHolidayById(req: Request, res: Response) {
   try {
@@ -220,13 +220,17 @@ export async function adminGetHolidayById(req: Request, res: Response) {
     const holiday = await prisma.publicHoliday.findUnique({ where: { id } });
     if (!holiday) return sendErrorResponse(res, 404, "Holiday not found");
 
-    /* Count how many attendance logs were marked for this date */
+    const { start, end } = getISTDayBounds(holiday.date);
     const markedCount = await prisma.attendanceLog.count({
-      where: { date: holiday.date, status: AttendanceStatus.HOLIDAY },
+      where: {
+        date: { gte: start, lte: end },
+        status: AttendanceStatus.HOLIDAY,
+      },
     });
 
     return sendSuccessResponse(res, 200, "Holiday fetched", {
       ...holiday,
+      dateStr: toISTDateStr(holiday.date),
       markedEmployeeCount: markedCount,
     });
   } catch (err: any) {
@@ -240,9 +244,6 @@ export async function adminGetHolidayById(req: Request, res: Response) {
 
 /* ===============================================================
    POST /admin/holidays
-   Create a single public holiday and mark attendance for all
-   active employees on that date.
-   Body: { date, name, description?, isRecurring? }
    =============================================================== */
 export async function adminCreateHoliday(req: Request, res: Response) {
   try {
@@ -259,24 +260,25 @@ export async function adminCreateHoliday(req: Request, res: Response) {
     if (!dateStr) return sendErrorResponse(res, 400, "date is required");
     if (!name?.trim()) return sendErrorResponse(res, 400, "name is required");
 
-    const date = toDateOnly(new Date(dateStr));
-    if (isNaN(date.getTime()))
+    let date: Date;
+    try {
+      date = toISTDateOnly(dateStr);
+    } catch {
       return sendErrorResponse(res, 400, "Invalid date format");
+    }
 
-    /* Check for duplicate */
-    const existing = await prisma.publicHoliday.findUnique({
-      where: { date },
-    });
-    if (existing)
+    const existing = await findHolidayForISTDate(prisma, date);
+    if (existing) {
       return sendErrorResponse(
         res,
         409,
-        `A holiday already exists on ${date.toDateString()}: "${existing.name}"`,
+        `A holiday already exists on ${toISTDateStr(date)}: "${existing.name}"`,
       );
+    }
 
-    const { holiday, markedCount, skippedCount } =
-      await prisma.$transaction(async (tx) => {
-        const holiday = await tx.publicHoliday.create({
+    const { holiday, markedCount, skippedCount } = await prisma.$transaction(
+      async (tx) => {
+        const created = await tx.publicHoliday.create({
           data: {
             date,
             name: name.trim(),
@@ -288,22 +290,27 @@ export async function adminCreateHoliday(req: Request, res: Response) {
 
         const { upserted, skipped } = await markHolidayForAllAccounts(
           date,
-          holiday.name,
+          created.name,
           adminAccountId,
           tx,
         );
 
-        return { holiday, markedCount: upserted, skippedCount: skipped };
-      });
+        return {
+          holiday: created,
+          markedCount: upserted,
+          skippedCount: skipped,
+        };
+      },
+    );
 
-    /* Broadcast to all connected admins/employees */
     emit("broadcast", "holiday:created", {
       date: holiday.date,
+      dateStr: toISTDateStr(holiday.date),
       name: holiday.name,
     });
 
     return sendSuccessResponse(res, 201, "Holiday created", {
-      holiday,
+      holiday: { ...holiday, dateStr: toISTDateStr(holiday.date) },
       attendanceMarked: markedCount,
       attendanceSkipped: skippedCount,
     });
@@ -318,9 +325,6 @@ export async function adminCreateHoliday(req: Request, res: Response) {
 
 /* ===============================================================
    POST /admin/holidays/bulk
-   Create multiple holidays at once (e.g. seed a full year).
-   Body: { holidays: [{ date, name, description?, isRecurring? }] }
-   Skips duplicates — does NOT fail the whole batch.
    =============================================================== */
 export async function adminBulkCreateHolidays(req: Request, res: Response) {
   try {
@@ -366,8 +370,10 @@ export async function adminBulkCreateHolidays(req: Request, res: Response) {
         continue;
       }
 
-      const date = toDateOnly(new Date(item.date));
-      if (isNaN(date.getTime())) {
+      let date: Date;
+      try {
+        date = toISTDateOnly(item.date);
+      } catch {
         results.push({
           date: item.date,
           name: item.name,
@@ -377,11 +383,7 @@ export async function adminBulkCreateHolidays(req: Request, res: Response) {
         continue;
       }
 
-      /* Check duplicate outside transaction for clean error capture */
-      const existing = await prisma.publicHoliday.findUnique({
-        where: { date },
-      });
-
+      const existing = await findHolidayForISTDate(prisma, date);
       if (existing) {
         results.push({
           date: item.date,
@@ -443,9 +445,6 @@ export async function adminBulkCreateHolidays(req: Request, res: Response) {
 
 /* ===============================================================
    PATCH /admin/holidays/:id
-   Update name / description / isRecurring.
-   Does NOT change the date (delete + recreate for that).
-   Body: { name?, description?, isRecurring? }
    =============================================================== */
 export async function adminUpdateHoliday(req: Request, res: Response) {
   try {
@@ -465,6 +464,8 @@ export async function adminUpdateHoliday(req: Request, res: Response) {
     const holiday = await prisma.publicHoliday.findUnique({ where: { id } });
     if (!holiday) return sendErrorResponse(res, 404, "Holiday not found");
 
+    const { start, end } = getISTDayBounds(holiday.date);
+
     const updated = await prisma.$transaction(async (tx) => {
       const updatedHoliday = await tx.publicHoliday.update({
         where: { id },
@@ -479,11 +480,10 @@ export async function adminUpdateHoliday(req: Request, res: Response) {
         },
       });
 
-      /* Sync the override note on all affected attendance logs if name changed */
       if (name?.trim() && name.trim() !== holiday.name) {
         await tx.attendanceLog.updateMany({
           where: {
-            date: holiday.date,
+            date: { gte: start, lte: end },
             status: AttendanceStatus.HOLIDAY,
             overrideNote: `Public holiday: ${holiday.name}`,
           },
@@ -497,7 +497,10 @@ export async function adminUpdateHoliday(req: Request, res: Response) {
       return updatedHoliday;
     });
 
-    return sendSuccessResponse(res, 200, "Holiday updated", updated);
+    return sendSuccessResponse(res, 200, "Holiday updated", {
+      ...updated,
+      dateStr: toISTDateStr(updated.date),
+    });
   } catch (err: any) {
     return sendErrorResponse(
       res,
@@ -509,9 +512,6 @@ export async function adminUpdateHoliday(req: Request, res: Response) {
 
 /* ===============================================================
    DELETE /admin/holidays/:id
-   Remove a holiday and revert attendance logs for that date.
-   - AttendanceLogs with no check events → deleted.
-   - AttendanceLogs with check events    → left untouched.
    =============================================================== */
 export async function adminDeleteHoliday(req: Request, res: Response) {
   try {
@@ -529,6 +529,7 @@ export async function adminDeleteHoliday(req: Request, res: Response) {
 
     emit("broadcast", "holiday:deleted", {
       date: holiday.date,
+      dateStr: toISTDateStr(holiday.date),
       name: holiday.name,
     });
 
@@ -548,26 +549,22 @@ export async function adminDeleteHoliday(req: Request, res: Response) {
 
 /* ===============================================================
    POST /admin/holidays/seed-next-year
-   Clone all isRecurring=true holidays from current year into
-   next year. Skips any date that already has a holiday.
-   Meant to be called manually by admin or by a yearly cron.
    =============================================================== */
 export async function adminSeedNextYearHolidays(req: Request, res: Response) {
   try {
     if (!assertAdmin(req, res)) return;
 
     const adminAccountId = req.user?.accountId;
-    const currentYear = new Date().getFullYear();
+    const { year: currentYear } = parseDateInputToISTYMD();
     const nextYear = currentYear + 1;
 
-    /* Fetch all recurring holidays for current year */
+    const { start: curStart, end: curEnd } = getISTYearBounds(currentYear);
+    const { start: nextStart, end: nextEnd } = getISTYearBounds(nextYear);
+
     const recurring = await prisma.publicHoliday.findMany({
       where: {
         isRecurring: true,
-        date: {
-          gte: new Date(currentYear, 0, 1),
-          lte: new Date(currentYear, 11, 31, 23, 59, 59),
-        },
+        date: { gte: curStart, lte: curEnd },
       },
       orderBy: { date: "asc" },
     });
@@ -580,19 +577,15 @@ export async function adminSeedNextYearHolidays(req: Request, res: Response) {
         { seeded: 0, skipped: 0 },
       );
 
-    /* Fetch already-existing holidays for next year to detect conflicts */
     const existingNextYear = await prisma.publicHoliday.findMany({
       where: {
-        date: {
-          gte: new Date(nextYear, 0, 1),
-          lte: new Date(nextYear, 11, 31, 23, 59, 59),
-        },
+        date: { gte: nextStart, lte: nextEnd },
       },
       select: { date: true },
     });
 
-    const existingDates = new Set(
-      existingNextYear.map((h) => h.date.toISOString()),
+    const existingDateStrs = new Set(
+      existingNextYear.map((h) => toISTDateStr(h.date)),
     );
 
     const results: {
@@ -602,13 +595,12 @@ export async function adminSeedNextYearHolidays(req: Request, res: Response) {
     }[] = [];
 
     for (const h of recurring) {
-      /* Project into next year, preserving month + day */
-      const nextDate = toDateOnly(
-        new Date(nextYear, h.date.getMonth(), h.date.getDate()),
-      );
+      const { month, day } = parseDateInputToISTYMD(h.date);
+      const nextDateStr = `${nextYear}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      const nextDate = toISTDateOnly(nextDateStr);
 
-      if (existingDates.has(nextDate.toISOString())) {
-        results.push({ name: h.name, date: nextDate.toISOString(), status: "skipped" });
+      if (existingDateStrs.has(nextDateStr)) {
+        results.push({ name: h.name, date: nextDateStr, status: "skipped" });
         continue;
       }
 
@@ -631,7 +623,7 @@ export async function adminSeedNextYearHolidays(req: Request, res: Response) {
         );
       });
 
-      results.push({ name: h.name, date: nextDate.toISOString(), status: "seeded" });
+      results.push({ name: h.name, date: nextDateStr, status: "seeded" });
     }
 
     const seeded = results.filter((r) => r.status === "seeded").length;
@@ -654,9 +646,6 @@ export async function adminSeedNextYearHolidays(req: Request, res: Response) {
 
 /* ===============================================================
    POST /admin/holidays/:id/sync-attendance
-   Re-sync attendance for a holiday's date — useful if new
-   employees were added after the holiday was created, or if
-   an earlier manual override needs to be corrected.
    =============================================================== */
 export async function adminSyncHolidayAttendance(req: Request, res: Response) {
   try {
@@ -678,7 +667,7 @@ export async function adminSyncHolidayAttendance(req: Request, res: Response) {
     });
 
     return sendSuccessResponse(res, 200, "Holiday attendance synced", {
-      holiday,
+      holiday: { ...holiday, dateStr: toISTDateStr(holiday.date) },
       attendanceMarked: upserted,
       attendanceSkipped: skipped,
     });

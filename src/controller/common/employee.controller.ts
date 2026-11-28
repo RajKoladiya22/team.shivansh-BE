@@ -6,6 +6,11 @@ import {
   sendErrorResponse,
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
+import {
+  getISTDayBounds,
+  findHolidayForISTDate,
+  toISTDateOnly,
+} from "../../core/utils/attendance.util";
 
 /**
  * GET /employees
@@ -178,11 +183,9 @@ export async function listEmployees(req: Request, res: Response) {
     const pageNumber = Math.max(Number(page), 1);
     const pageSize = Math.min(Number(limit), 100);
 
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-
-    const todayEnd = new Date();
-    todayEnd.setUTCHours(23, 59, 59, 999);
+    const { start: todayStart, end: todayEnd, isSunday: todayIsSunday } =
+      getISTDayBounds();
+    const todayHoliday = await findHolidayForISTDate(prisma, todayStart);
 
     const where: any = {};
 
@@ -309,7 +312,10 @@ export async function listEmployees(req: Request, res: Response) {
           contactEmail: a.contactEmail,
           avatar: a.avatar,
           isBusy: a.isBusy,
-          isOnLeave: (a as any).leaveRequests && (a as any).leaveRequests.length > 0,
+          isOnLeave:
+            todayIsSunday || Boolean(todayHoliday)
+              ? false
+              : Boolean((a as any).leaveRequests && (a as any).leaveRequests.length > 0),
           bio: a.bio,
           isAvailable: a.isAvailable,
           teams: a.teams.map((t) => t.team),
@@ -542,11 +548,7 @@ export async function getTodayBirthdayEmployees(req: Request, res: Response) {
 // }
 
 export function toDateOnly(date: Date = new Date()): Date {
-  return new Date(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate()
-  );
+  return toISTDateOnly(date);
 }
 
 /**
@@ -569,14 +571,8 @@ export async function getEmployeeById(req: Request, res: Response) {
       return sendErrorResponse(res, 400, "Employee id is required");
     }
 
-    // ── Today's UTC boundaries ─────────────────────────────────────────────
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-
-    const todayEnd = new Date();
-    todayEnd.setUTCHours(23, 59, 59, 999);
-
-    const today = toDateOnly();
+    // ── Today's IST boundaries ─────────────────────────────────────────────
+    const { start: todayStart, end: todayEnd } = getISTDayBounds();
 
     // ── Parallel fetches ───────────────────────────────────────────────────
     const [
@@ -640,13 +636,12 @@ export async function getEmployeeById(req: Request, res: Response) {
       }),
 
       // 2. Today's attendance log
-      prisma.attendanceLog.findUnique({
+      prisma.attendanceLog.findFirst({
         where: {
-          accountId_date: {
-            accountId: id,
-            date: today,
-          },
+          accountId: id,
+          date: { gte: todayStart, lte: todayEnd },
         },
+        orderBy: { date: "asc" },
         select: {
           id: true,
           date: true,

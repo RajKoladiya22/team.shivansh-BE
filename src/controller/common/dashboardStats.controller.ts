@@ -4,6 +4,7 @@ import {
   sendErrorResponse,
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
+import { getISTDayBounds } from "../../core/utils/attendance.util";
 
 /**
  * GET /common/dashboard/stats
@@ -32,11 +33,7 @@ export async function getDashboardStats(req: Request, res: Response) {
       59,
     );
 
-    const startOfToday = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-    );
+    const { start: startOfToday, end: endOfToday } = getISTDayBounds(now);
 
     /* ─── Lead scope ─── */
     const leadScope = isAdmin
@@ -258,7 +255,10 @@ export async function getDashboardStats(req: Request, res: Response) {
       // ── Today's check-ins ──
       isAdmin
         ? prisma.checkLog.count({
-            where: { type: "CHECK_IN", checkedAt: { gte: startOfToday } },
+            where: {
+              type: "CHECK_IN",
+              checkedAt: { gte: startOfToday, lte: endOfToday },
+            },
           })
         : Promise.resolve(null),
 

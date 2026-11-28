@@ -6,6 +6,14 @@ import {
     sendErrorResponse,
     sendSuccessResponse,
 } from "../../core/utils/httpResponse";
+import {
+    parseDateInputToISTYMD,
+    getISTDayBounds,
+    getISTMonthBounds,
+    enumerateISTDateStrs,
+    toISTDateStr,
+    computeLateInfo,
+} from "../../core/utils/attendance.util";
 
 /* ═══════════════════════════════════════════════════════════════
    HELPERS
@@ -13,23 +21,26 @@ import {
 
 function parseDateParam(raw: string | undefined, endOfDay = false): Date | undefined {
     if (!raw) return undefined;
-    const d = new Date(raw);
-    if (isNaN(d.getTime())) return undefined;
-    if (endOfDay) {
-        d.setUTCHours(23, 59, 59, 999);
+    try {
+        const bounds = getISTDayBounds(raw);
+        return endOfDay ? bounds.end : bounds.start;
+    } catch {
+        return undefined;
     }
-    return d;
 }
 
-/** First day of the month N months ago from today */
+/** First day of the IST month N months ago from today */
 function monthStart(offsetMonths: number): Date {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() + offsetMonths, 1);
+    const { year, month } = parseDateInputToISTYMD(new Date());
+    const d = new Date(Date.UTC(year, month - 1 + offsetMonths, 1));
+    return getISTMonthBounds(d.getUTCFullYear(), d.getUTCMonth() + 1).start;
 }
 
-/** First day of the month after monthStart(offsetMonths) */
+/** Last instant of the IST month N months ago from today */
 function monthEnd(offsetMonths: number): Date {
-    return monthStart(offsetMonths + 1);
+    const { year, month } = parseDateInputToISTYMD(new Date());
+    const d = new Date(Date.UTC(year, month - 1 + offsetMonths, 1));
+    return getISTMonthBounds(d.getUTCFullYear(), d.getUTCMonth() + 1).end;
 }
 
 /**
@@ -1388,18 +1399,33 @@ interface AnalyticsResponse {
 //  UTILITY FUNCTIONS
 // ══════════════════════════════════════════════════════════════
 
-function getWorkingDaysBetween(start: Date, end: Date, excludeSaturday = false): number {
+function getWorkingDaysBetween(
+    start: Date,
+    end: Date,
+    excludeSaturday = false,
+    holidayDateStrs?: Set<string>,
+): number {
+    const todayEnd = getISTDayBounds().end;
+    const effectiveEnd = end > todayEnd ? todayEnd : end;
+    if (effectiveEnd < start) return 0;
+
     let count = 0;
-    const d = new Date(start);
-    d.setHours(0, 0, 0, 0);
-    const endCopy = new Date(end);
-    endCopy.setHours(23, 59, 59, 999);
-    while (d <= endCopy) {
-        const day = d.getDay();
-        if (day !== 0 && (!excludeSaturday || day !== 6)) count++;
-        d.setDate(d.getDate() + 1);
+    for (const dateStr of enumerateISTDateStrs(start, effectiveEnd)) {
+        const { dayOfWeek } = getISTDayBounds(dateStr);
+        if (dayOfWeek === 0) continue; // Sunday is weekly off
+        if (excludeSaturday && dayOfWeek === 6) continue;
+        if (holidayDateStrs?.has(dateStr)) continue;
+        count++;
     }
     return count;
+}
+
+async function getHolidayDateSet(from: Date, to: Date): Promise<Set<string>> {
+    const holidays = await prisma.publicHoliday.findMany({
+        where: { date: { gte: from, lte: to } },
+        select: { date: true },
+    });
+    return new Set(holidays.map((h) => toISTDateStr(h.date)));
 }
 
 function momGrowth(current: number, previous: number): number | null {
@@ -1418,16 +1444,16 @@ function previousPeriod(from: Date, to: Date): { prevStart: Date; prevEnd: Date 
 
 function getLastNMonths(n: number): { start: Date; end: Date; label: string }[] {
     const months: { start: Date; end: Date; label: string }[] = [];
-    const today = new Date();
+    const { year: curYear, month: curMonth } = parseDateInputToISTYMD(new Date());
     for (let i = n - 1; i >= 0; i--) {
-        const start = new Date(today.getFullYear(), today.getMonth() - i, 1);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(today.getFullYear(), today.getMonth() - i + 1, 0);
-        end.setHours(23, 59, 59, 999);
+        const d = new Date(Date.UTC(curYear, curMonth - 1 - i, 1));
+        const y = d.getUTCFullYear();
+        const m = d.getUTCMonth() + 1;
+        const { start, end } = getISTMonthBounds(y, m);
         months.push({
             start,
             end,
-            label: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`,
+            label: `${y}-${String(m).padStart(2, '0')}`,
         });
     }
     return months;
@@ -1466,8 +1492,8 @@ function sendError(res: Response, code: number, message: string) {
 /**
  * Fetches and computes all attendance-related metrics for one employee.
  *
- * Working days are calendar-based (Mon–Fri, optionally excl. Sat).
- * lateDays = first check-in after 10:00 AM.
+ * Working days are IST calendar-based (Mon–Sat, excl. Sunday, Public Holidays & opt. Saturday).
+ * lateDays = first check-in strictly after 10:15 AM IST (15-min grace).
  * attendanceRate = (present + 0.5 * halfDays) / workingDays * 100.
  */
 async function computeAttendanceMetrics(
@@ -1476,28 +1502,32 @@ async function computeAttendanceMetrics(
     to: Date,
     excludeSat: boolean
 ): Promise<AttendanceMetrics> {
-    const logs = await prisma.attendanceLog.findMany({
-        where: { accountId, date: { gte: from, lte: to } },
-    });
+    const [logs, holidayDateSet] = await Promise.all([
+        prisma.attendanceLog.findMany({
+            where: { accountId, date: { gte: from, lte: to } },
+        }),
+        getHolidayDateSet(from, to),
+    ]);
 
     const present = logs.filter((l) => l.status === 'PRESENT').length;
     const half = logs.filter((l) => l.status === 'HALF_DAY').length;
     const absent = logs.filter((l) => l.status === 'ABSENT').length;
     const wfh = logs.filter((l) => l.isWFH).length;
 
-    // Late = first check-in strictly after 10:00 AM
+    // Late = first check-in strictly after 10:15 AM IST (excl. Sundays & Holidays)
     const late = logs.filter((l) => {
-        if (!l.firstCheckIn) return false;
-        const h = l.firstCheckIn.getHours();
-        const m = l.firstCheckIn.getMinutes();
-        return h > 10 || (h === 10 && m > 0);
+        if (!l.firstCheckIn || l.isSunday || l.status === 'HOLIDAY') return false;
+        return computeLateInfo(l.firstCheckIn).isLate;
     }).length;
 
     const totalWorkMinutes = logs.reduce((s, l) => s + (l.totalWorkMinutes ?? 0), 0);
     const totalWorkHours = totalWorkMinutes / 60;
 
-    const workingDays = getWorkingDaysBetween(from, to, excludeSat);
-    const attendanceRate = workingDays > 0 ? ((present + half * 0.5) / workingDays) * 100 : 0;
+    const workingDays = getWorkingDaysBetween(from, to, excludeSat, holidayDateSet);
+    const attendanceRate = workingDays > 0 ? Math.min(100, ((present + half * 0.5) / workingDays) * 100) : 0;
+    const attendedDays = logs.filter(
+        (l) => l.status === 'PRESENT' || l.status === 'HALF_DAY' || (l.totalWorkMinutes ?? 0) > 0,
+    ).length;
 
     return {
         workingDays,
@@ -1508,8 +1538,7 @@ async function computeAttendanceMetrics(
         lateDays: late,
         attendanceRate: round(attendanceRate),
         totalWorkHours: round(totalWorkHours),
-        // avgDailyHours only counts days the employee actually came in
-        avgDailyHours: present > 0 ? round(totalWorkHours / present) : 0,
+        avgDailyHours: attendedDays > 0 ? round(totalWorkHours / attendedDays) : 0,
     };
 }
 
@@ -2080,7 +2109,8 @@ async function getAggregateMetrics(
     const workHours = attendanceLogs.reduce((s, l) => s + (l.totalWorkMinutes ?? 0), 0) / 60; // B10 FIX
 
     if (attendanceLogs.length > 0) {
-        const workingDays = getWorkingDaysBetween(from, to, excludeSat);
+        const holidayDateSet = await getHolidayDateSet(from, to);
+        const workingDays = getWorkingDaysBetween(from, to, excludeSat, holidayDateSet);
         if (workingDays > 0) {
             const byEmp = new Map<string, { present: number; half: number }>();
             for (const log of attendanceLogs) {
@@ -2090,7 +2120,7 @@ async function getAggregateMetrics(
                 if (log.status === 'HALF_DAY') r.half++;
             }
             const rates = [...byEmp.values()].map(
-                (r) => ((r.present + r.half * 0.5) / workingDays) * 100
+                (r) => Math.min(100, ((r.present + r.half * 0.5) / workingDays) * 100)
             );
             avgAttendanceRate = rates.length > 0
                 ? rates.reduce((a, b) => a + b, 0) / rates.length
@@ -2111,7 +2141,7 @@ async function getMonthlyTrend(
     const scopeIds = singleAccountId ? [singleAccountId] : allAccountIds;
 
     // B12 FIX: single attendance query — it already has totalWorkMinutes
-    const [completedTasks, convertedLeads, attendanceLogs] = await Promise.all([
+    const [completedTasks, convertedLeads, attendanceLogs, holidayDateSet] = await Promise.all([
         prisma.task.findMany({
             where: {
                 assignments: { some: { accountId: { in: scopeIds } } },
@@ -2137,6 +2167,7 @@ async function getMonthlyTrend(
             where: { accountId: { in: scopeIds }, date: { gte: first, lte: last } },
             select: { date: true, status: true, totalWorkMinutes: true },
         }),
+        getHolidayDateSet(first, last),
     ]);
 
     return months.map(({ start, end, label }) => {
@@ -2152,12 +2183,12 @@ async function getMonthlyTrend(
         const revenue = monthLeads.reduce((s, l) => s + Number(l.cost ?? 0), 0);
 
         const monthLogs = attendanceLogs.filter((l) => l.date >= start && l.date <= end);
-        const workingDays = getWorkingDaysBetween(start, end);
+        const workingDays = getWorkingDaysBetween(start, end, false, holidayDateSet);
         const present = monthLogs.filter((l) => l.status === 'PRESENT').length;
         const half = monthLogs.filter((l) => l.status === 'HALF_DAY').length;
         const attendanceRate =
             workingDays > 0 && monthLogs.length > 0
-                ? round(((present + half * 0.5) / workingDays) * 100)
+                ? round(Math.min(100, ((present + half * 0.5) / workingDays) * 100))
                 : null;
 
         // B12 FIX: totalWorkMinutes is already on monthLogs — no second query needed

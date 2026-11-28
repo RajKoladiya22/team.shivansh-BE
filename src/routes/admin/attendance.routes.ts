@@ -1,4 +1,4 @@
-// src/routes/attendance.routes.ts
+// src/routes/admin/attendance.routes.ts
 import { Router } from "express";
 import { requireAuth } from "../../core/middleware/auth";
 import {
@@ -7,7 +7,10 @@ import {
   adminGetAttendanceSummary,
   adminManualCheckIn,
   adminManualCheckOut,
+  adminUpsertSession,
+  adminUpdateCheckLog,
   adminOverrideAttendance,
+  adminUpsertOverrideAttendance,
   adminDeleteCheckLog,
   adminGetLeaves,
   adminDecideLeave,
@@ -22,7 +25,10 @@ router.get("/summary", adminGetAttendanceSummary);
 router.get("/", adminGetAttendance);
 router.post("/checkin", adminManualCheckIn);
 router.post("/checkout", adminManualCheckOut);
+router.post("/session", adminUpsertSession);
+router.post("/override", adminUpsertOverrideAttendance);
 router.patch("/:id/override", adminOverrideAttendance);
+router.patch("/checklog/:checkLogId", adminUpdateCheckLog);
 router.delete("/checklog/:checkLogId", adminDeleteCheckLog);
 
 // Admin — Leave

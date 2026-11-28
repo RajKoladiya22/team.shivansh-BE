@@ -4,6 +4,7 @@ import { prisma } from "../../../config/database.config";
 import { TaskStatus, TaskRecurrenceType } from "@prisma/client";
 import { logger } from "../../help/logs/logger";
 import { triggerTaskNotification } from "../../../services/notifications";
+import { toISTDateStr } from "../../utils/attendance.util";
 
 /* ═══════════════════════════════════════════════════════════════
    CONSTANTS
@@ -447,9 +448,9 @@ export async function spawnDueRecurringTasks(): Promise<SpawnResult> {
         
         const isOnLeave = activeLeaves.some((leave) => {
           if (leave.accountId !== assignment.accountId) return false;
-          const leaveStart = toMidnightUTC(leave.startDate);
-          const leaveEnd = leave.endDate ? toMidnightUTC(leave.endDate) : leaveStart;
-          return nextWindowStart >= leaveStart && nextWindowStart <= leaveEnd;
+          const leaveStartKey = toISTDateStr(leave.startDate);
+          const leaveEndKey = leave.endDate ? toISTDateStr(leave.endDate) : leaveStartKey;
+          return nextKey >= leaveStartKey && nextKey <= leaveEndKey;
         });
         
         if (!isOnLeave) {

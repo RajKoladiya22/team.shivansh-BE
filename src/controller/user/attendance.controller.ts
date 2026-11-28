@@ -20,85 +20,32 @@ import {
   stopActiveWorkForAccount,
   emitWorkStoppedEvents,
 } from "../../core/utils/workSession.util";
+import {
+  buildBreaks,
+  buildSessions,
+  closeOpenSessionsOnLogTx,
+  computeAttendanceMetricsFromLogs,
+  enrichAttendanceLogResponse,
+  enumerateISTDateStrs,
+  findApprovedLeaveForISTDate,
+  findAttendanceLogForISTDate,
+  findHolidayForISTDate,
+  getISTClockTime,
+  getISTDayBounds,
+  getISTMonthBounds,
+  getISTYearBounds,
+  HR_RULES,
+  isManualAdminOverride,
+  recomputeAttendanceLogTx,
+  resolveAttendanceDayStatus,
+  toISTDateOnly,
+  toISTDateStr,
+} from "../../core/utils/attendance.util";
 
 /* ═══════════════════════════════════════════════════════════════
    INTERNAL HELPERS
 ═══════════════════════════════════════════════════════════════ */
 
-/** Strip time — midnight 00:00:00 in LOCAL server timezone */
-function toDateOnly(date: Date = new Date()): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function getDayName(date: Date): string {
-  return date.toLocaleDateString("en-US", { weekday: "long" });
-}
-
-/** Derive AttendanceStatus from worked minutes */
-function deriveStatus(minutes: number): AttendanceStatus {
-  if (minutes >= 300) return AttendanceStatus.PRESENT; // 5h
-  if (minutes >= 240) return AttendanceStatus.HALF_DAY; // 4h
-  return AttendanceStatus.ABSENT;
-}
-
-/**
- * Build enriched session array from raw CheckLog rows.
- * Each session = { sessionId, checkIn, checkOut, durationMinutes, isOpen }
- */
-function buildSessions(checkLogs: any[]) {
-  const map: Record<
-    string,
-    { sessionId: string; checkIn?: Date; checkOut?: Date }
-  > = {};
-
-  for (const c of checkLogs) {
-    if (!c.sessionId) continue;
-    if (!map[c.sessionId]) map[c.sessionId] = { sessionId: c.sessionId };
-    if (c.type === CheckType.CHECK_IN) map[c.sessionId].checkIn = c.checkedAt;
-    if (c.type === CheckType.CHECK_OUT) map[c.sessionId].checkOut = c.checkedAt;
-  }
-
-  return Object.values(map).map((s) => ({
-    sessionId: s.sessionId,
-    checkIn: s.checkIn ?? null,
-    checkOut: s.checkOut ?? null,
-    durationMinutes:
-      s.checkIn && s.checkOut
-        ? Math.floor((s.checkOut.getTime() - s.checkIn.getTime()) / 60_000)
-        : null,
-    isOpen: !!s.checkIn && !s.checkOut,
-  }));
-}
-
-/**
- * Enumerate every calendar date in [start, end] inclusive.
- */
-function getDateRange(start: Date, end: Date): Date[] {
-  const dates: Date[] = [];
-  const cur = new Date(start);
-  while (cur <= end) {
-    dates.push(new Date(cur));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return dates;
-}
-
-/**
- * Find the open sessionId (CHECK_IN with no paired CHECK_OUT)
- * from an array of CheckLog rows.
- */
-function findOpenSessionId(checks: any[]): string | null {
-  const map: Record<string, { in?: string; out?: string }> = {};
-  for (const c of checks) {
-    if (!c.sessionId) continue;
-    if (!map[c.sessionId]) map[c.sessionId] = {};
-    if (c.type === CheckType.CHECK_IN) map[c.sessionId].in = c.id;
-    if (c.type === CheckType.CHECK_OUT) map[c.sessionId].out = c.id;
-  }
-  return Object.entries(map).find(([, v]) => v.in && !v.out)?.[0] ?? null;
-}
-
-/** Emit socket events safely (won't crash if io not initialized) */
 function emit(room: string, event: string, data: unknown) {
   try {
     getIo().to(room).emit(event, data);
@@ -107,80 +54,116 @@ function emit(room: string, event: string, data: unknown) {
   }
 }
 
-function findOpenBreakSessionId(checks: any[]): string | null {
-  const map: Record<string, { start?: boolean; end?: boolean }> = {};
-  for (const c of checks) {
-    if (!c.sessionId) continue;
-    if (!map[c.sessionId]) map[c.sessionId] = {};
-    if (c.type === "BREAK_START") map[c.sessionId].start = true;
-    if (c.type === "BREAK_END") map[c.sessionId].end = true;
-  }
-  return Object.entries(map).find(([, v]) => v.start && !v.end)?.[0] ?? null;
-}
-
 /* ═══════════════════════════════════════════════════════════════
-   ADMIN GUARD
+   USER — CHECK-IN / CHECK-OUT / BREAKS
 ═══════════════════════════════════════════════════════════════ */
 
-function assertAdmin(req: Request, res: Response): boolean {
-  if (!req.user?.roles?.includes?.("ADMIN")) {
-    sendErrorResponse(res, 403, "Admin access required");
-    return false;
-  }
-  return true;
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   ██╗   ██╗███████╗███████╗██████╗     ███████╗██╗██████╗ ███████╗
-   ██║   ██║██╔════╝██╔════╝██╔══██╗    ██╔════╝██║██╔══██╗██╔════╝
-   ██║   ██║███████╗█████╗  ██████╔╝    ███████╗██║██║  ██║█████╗
-   ██║   ██║╚════██║██╔══╝  ██╔══██╗    ╚════██║██║██║  ██║██╔══╝
-   ╚██████╔╝███████║███████╗██║  ██║    ███████║██║██████╔╝███████╗
-    ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝    ╚══════╝╚═╝╚═════╝ ╚══════╝
-═══════════════════════════════════════════════════════════════ */
-
-/* ─────────────────────────────────────────────────────────────
-   POST /user/attendance/checkin
-   Employee starts a new work session for today.
-   Guards against duplicate open sessions.
-───────────────────────────────────────────────────────────── */
+/**
+ * POST /user/attendance/checkin
+ * Employee starts a new work session for today (IST).
+ * Automatically closes any stale open sessions from earlier dates first.
+ */
 export async function userCheckIn(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
 
     const now = new Date();
-    const today = toDateOnly(now);
-    const dayName = getDayName(today);
-    const isSunday = today.getDay() === 0;
+    const {
+      date: today,
+      start: todayStart,
+      dayName,
+      isSunday,
+    } = getISTDayBounds(now);
     const sessionId = randomUUID();
 
     const { ipAddress, deviceMeta } = req.body ?? {};
+    const isWFH =
+      req.body?.isWFH === true || req.body?.deviceMeta?.isWFH === true;
 
     const result = await prisma.$transaction(async (tx) => {
-      /* 1. Look up or create today's log.
-            Using findUnique + create (not upsert) so we can read
-            the current `hasOpenSession` BEFORE potentially creating.       */
-      let log = await tx.attendanceLog.findUnique({
-        where: { accountId_date: { accountId, date: today } },
+      // 0. Close any lingering stale open sessions from earlier days (< todayStart)
+      const staleOpenLogs = await tx.attendanceLog.findMany({
+        where: {
+          accountId,
+          date: { lt: todayStart },
+          OR: [{ hasOpenSession: true }, { hasOpenBreak: true }],
+        },
+        include: { checkLogs: { orderBy: { checkedAt: "asc" } } },
       });
 
+      for (const stale of staleOpenLogs) {
+        const staleSixPM = getISTClockTime(
+          stale.date,
+          HR_RULES.SHIFT_END_HOUR,
+          HR_RULES.SHIFT_END_MINUTE,
+          0,
+        );
+        const staleEndOfDay = getISTDayBounds(stale.date).end;
+        await closeOpenSessionsOnLogTx(
+          tx,
+          stale,
+          staleSixPM,
+          staleEndOfDay,
+          CheckSource.AUTO,
+          "Auto checkout (previous day unclosed session)",
+        );
+      }
+
+      // 1. Check holiday & approved leave for today
+      const [holiday, approvedLeave] = await Promise.all([
+        findHolidayForISTDate(tx, now),
+        findApprovedLeaveForISTDate(tx, accountId, now),
+      ]);
+
+      let log = await findAttendanceLogForISTDate(tx, accountId, now);
+
+      // Block check-in on approved FULL_DAY / MULTI_DAY leave unless admin manually overrode
+      if (
+        approvedLeave &&
+        (approvedLeave.type === LeaveType.FULL_DAY ||
+          approvedLeave.type === LeaveType.MULTI_DAY) &&
+        !isManualAdminOverride(log)
+      ) {
+        throw Object.assign(
+          new Error(
+            "You have an approved full-day leave today. Please contact admin if you are working today.",
+          ),
+          { statusCode: 409 },
+        );
+      }
+
       if (!log) {
+        const initialStatus = holiday
+          ? AttendanceStatus.HOLIDAY
+          : approvedLeave?.type === LeaveType.HALF_DAY
+            ? AttendanceStatus.HALF_DAY
+            : AttendanceStatus.PRESENT;
+
         log = await tx.attendanceLog.create({
           data: {
             accountId,
             date: today,
             day: dayName,
             isSunday,
-            status: AttendanceStatus.PRESENT,
+            status: initialStatus,
             firstCheckIn: now,
-            hasOpenSession: false, // will be set to true below
-            isWFH: req.body?.isWFH === true,
+            hasOpenSession: false,
+            isWFH,
+            overrideNote: holiday
+              ? `Public holiday: ${holiday.name}`
+              : approvedLeave?.type === LeaveType.HALF_DAY
+                ? `Leave approved: ${approvedLeave.type}`
+                : null,
+            overrideBy:
+              approvedLeave?.type === LeaveType.HALF_DAY
+                ? approvedLeave.decidedBy ?? null
+                : null,
           },
         });
       }
 
-      /* 2. Guard: already has an open session */
+      // 2. Guard: already has an open session
       if (log.hasOpenSession) {
         throw Object.assign(
           new Error("Already checked in. Please check out first."),
@@ -188,28 +171,27 @@ export async function userCheckIn(req: Request, res: Response) {
         );
       }
 
-      /* 3. Create CheckLog (CHECK_IN) */
+      // 3. Create CheckLog (CHECK_IN)
       const checkLog = await tx.checkLog.create({
         data: {
           accountId,
-          date: today,
+          date: log.date,
           checkedAt: now,
           type: CheckType.CHECK_IN,
           source: CheckSource.MANUAL,
           sessionId,
           ipAddress: ipAddress ?? null,
-          deviceMeta: deviceMeta ?? null,
+          deviceMeta: {
+            ...(deviceMeta && typeof deviceMeta === "object" ? deviceMeta : {}),
+            isWFH,
+          },
           attendanceLogId: log.id,
         },
       });
 
-      /* 4. Update log — open session, preserve firstCheckIn */
-      const updatedLog = await tx.attendanceLog.update({
-        where: { id: log.id },
-        data: {
-          hasOpenSession: true,
-          firstCheckIn: log.firstCheckIn ?? now,
-        },
+      // 4. Recompute AttendanceLog consistently
+      const recomputed = await recomputeAttendanceLogTx(tx, log.id, {
+        forceIsWFH: Boolean(log.isWFH || isWFH),
       });
 
       await tx.account.update({
@@ -217,10 +199,15 @@ export async function userCheckIn(req: Request, res: Response) {
         data: { isAvailable: true },
       });
 
-      return { log: updatedLog, checkLog };
+      return {
+        log: enrichAttendanceLogResponse(recomputed.log, {
+          holiday: recomputed.holiday,
+          approvedLeave: recomputed.approvedLeave,
+        }),
+        checkLog,
+      };
     });
 
-    /* 5. Real-time: broadcast to admin dashboard */
     emit("attendance:admin", "attendance:checkin", {
       accountId,
       sessionId,
@@ -231,7 +218,7 @@ export async function userCheckIn(req: Request, res: Response) {
     try {
       getIo().emit("busy:changed", {
         accountId,
-        isBusy: false, // checked in but not busy yet
+        isBusy: false,
         isAvailable: true,
         source: "CHECK-IN",
       });
@@ -252,86 +239,79 @@ export async function userCheckIn(req: Request, res: Response) {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   POST /user/attendance/checkout
-   Closes the open CHECK_IN session, recomputes work minutes.
-───────────────────────────────────────────────────────────── */
+/**
+ * POST /user/attendance/checkout
+ * Closes any open break + open CHECK_IN session, recomputes net work minutes (breaks subtracted)
+ * and HR status.
+ */
 export async function userCheckOut(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
 
     const now = new Date();
-    const today = toDateOnly(now);
     const { ipAddress, deviceMeta } = req.body ?? {};
 
     const result = await prisma.$transaction(async (tx) => {
-      /* 1. Today's log must exist */
-      const log = await tx.attendanceLog.findUnique({
-        where: { accountId_date: { accountId, date: today } },
-      });
+      const log = await findAttendanceLogForISTDate(tx, accountId, now, true);
 
-      if (!log)
+      if (!log) {
         throw Object.assign(
           new Error("No attendance record for today. Please check in first."),
           { statusCode: 404 },
         );
+      }
 
-      if (!log.hasOpenSession)
+      if (!log.hasOpenSession) {
         throw Object.assign(new Error("No open check-in session found."), {
           statusCode: 409,
         });
+      }
 
-      /* 2. Load all checks for today, find the open session */
-      const allChecks = await tx.checkLog.findMany({
-        where: { attendanceLogId: log.id },
-        orderBy: { checkedAt: "asc" },
-      });
-
-      const openSessionId = findOpenSessionId(allChecks);
-      if (!openSessionId)
+      const allChecks = log.checkLogs ?? [];
+      const openSession = buildSessions(allChecks).find((s) => s.isOpen);
+      if (!openSession) {
         throw Object.assign(
           new Error("Could not find open check-in session."),
           { statusCode: 409 },
         );
+      }
 
-      /* 3. Compute this session's duration */
-      const openIn = allChecks.find(
-        (c) => c.sessionId === openSessionId && c.type === CheckType.CHECK_IN,
-      );
-      const sessionMinutes = openIn
-        ? Math.floor((now.getTime() - openIn.checkedAt.getTime()) / 60_000)
-        : 0;
+      // Auto-close any open break at checkout time so break & work stay exact
+      const openBreak = buildBreaks(allChecks).find((b) => b.isOpen);
+      if (openBreak) {
+        await tx.checkLog.create({
+          data: {
+            accountId,
+            date: log.date,
+            checkedAt: now,
+            type: CheckType.BREAK_END,
+            source: CheckSource.AUTO,
+            sessionId: openBreak.sessionId,
+            note: "Auto break end at checkout",
+            attendanceLogId: log.id,
+          },
+        });
+      }
 
-      /* 4. Create CHECK_OUT */
       const checkOut = await tx.checkLog.create({
         data: {
           accountId,
-          date: today,
+          date: log.date,
           checkedAt: now,
           type: CheckType.CHECK_OUT,
           source: CheckSource.MANUAL,
-          sessionId: openSessionId,
+          sessionId: openSession.sessionId,
           ipAddress: ipAddress ?? null,
           deviceMeta: deviceMeta ?? null,
           attendanceLogId: log.id,
         },
       });
 
-      /* 5. Update log */
-      const newTotal = log.totalWorkMinutes + sessionMinutes;
-      // console.log("\n\n\n\n\n\n newTotal---> ", newTotal);
-      // console.log("\n deriveStatus---> ", deriveStatus(newTotal));
-
-      const updatedLog = await tx.attendanceLog.update({
-        where: { id: log.id },
-        data: {
-          hasOpenSession: false,
-          lastCheckOut: now,
-          totalWorkMinutes: newTotal,
-          status: deriveStatus(newTotal),
-        },
-      });
+      const recomputed = await recomputeAttendanceLogTx(tx, log.id);
+      const closedSession = recomputed.metrics.sessions.find(
+        (s) => s.sessionId === openSession.sessionId,
+      );
 
       const stoppedWork = await stopActiveWorkForAccount(tx, accountId, {
         reason: "USER_CHECKOUT",
@@ -339,15 +319,25 @@ export async function userCheckOut(req: Request, res: Response) {
         clearAvailability: true,
       });
 
-      return { log: updatedLog, checkOut, sessionMinutes, stoppedWork };
+      const enriched = enrichAttendanceLogResponse(recomputed.log, {
+        holiday: recomputed.holiday,
+        approvedLeave: recomputed.approvedLeave,
+      });
+
+      return {
+        log: enriched,
+        checkOut,
+        sessionMinutes: closedSession?.durationMinutes ?? 0,
+        stoppedWork,
+      };
     });
 
-    /* 6. Real-time */
     emit("attendance:admin", "attendance:checkout", {
       accountId,
       checkedOutAt: result.checkOut.checkedAt,
       sessionWorkMinutes: result.sessionMinutes,
       totalWorkMinutes: result.log.totalWorkMinutes,
+      totalBreakMinutes: result.log.totalBreakMinutes,
       log: result.log,
     });
 
@@ -363,6 +353,7 @@ export async function userCheckOut(req: Request, res: Response) {
       checkedOutAt: result.checkOut.checkedAt,
       sessionWorkMinutes: result.sessionMinutes,
       totalWorkMinutes: result.log.totalWorkMinutes,
+      totalBreakMinutes: result.log.totalBreakMinutes,
       attendance: result.log,
     });
   } catch (err: any) {
@@ -373,29 +364,59 @@ export async function userCheckOut(req: Request, res: Response) {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   GET /user/attendance/status
-   Minimal payload: is the employee checked in right now?
-───────────────────────────────────────────────────────────── */
+/**
+ * GET /user/attendance/status
+ * Complete live status payload for header button, reminders, and today card.
+ */
 export async function userAttendanceStatus(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
 
-    const today = toDateOnly();
+    const now = new Date();
+    const { isSunday } = getISTDayBounds(now);
 
-    const log = await prisma.attendanceLog.findUnique({
-      where: { accountId_date: { accountId, date: today } },
-      include: { checkLogs: { orderBy: { checkedAt: "asc" } } },
+    const [log, holiday, approvedLeave] = await Promise.all([
+      findAttendanceLogForISTDate(prisma, accountId, now, true),
+      findHolidayForISTDate(prisma, now),
+      findApprovedLeaveForISTDate(prisma, accountId, now),
+    ]);
+
+    const metrics = log
+      ? computeAttendanceMetricsFromLogs(log.checkLogs ?? [], log.isWFH)
+      : null;
+
+    const resolved = resolveAttendanceDayStatus({
+      netWorkMinutes: log?.totalWorkMinutes ?? metrics?.totalWorkMinutes ?? 0,
+      hasCheckIn: Boolean(metrics?.hasCheckIn || log?.firstCheckIn),
+      hasOpenSession: Boolean(log?.hasOpenSession),
+      firstCheckIn: log?.firstCheckIn ?? metrics?.firstCheckIn ?? null,
+      isSunday,
+      holiday,
+      approvedLeave,
+      existingLog: log,
     });
 
     return sendSuccessResponse(res, 200, "Attendance status fetched", {
       isCheckedIn: log?.hasOpenSession ?? false,
+      isOnBreak: log?.hasOpenBreak ?? false,
+      isWFH: log?.isWFH ?? false,
+      isSunday,
       firstCheckIn: log?.firstCheckIn ?? null,
       lastCheckOut: log?.lastCheckOut ?? null,
       totalWorkMinutes: log?.totalWorkMinutes ?? 0,
-      status: log?.status ?? null,
-      sessions: buildSessions(log?.checkLogs ?? []),
+      totalBreakMinutes: log?.totalBreakMinutes ?? 0,
+      status: log?.status ?? (holiday ? AttendanceStatus.HOLIDAY : approvedLeave ? resolved.status : null),
+      sessions: metrics?.sessions ?? [],
+      breaks: metrics?.breaks ?? [],
+      currentBreak: metrics?.currentBreak ?? null,
+      holiday: holiday ? { id: holiday.id, name: holiday.name, date: holiday.date } : null,
+      approvedLeave: approvedLeave
+        ? { id: approvedLeave.id, type: approvedLeave.type, status: approvedLeave.status }
+        : null,
+      isLate: resolved.dayBreakdown.isLate,
+      lateByMinutes: resolved.dayBreakdown.lateByMinutes,
+      dayBreakdown: resolved.dayBreakdown,
     });
   } catch (err: any) {
     return sendErrorResponse(
@@ -406,29 +427,57 @@ export async function userAttendanceStatus(req: Request, res: Response) {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   GET /user/attendance/today
-   Full detail — all check events + sessions for today.
-───────────────────────────────────────────────────────────── */
+/**
+ * GET /user/attendance/today
+ * Full detail — all check events + work sessions + break sessions + HR breakdown for today.
+ */
 export async function userGetTodayAttendance(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
 
-    const today = toDateOnly();
+    const now = new Date();
+    const { date: today, dateStr, isSunday } = getISTDayBounds(now);
 
-    const log = await prisma.attendanceLog.findUnique({
-      where: { accountId_date: { accountId, date: today } },
-      include: { checkLogs: { orderBy: { checkedAt: "asc" } } },
+    const [log, holiday, approvedLeave] = await Promise.all([
+      findAttendanceLogForISTDate(prisma, accountId, now, true),
+      findHolidayForISTDate(prisma, now),
+      findApprovedLeaveForISTDate(prisma, accountId, now),
+    ]);
+
+    const enriched = log
+      ? enrichAttendanceLogResponse(log, { holiday, approvedLeave })
+      : null;
+
+    const metrics = log
+      ? computeAttendanceMetricsFromLogs(log.checkLogs ?? [], log.isWFH)
+      : null;
+
+    const resolved = resolveAttendanceDayStatus({
+      netWorkMinutes: log?.totalWorkMinutes ?? 0,
+      hasCheckIn: Boolean(metrics?.hasCheckIn),
+      hasOpenSession: Boolean(log?.hasOpenSession),
+      firstCheckIn: log?.firstCheckIn ?? null,
+      isSunday,
+      holiday,
+      approvedLeave,
+      existingLog: log,
     });
-
-    // console.log("\n\n\n\n\n\nlog->\n", log);
-    
 
     return sendSuccessResponse(res, 200, "Today's attendance fetched", {
       date: today,
-      attendance: log ?? null,
-      sessions: buildSessions(log?.checkLogs ?? []),
+      dateStr,
+      isSunday,
+      attendance: enriched,
+      sessions: metrics?.sessions ?? [],
+      breaks: metrics?.breaks ?? [],
+      isOnBreak: log?.hasOpenBreak ?? false,
+      currentBreak: metrics?.currentBreak ?? null,
+      holiday: holiday ? { id: holiday.id, name: holiday.name, date: holiday.date } : null,
+      approvedLeave: approvedLeave
+        ? { id: approvedLeave.id, type: approvedLeave.type, status: approvedLeave.status }
+        : null,
+      dayBreakdown: resolved.dayBreakdown,
     });
   } catch (err: any) {
     return sendErrorResponse(
@@ -439,40 +488,52 @@ export async function userGetTodayAttendance(req: Request, res: Response) {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   GET /user/attendance?month=&year=&page=&limit=
-   Paginated attendance history for the logged-in employee.
-───────────────────────────────────────────────────────────── */
+/**
+ * GET /user/attendance?month=&year=&page=&limit=
+ * Paginated attendance history for the logged-in employee, enriched with
+ * sessions, breaks, holidays, approved leaves, and HR dayBreakdown.
+ */
 export async function userGetAttendanceHistory(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
 
     const month = req.query.month
-      ? parseInt(req.query.month as string)
+      ? parseInt(req.query.month as string, 10)
       : undefined;
     const year = req.query.year
-      ? parseInt(req.query.year as string)
+      ? parseInt(req.query.year as string, 10)
       : undefined;
-    const page = Math.max(1, parseInt((req.query.page as string) ?? "1"));
-    const limit = Math.min(100, parseInt((req.query.limit as string) ?? "31"));
+    const page = Math.max(1, parseInt((req.query.page as string) ?? "1", 10));
+    const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "31", 10)));
     const skip = (page - 1) * limit;
 
-    const where: any = { accountId };
-
-    if (month !== undefined && year !== undefined) {
-      where.date = {
-        gte: new Date(year, month - 1, 1),
-        lte: new Date(year, month, 0, 23, 59, 59),
-      };
-    } else if (year !== undefined) {
-      where.date = {
-        gte: new Date(year, 0, 1),
-        lte: new Date(year, 11, 31, 23, 59, 59),
-      };
+    if (month !== undefined && (isNaN(month) || month < 1 || month > 12)) {
+      return sendErrorResponse(res, 400, "Invalid month (1-12)");
+    }
+    if (year !== undefined && (isNaN(year) || year < 2000 || year > 2100)) {
+      return sendErrorResponse(res, 400, "Invalid year");
     }
 
-    const [logs, total] = await prisma.$transaction([
+    let rangeStart: Date | undefined;
+    let rangeEnd: Date | undefined;
+
+    if (month !== undefined && year !== undefined) {
+      const b = getISTMonthBounds(year, month);
+      rangeStart = b.start;
+      rangeEnd = b.end;
+    } else if (year !== undefined) {
+      const b = getISTYearBounds(year);
+      rangeStart = b.start;
+      rangeEnd = b.end;
+    }
+
+    const where: any = { accountId };
+    if (rangeStart && rangeEnd) {
+      where.date = { gte: rangeStart, lte: rangeEnd };
+    }
+
+    const [logs, total, account, holidays, approvedLeaves] = await Promise.all([
       prisma.attendanceLog.findMany({
         where,
         orderBy: { date: "desc" },
@@ -481,10 +542,60 @@ export async function userGetAttendanceHistory(req: Request, res: Response) {
         include: { checkLogs: { orderBy: { checkedAt: "asc" } } },
       }),
       prisma.attendanceLog.count({ where }),
+      prisma.account.findUnique({
+        where: { id: accountId },
+        select: { joinedAt: true, createdAt: true },
+      }),
+      rangeStart && rangeEnd
+        ? prisma.publicHoliday.findMany({
+            where: { date: { gte: rangeStart, lte: rangeEnd } },
+            orderBy: { date: "asc" },
+          })
+        : prisma.publicHoliday.findMany({ orderBy: { date: "asc" } }),
+      prisma.leaveRequest.findMany({
+        where: {
+          accountId,
+          status: LeaveStatus.APPROVED,
+          ...(rangeEnd ? { startDate: { lte: rangeEnd } } : {}),
+        },
+        orderBy: { startDate: "asc" },
+      }),
     ]);
 
+    const holidayByDate = new Map<string, any>();
+    for (const h of holidays) {
+      holidayByDate.set(toISTDateStr(h.date), h);
+    }
+
+    const leaveByDate = new Map<string, any>();
+    for (const l of approvedLeaves) {
+      const s = toISTDateStr(l.startDate);
+      const e = l.endDate ? toISTDateStr(l.endDate) : s;
+      for (const dStr of enumerateISTDateStrs(s, e)) {
+        leaveByDate.set(dStr, l);
+      }
+    }
+
+    const enrichedLogs = logs.map((l) => {
+      const dStr = toISTDateStr(l.date);
+      return enrichAttendanceLogResponse(l, {
+        holiday: holidayByDate.get(dStr) ?? null,
+        approvedLeave: leaveByDate.get(dStr) ?? null,
+      });
+    });
+
     return sendSuccessResponse(res, 200, "Attendance history fetched", {
-      data: logs.map((l) => ({ ...l, sessions: buildSessions(l.checkLogs) })),
+      data: enrichedLogs,
+      holidays: holidays.map((h) => ({
+        ...h,
+        dateStr: toISTDateStr(h.date),
+      })),
+      approvedLeaves: approvedLeaves.map((l) => ({
+        ...l,
+        startDateStr: toISTDateStr(l.startDate),
+        endDateStr: l.endDate ? toISTDateStr(l.endDate) : toISTDateStr(l.startDate),
+      })),
+      joinedAt: account?.joinedAt ?? account?.createdAt ?? null,
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err: any) {
@@ -500,10 +611,10 @@ export async function userGetAttendanceHistory(req: Request, res: Response) {
    LEAVE — USER SIDE
 ═══════════════════════════════════════════════════════════════ */
 
-/* ─────────────────────────────────────────────────────────────
-   POST /user/leave
-   Submit a leave request with overlap guard.
-───────────────────────────────────────────────────────────── */
+/**
+ * POST /user/attendance/leave
+ * Submit a leave request with IST normalization, non-sandwich validation, and overlap guard.
+ */
 export async function userApplyLeave(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
@@ -516,74 +627,117 @@ export async function userApplyLeave(req: Request, res: Response) {
       reason: string;
     };
 
-    if (!type || !startDate || !reason)
+    if (!type || !startDate || !reason?.trim()) {
       return sendErrorResponse(
         res,
         400,
         "type, startDate and reason are required",
       );
+    }
 
     const validTypes = Object.values(LeaveType);
-    if (!validTypes.includes(type))
+    if (!validTypes.includes(type)) {
       return sendErrorResponse(
         res,
         400,
         `type must be one of: ${validTypes.join(", ")}`,
       );
+    }
 
-    if (type === LeaveType.MULTI_DAY && !endDate)
+    if (type === LeaveType.MULTI_DAY && !endDate) {
       return sendErrorResponse(
         res,
         400,
         "endDate is required for MULTI_DAY leave",
       );
+    }
 
-    const start = new Date(startDate);
-    const end = endDate ? new Date(endDate) : undefined;
+    let start: Date;
+    let end: Date | null = null;
+    try {
+      start = toISTDateOnly(startDate);
+      if (type === LeaveType.MULTI_DAY && endDate) {
+        end = toISTDateOnly(endDate);
+      } else if (endDate && endDate.trim()) {
+        const parsedEnd = toISTDateOnly(endDate);
+        if (parsedEnd.getTime() !== start.getTime()) {
+          return sendErrorResponse(
+            res,
+            400,
+            `${type} leave must be for a single date`,
+          );
+        }
+      }
+    } catch {
+      return sendErrorResponse(res, 400, "Invalid date format");
+    }
 
-    if (end && end < start)
-      return sendErrorResponse(res, 400, "endDate must be after startDate");
+    if (end && end < start) {
+      return sendErrorResponse(res, 400, "endDate must be on or after startDate");
+    }
 
-    /* Overlap check — no pending/approved leave touching these dates */
-    const conflict = await prisma.leaveRequest.findFirst({
+    const effectiveEnd = end ?? start;
+    const startStr = toISTDateStr(start);
+    const endStr = toISTDateStr(effectiveEnd);
+    const dateStrs = enumerateISTDateStrs(startStr, endStr);
+
+    // Non-sandwich validation: ensure at least 1 working day (non-Sunday, non-PublicHoliday)
+    const holidays = await prisma.publicHoliday.findMany({
+      where: {
+        date: {
+          gte: start,
+          lte: getISTDayBounds(endStr).end,
+        },
+      },
+    });
+    const holidayDates = new Set(holidays.map((h) => toISTDateStr(h.date)));
+
+    const workingDateStrs = dateStrs.filter((dStr) => {
+      const { isSunday } = getISTDayBounds(dStr);
+      return !isSunday && !holidayDates.has(dStr);
+    });
+
+    if (workingDateStrs.length === 0) {
+      return sendErrorResponse(
+        res,
+        400,
+        "Selected date(s) fall only on Sunday or a Public Holiday",
+      );
+    }
+
+    // Overlap check against existing PENDING or APPROVED leaves using IST calendar strings
+    const existingLeaves = await prisma.leaveRequest.findMany({
       where: {
         accountId,
         status: { in: [LeaveStatus.PENDING, LeaveStatus.APPROVED] },
-        OR: [
-          {
-            startDate: { lte: end ?? start },
-            endDate: { gte: start },
-          },
-          {
-            startDate: {
-              gte: start,
-              lte: end ?? start,
-            },
-            endDate: null,
-          },
-        ],
       },
     });
 
-    if (conflict)
+    const conflict = existingLeaves.find((l) => {
+      const lStart = toISTDateStr(l.startDate);
+      const lEnd = l.endDate ? toISTDateStr(l.endDate) : lStart;
+      return lStart <= endStr && lEnd >= startStr;
+    });
+
+    if (conflict) {
       return sendErrorResponse(
         res,
         409,
         "Overlapping leave request already exists",
       );
+    }
 
     const leave = await prisma.leaveRequest.create({
       data: {
         accountId,
         type,
         startDate: start,
-        endDate: end ?? null,
-        reason,
+        endDate: end,
+        reason: reason.trim(),
         status: LeaveStatus.PENDING,
       },
     });
 
-    /* Notify admin in real-time */
     emit("attendance:admin", "leave:new", {
       accountId,
       leaveId: leave.id,
@@ -596,17 +750,26 @@ export async function userApplyLeave(req: Request, res: Response) {
       leaveId: leave.id,
       accountId,
       type: leave.type,
-    }).catch((err) => console.error("Failed to send leave request notification:", err));
+    }).catch((err) =>
+      console.error("Failed to send leave request notification:", err),
+    );
 
-    return sendSuccessResponse(res, 201, "Leave request submitted", leave);
+    const effectiveLeaveDays =
+      type === LeaveType.HALF_DAY ? 0.5 : workingDateStrs.length;
+
+    return sendSuccessResponse(res, 201, "Leave request submitted", {
+      ...leave,
+      effectiveLeaveDays,
+      workingDates: workingDateStrs,
+    });
   } catch (err: any) {
     return sendErrorResponse(res, 500, err?.message ?? "Failed to apply leave");
   }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   GET /user/leave?status=&page=&limit=
-───────────────────────────────────────────────────────────── */
+/**
+ * GET /user/attendance/leave?status=&from=&to=&page=&limit=
+ */
 export async function userGetLeaves(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
@@ -615,35 +778,47 @@ export async function userGetLeaves(req: Request, res: Response) {
     const status = req.query.status as LeaveStatus | undefined;
     const fromStr = req.query.from as string | undefined;
     const toStr = req.query.to as string | undefined;
-    const page = Math.max(1, parseInt((req.query.page as string) ?? "1"));
-    const limit = Math.min(50, parseInt((req.query.limit as string) ?? "10"));
+    const page = Math.max(1, parseInt((req.query.page as string) ?? "1", 10));
+    const limit = Math.min(50, Math.max(1, parseInt((req.query.limit as string) ?? "10", 10)));
     const skip = (page - 1) * limit;
 
     const where: any = { accountId };
     if (status) {
       const validStatuses = Object.values(LeaveStatus);
-      if (!validStatuses.includes(status))
+      if (!validStatuses.includes(status)) {
         return sendErrorResponse(
           res,
           400,
           `status must be one of: ${validStatuses.join(", ")}`,
         );
+      }
       where.status = status;
     }
+
     if (fromStr || toStr) {
-      where.startDate = {};
-      if (fromStr) {
-        const fromDate = new Date(fromStr);
-        if (!isNaN(fromDate.getTime())) {
-          where.startDate.gte = fromDate;
-        }
-      }
+      const andFilters: any[] = [];
       if (toStr) {
-        const toDate = new Date(toStr);
-        if (!isNaN(toDate.getTime())) {
-          where.startDate.lte = toDate;
+        try {
+          const toEnd = getISTDayBounds(toStr).end;
+          andFilters.push({ startDate: { lte: toEnd } });
+        } catch {
+          return sendErrorResponse(res, 400, "Invalid 'to' date");
         }
       }
+      if (fromStr) {
+        try {
+          const fromStart = getISTDayBounds(fromStr).start;
+          andFilters.push({
+            OR: [
+              { endDate: { gte: fromStart } },
+              { endDate: null, startDate: { gte: fromStart } },
+            ],
+          });
+        } catch {
+          return sendErrorResponse(res, 400, "Invalid 'from' date");
+        }
+      }
+      if (andFilters.length > 0) where.AND = andFilters;
     }
 
     const [leaves, total] = await prisma.$transaction([
@@ -669,10 +844,9 @@ export async function userGetLeaves(req: Request, res: Response) {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   DELETE /user/leave/:id
-   Cancel own PENDING leave request.
-───────────────────────────────────────────────────────────── */
+/**
+ * DELETE /user/attendance/leave/:id
+ */
 export async function userCancelLeave(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
@@ -686,12 +860,13 @@ export async function userCancelLeave(req: Request, res: Response) {
 
     if (!leave) return sendErrorResponse(res, 404, "Leave request not found");
 
-    if (leave.status !== LeaveStatus.PENDING)
+    if (leave.status !== LeaveStatus.PENDING) {
       return sendErrorResponse(
         res,
         409,
         "Only PENDING leave requests can be cancelled",
       );
+    }
 
     await prisma.leaveRequest.delete({ where: { id } });
 
@@ -705,20 +880,18 @@ export async function userCancelLeave(req: Request, res: Response) {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   POST /user/attendance/break/start
-   Start an optional break during an active work session.
-   Guards:
-     • Must be checked in (hasOpenSession = true)
-     • Must NOT already be on break (hasOpenBreak = false)
-     • breakType is optional: "LUNCH" | "TEA" | "PERSONAL" | "OTHER"
-───────────────────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════
+   USER — BREAKS
+═══════════════════════════════════════════════════════════════ */
+
+/**
+ * POST /user/attendance/break/start
+ */
 export async function userBreakStart(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
 
-    const today = toDateOnly();
     const now = new Date();
     const breakSessionId = randomUUID();
 
@@ -735,34 +908,35 @@ export async function userBreakStart(req: Request, res: Response) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const log = await tx.attendanceLog.findUnique({
-        where: { accountId_date: { accountId, date: today } },
-      });
+      const log = await findAttendanceLogForISTDate(tx, accountId, now);
 
-      if (!log)
+      if (!log) {
         throw Object.assign(
           new Error("No attendance record today. Please check in first."),
           { statusCode: 404 },
         );
+      }
 
-      if (!log.hasOpenSession)
+      if (!log.hasOpenSession) {
         throw Object.assign(
           new Error("You must be checked in before starting a break."),
           { statusCode: 409 },
         );
+      }
 
-      if ((log as any).hasOpenBreak)
+      if (log.hasOpenBreak) {
         throw Object.assign(
           new Error("You already have an active break. Please end it first."),
           { statusCode: 409 },
         );
+      }
 
       const breakLog = await tx.checkLog.create({
         data: {
           accountId,
-          date: today,
+          date: log.date,
           checkedAt: now,
-          type: "BREAK_START" as CheckType,
+          type: CheckType.BREAK_START,
           source: CheckSource.MANUAL,
           sessionId: breakSessionId,
           note: note ?? null,
@@ -771,10 +945,7 @@ export async function userBreakStart(req: Request, res: Response) {
         },
       });
 
-      const updatedLog = await tx.attendanceLog.update({
-        where: { id: log.id },
-        data: { hasOpenBreak: true } as any,
-      });
+      const recomputed = await recomputeAttendanceLogTx(tx, log.id);
 
       const stoppedWork = await stopActiveWorkForAccount(tx, accountId, {
         reason: "BREAK_START",
@@ -782,12 +953,13 @@ export async function userBreakStart(req: Request, res: Response) {
         clearAvailability: true,
       });
 
-      return { log: updatedLog, breakLog, breakSessionId, stoppedWork };
+      return {
+        log: recomputed.log,
+        breakLog,
+        breakSessionId,
+        stoppedWork,
+      };
     });
-
-    // console.log("\n\n\n\n\n\n\n result--->", result);
-    // console.log("\n breakSessionId--->", breakSessionId);
-    // console.log("\n breakType--->", breakType);
 
     emit("attendance:admin", "attendance:break_start", {
       accountId,
@@ -818,92 +990,76 @@ export async function userBreakStart(req: Request, res: Response) {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   POST /user/attendance/break/end
-   End the active break, compute break duration, add to totalBreakMinutes.
-───────────────────────────────────────────────────────────────────────────── */
+/**
+ * POST /user/attendance/break/end
+ */
 export async function userBreakEnd(req: Request, res: Response) {
   try {
     const accountId = req.user?.accountId;
     if (!accountId) return sendErrorResponse(res, 401, "Invalid session");
 
-    const today = toDateOnly();
     const now = new Date();
 
     const result = await prisma.$transaction(async (tx) => {
-      const log = await tx.attendanceLog.findUnique({
-        where: { accountId_date: { accountId, date: today } },
-      });
+      const log = await findAttendanceLogForISTDate(tx, accountId, now, true);
 
-      if (!log)
+      if (!log) {
         throw Object.assign(new Error("No attendance record today."), {
           statusCode: 404,
         });
+      }
 
-      if (!(log as any).hasOpenBreak)
+      if (!log.hasOpenBreak) {
         throw Object.assign(new Error("No active break to end."), {
           statusCode: 409,
         });
+      }
 
-      // Find all checks today to locate the open break session
-      const allChecks = await tx.checkLog.findMany({
-        where: { attendanceLogId: log.id },
-        orderBy: { checkedAt: "asc" },
-      });
-
-      const openBreakSessionId = findOpenBreakSessionId(allChecks);
-      if (!openBreakSessionId)
+      const openBreak = buildBreaks(log.checkLogs ?? []).find((b) => b.isOpen);
+      if (!openBreak) {
         throw Object.assign(new Error("Could not find open break session."), {
           statusCode: 409,
         });
-
-      const breakStart = allChecks.find(
-        (c) => c.sessionId === openBreakSessionId && c.type === "BREAK_START",
-      );
-      const breakMinutes = breakStart
-        ? Math.floor((now.getTime() - breakStart.checkedAt.getTime()) / 60_000)
-        : 0;
+      }
 
       const breakEndLog = await tx.checkLog.create({
         data: {
           accountId,
-          date: today,
+          date: log.date,
           checkedAt: now,
-          type: "BREAK_END" as CheckType,
+          type: CheckType.BREAK_END,
           source: CheckSource.MANUAL,
-          sessionId: openBreakSessionId,
+          sessionId: openBreak.sessionId,
           attendanceLogId: log.id,
         },
       });
 
-      const newTotalBreak =
-        ((log as any).totalBreakMinutes ?? 0) + breakMinutes;
-
-      const updatedLog = await tx.attendanceLog.update({
-        where: { id: log.id },
-        data: {
-          hasOpenBreak: false,
-          totalBreakMinutes: newTotalBreak,
-        } as any,
-      });
+      const recomputed = await recomputeAttendanceLogTx(tx, log.id);
+      const closedBreak = recomputed.metrics.breaks.find(
+        (b) => b.sessionId === openBreak.sessionId,
+      );
 
       await tx.account.update({
         where: { id: accountId },
         data: { isAvailable: true },
       });
 
-      return { log: updatedLog, breakEndLog, breakMinutes };
+      return {
+        log: recomputed.log,
+        breakEndLog,
+        breakMinutes: closedBreak?.durationMinutes ?? 0,
+      };
     });
 
     emit("attendance:admin", "attendance:break_end", {
       accountId,
       breakMinutes: result.breakMinutes,
-      totalBreakMinutes: (result.log as any).totalBreakMinutes,
+      totalBreakMinutes: result.log.totalBreakMinutes,
     });
 
     try {
       getIo().emit("busy:changed", {
-        accountId: accountId,
+        accountId,
         isBusy: false,
         isAvailable: true,
         source: "BREAK-END",
@@ -914,7 +1070,7 @@ export async function userBreakEnd(req: Request, res: Response) {
 
     return sendSuccessResponse(res, 200, "Break ended", {
       breakMinutes: result.breakMinutes,
-      totalBreakMinutes: (result.log as any).totalBreakMinutes,
+      totalBreakMinutes: result.log.totalBreakMinutes,
       attendance: result.log,
     });
   } catch (err: any) {
@@ -925,86 +1081,36 @@ export async function userBreakEnd(req: Request, res: Response) {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   PATCH /user/attendance/checkin  (update userCheckIn to accept isWFH)
-   Modified check-in payload: { isWFH?: boolean, ipAddress?, deviceMeta? }
-   
-   Add to the attendanceLog.create data:
-     isWFH: (req.body?.isWFH === true)
-   And to attendanceLog.update (if log already existed but not wfh):
-     isWFH: (req.body?.isWFH === true)
-───────────────────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════
+   USER — HOLIDAYS
+═══════════════════════════════════════════════════════════════ */
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   GET /user/attendance/status  (UPDATED response — add break fields)
-   
-   Return additionally:
-   {
-     isOnBreak: log?.hasOpenBreak ?? false,
-     totalBreakMinutes: log?.totalBreakMinutes ?? 0,
-     isWFH: log?.isWFH ?? false,
-     currentBreak: { sessionId, breakType, startedAt } | null
-   }
-───────────────────────────────────────────────────────────────────────────── */
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   ROUTES to add in attendance.routes.ts:
-   
-   router.post("/break/start", userBreakStart);
-   router.post("/break/end", userBreakEnd);
-───────────────────────────────────────────────────────────────────────────── */
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   buildSessions HELPER UPDATE
-   
-   Update the existing buildSessions() in attendance.controller.ts to also
-   compute break sessions from the same checkLogs array:
-───────────────────────────────────────────────────────────────────────────── */
-export function buildBreaks(checkLogs: any[]) {
-  const map: Record<
-    string,
-    {
-      sessionId: string;
-      breakType?: string;
-      breakStart?: Date;
-      breakEnd?: Date;
-    }
-  > = {};
-
-  for (const c of checkLogs) {
-    if (!c.sessionId) continue;
-    if (c.type !== "BREAK_START" && c.type !== "BREAK_END") continue;
-    if (!map[c.sessionId]) map[c.sessionId] = { sessionId: c.sessionId };
-    if (c.type === "BREAK_START") {
-      map[c.sessionId].breakStart = c.checkedAt;
-      map[c.sessionId].breakType = c.breakType ?? "OTHER";
-    }
-    if (c.type === "BREAK_END") map[c.sessionId].breakEnd = c.checkedAt;
-  }
-
-  return Object.values(map).map((b) => ({
-    sessionId: b.sessionId,
-    breakType: b.breakType ?? "OTHER",
-    breakStart: b.breakStart ?? null,
-    breakEnd: b.breakEnd ?? null,
-    durationMinutes:
-      b.breakStart && b.breakEnd
-        ? Math.floor((b.breakEnd.getTime() - b.breakStart.getTime()) / 60_000)
-        : null,
-    isOpen: !!b.breakStart && !b.breakEnd,
-  }));
-}
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   GET /user/attendance/holidays
-   Allow employees to view the list of public holidays.
-───────────────────────────────────────────────────────────────────────────── */
+/**
+ * GET /user/attendance/holidays?year=
+ */
 export async function userGetHolidays(req: Request, res: Response) {
   try {
+    const yearStr = req.query.year as string | undefined;
+    const where: any = {};
+    if (yearStr) {
+      const y = parseInt(yearStr, 10);
+      if (isNaN(y) || y < 2000 || y > 2100) {
+        return sendErrorResponse(res, 400, "Invalid year");
+      }
+      const { start, end } = getISTYearBounds(y);
+      where.date = { gte: start, lte: end };
+    }
+
     const holidays = await prisma.publicHoliday.findMany({
+      where,
       orderBy: { date: "asc" },
     });
-    return sendSuccessResponse(res, 200, "Public holidays fetched successfully", holidays);
+    return sendSuccessResponse(
+      res,
+      200,
+      "Public holidays fetched successfully",
+      holidays.map((h) => ({ ...h, dateStr: toISTDateStr(h.date) })),
+    );
   } catch (err: any) {
     return sendErrorResponse(
       res,

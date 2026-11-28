@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { prisma } from "../../config/database.config";
 import { sendErrorResponse, sendSuccessResponse } from "../../core/utils/httpResponse";
+import { getISTDayBounds } from "../../core/utils/attendance.util";
 
 function getAdminRoles(roles: string[]): boolean {
   const ADMIN_ROLES = ["ADMIN", "SUPER_ADMIN", "MANAGER", "SALES"];
@@ -177,8 +178,7 @@ export async function getDashboardAdminMonitoringWidget(req: Request, res: Respo
     const roles: string[] = req.user?.roles ?? [];
     if (!getAdminRoles(roles)) return sendErrorResponse(res, 403, "Forbidden");
 
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const { start: startOfToday, end: endOfToday } = getISTDayBounds();
 
     const activeUsers = await prisma.account.count({
       where: { isActive: true }
@@ -186,7 +186,7 @@ export async function getDashboardAdminMonitoringWidget(req: Request, res: Respo
 
     const checkInsToday = await prisma.attendanceLog.count({
       where: {
-        date: startOfToday,
+        date: { gte: startOfToday, lte: endOfToday },
         firstCheckIn: { not: null }
       }
     });

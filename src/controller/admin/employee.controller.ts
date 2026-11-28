@@ -4,6 +4,10 @@ import {
   sendErrorResponse,
   sendSuccessResponse,
 } from "../../core/utils/httpResponse";
+import {
+  getISTDayBounds,
+  findHolidayForISTDate,
+} from "../../core/utils/attendance.util";
 import { log } from "console";
 
 /* ======================================================
@@ -15,11 +19,9 @@ export async function listEmployees(req: Request, res: Response) {
     const limit = Number(req.query.limit || 10);
     const skip = (page - 1) * limit;
 
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-
-    const todayEnd = new Date();
-    todayEnd.setUTCHours(23, 59, 59, 999);
+    const { start: todayStart, end: todayEnd, isSunday: todayIsSunday } =
+      getISTDayBounds();
+    const todayHoliday = await findHolidayForISTDate(prisma, todayStart);
 
     const searchRaw = (req.query.search as string)?.trim();
     const search = searchRaw?.toLowerCase();
@@ -160,7 +162,10 @@ export async function listEmployees(req: Request, res: Response) {
         joinedAt: a.joinedAt,
         createdAt: a.createdAt,
         bio: (a as any).bio,
-        isOnLeave: (a as any).leaveRequests && (a as any).leaveRequests.length > 0,
+        isOnLeave:
+          todayIsSunday || Boolean(todayHoliday)
+            ? false
+            : Boolean((a as any).leaveRequests && (a as any).leaveRequests.length > 0),
       };
     });
     

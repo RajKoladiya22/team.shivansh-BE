@@ -173,9 +173,10 @@ export function initIo(server: http.Server) {
       socket.join("leads:admin");
       socket.join("tasks:admin");
       socket.join("supports:admin");
+      socket.join("attendance:admin");
 
       console.log(
-        `\n📡 ${user.username} -> is an admin, joining leads:admin room\n`,
+        `\n📡 ${user.username} -> is an admin, joining admin rooms\n`,
       );
     }
 
